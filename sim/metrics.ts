@@ -23,11 +23,15 @@
  * - averageRoadOccupancy = per-tick total occupancy units divided by the
  *   number of directed roads, averaged over ticks; maxRoadOccupancy is the
  *   peak units seen on any single directed road.
- * - maxApproachWaitMs = peak over the run of the maximum queue wait on any
- *   single approach (directed incoming road) — the approach-level starvation
- *   watch of PRD §11.4, and the policy input later controllers consume.
+ * - maxApproachWaitMs = peak over the run of the maximum CONTINUOUS queue
+ *   wait on any single approach (directed incoming road) — the approach-level
+ *   starvation watch of PRD §11.4 and the policy input later controllers
+ *   consume. The wait is time-at-this-road-end (queuedSinceMs), never the
+ *   vehicle's lifetime wait, so historical waiting elsewhere is not falsely
+ *   attributed to the current approach.
  * - signalPhaseChanges counts stage/group transitions across all signals.
  */
+import { currentQueueWaitMs } from "./approach-stats";
 import type { City, IntersectionId, RoadId, VehicleId } from "./types";
 import type { TrafficState } from "./traffic";
 
@@ -158,9 +162,12 @@ export function recordTick(
       blocked += 1;
     }
     if (vehicle.state === "queued" && vehicle.roadId !== null) {
+      // Approach wait = continuous time queued at THIS road end (never the
+      // vehicle's lifetime wait — see approach-stats.ts).
+      const wait = currentQueueWaitMs(state.timeMs, vehicle.queuedSinceMs);
       const previous = approachWaits.get(vehicle.roadId) ?? 0;
-      if (vehicle.waitTimeMs > previous) {
-        approachWaits.set(vehicle.roadId, vehicle.waitTimeMs);
+      if (wait > previous) {
+        approachWaits.set(vehicle.roadId, wait);
       }
     }
   }

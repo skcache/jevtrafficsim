@@ -7,14 +7,21 @@
  *
  * Tracked per approach:
  * - CURRENT queue state: how many vehicles are queued at the approach, the
- *   largest wait currently in that queue, and the approach road's occupancy
- *   ratio (spillback pressure input for later controllers);
+ *   largest CONTINUOUS queue wait currently in that queue, and the approach
+ *   road's occupancy ratio (spillback pressure input for later controllers);
  * - HISTORICAL peak max-queue-wait: the starvation signal. Later policies
  *   (Adaptive, Jev) consume this so one direction can never be ignored
  *   indefinitely in favor of total throughput.
  *
+ * Wait semantics (critical for anti-starvation policy): an approach's wait is
+ * how long its vehicles have been queued AT THIS ROAD END — derived from the
+ * per-queue `queuedSinceMs` state, never from the vehicle's lifetime
+ * `waitTimeMs`. A vehicle that waited 30 s at an earlier intersection and
+ * queues 2 s here contributes 2 s to this approach, not 32 s.
+ *
  * Statistics are sampled from explicit traffic states after a step — no
- * timers, no randomness, fully deterministic.
+ * timers, no randomness, fully deterministic; equal peaks resolve to the
+ * lowest road id so results never depend on encounter order.
  */
 import type { City, RoadId } from "./types";
 import type { TrafficState } from "./traffic";
@@ -37,6 +44,15 @@ export interface ApproachStats {
   worstPeakWaitMs: number;
   /** The approach that produced worstPeakWaitMs (first to reach it wins ties). */
   worstPeakRoadId: RoadId | null;
+}
+
+/**
+ * Continuous time (ms) a queued vehicle has spent waiting at its CURRENT road
+ * end: `timeMs - queuedSinceMs`. This is the shared definition used by every
+ * consumer that measures approach-level starvation.
+ */
+export function currentQueueWaitMs(timeMs: number, queuedSinceMs: number | null): number {
+  return queuedSinceMs === null ? 0 : timeMs - queuedSinceMs;
 }
 
 export function createApproachStats(): ApproachStats {
@@ -66,9 +82,10 @@ export function updateApproachStats(
     }
     const roadId = vehicle.roadId;
     counts.set(roadId, (counts.get(roadId) ?? 0) + 1);
+    const wait = currentQueueWaitMs(state.timeMs, vehicle.queuedSinceMs);
     const previous = waits.get(roadId) ?? 0;
-    if (vehicle.waitTimeMs > previous) {
-      waits.set(roadId, vehicle.waitTimeMs);
+    if (wait > previous) {
+      waits.set(roadId, wait);
     }
   }
   const current = new Map<RoadId, ApproachQueueStats>();
@@ -81,10 +98,19 @@ export function updateApproachStats(
     if (maxWaitMs > peak) {
       stats.peakWaitMs.set(roadId, maxWaitMs);
     }
-    if (maxWaitMs > stats.worstPeakWaitMs) {
+    if (
+      maxWaitMs > stats.worstPeakWaitMs ||
+      (maxWaitMs === stats.worstPeakWaitMs &&
+        maxWaitMs > 0 &&
+        (stats.worstPeakRoadId === null || roadId < stats.worstPeakRoadId))
+    ) {
       stats.worstPeakWaitMs = maxWaitMs;
       stats.worstPeakRoadId = roadId;
     }
   }
-  stats.current = current;
+  // Mutate in place: consumers (controllers) may hold a reference to `current`.
+  stats.current.clear();
+  for (const [roadId, entry] of current) {
+    stats.current.set(roadId, entry);
+  }
 }
