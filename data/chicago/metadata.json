@@ -3,7 +3,7 @@
   "attribution": "\u00a9 OpenStreetMap contributors",
   "attributionUrl": "https://www.openstreetmap.org/copyright",
   "extraction": {
-    "snapshotDate": "2026-09-18T22:41:12Z",
+    "snapshotDate": "2026-09-18T22:57:19Z",
     "tool": "tools/chicago-map/extract_chicago.py",
     "toolVersion": 1,
     "networkType": "drive",
@@ -140,8 +140,8 @@
   },
   "features": {
     "buildings": 1676,
-    "water": 1,
-    "parks": 1653,
-    "landmarks": 6
+    "water": 75,
+    "parks": 1833,
+    "landmarks": 12
   }
 }

@@ -994,25 +994,22 @@ def clip_and_round(geometries, clip_box: Polygon, simplify_m: float, decimals: i
     return out
 
 
-def round_coords(geometry, decimals: int):
-    """Quantize a geometry's coordinates to `decimals` (deterministic bytes)."""
+def round_coords(geometry, decimals: int) -> list[dict]:
+    """Quantize a geometry to a LIST of Polygon geometries (deterministic bytes).
+
+    MultiPolygons are exploded into one Polygon per part. The browser renderer
+    treats every feature as a single outer ring, so a river/lake MultiPolygon
+    would otherwise render as its first part only.
+    """
+    if geometry.geom_type == "MultiPolygon":
+        # Flatten: each part already comes back as a one-element list.
+        return [poly for part in geometry.geoms for poly in round_coords(part, decimals)]
     if geometry.geom_type == "Polygon":
         rings = [
             [[round(x, decimals), round(y, decimals)] for x, y in ring.coords]
             for ring in [geometry.exterior, *geometry.interiors]
         ]
-        return {"type": "Polygon", "coordinates": rings}
-    if geometry.geom_type == "MultiPolygon":
-        return {
-            "type": "MultiPolygon",
-            "coordinates": [
-                [
-                    [[round(x, decimals), round(y, decimals)] for x, y in ring.coords]
-                    for ring in [polygon.exterior, *polygon.interiors]
-                ]
-                for polygon in geometry.geoms
-            ],
-        }
+        return [{"type": "Polygon", "coordinates": rings}]
     raise ValueError(f"unexpected geometry {geometry.geom_type}")
 
 
@@ -1056,17 +1053,18 @@ def extract_features(bbox, out_dir: Path) -> dict:
             if area < 150:  # sheds and kiosks; real blocks are far larger
                 continue
             for clipped in clip_and_round([geometry], clip_box, 1.5, COORD_DECIMALS):
-                building_features.append(
-                    {
-                        "type": "Feature",
-                        "properties": {
-                            "name": norm(getattr(row, "name", None)),
-                            "levels": norm(getattr(row, "building_levels", None)),
-                            "area": int(area),
-                        },
-                        "geometry": round_coords(clipped, COORD_DECIMALS),
-                    }
-                )
+                for part in round_coords(clipped, COORD_DECIMALS):
+                    building_features.append(
+                        {
+                            "type": "Feature",
+                            "properties": {
+                                "name": norm(getattr(row, "name", None)),
+                                "levels": norm(getattr(row, "building_levels", None)),
+                                "area": int(area),
+                            },
+                            "geometry": part,
+                        }
+                    )
     stats["buildings"] = len(building_features)
 
     print("· water")
@@ -1082,13 +1080,14 @@ def extract_features(bbox, out_dir: Path) -> dict:
     water_features = []
     if merged is not None and not merged.is_empty:
         for clipped in clip_and_round([merged], clip_box, 2.0, COORD_DECIMALS):
-            water_features.append(
-                {
-                    "type": "Feature",
-                    "properties": {"kind": "water"},
-                    "geometry": round_coords(clipped, COORD_DECIMALS),
-                }
-            )
+            for part in round_coords(clipped, COORD_DECIMALS):
+                water_features.append(
+                    {
+                        "type": "Feature",
+                        "properties": {"kind": "water"},
+                        "geometry": part,
+                    }
+                )
     stats["water"] = len(water_features)
 
     print("· parks")
@@ -1105,12 +1104,13 @@ def extract_features(bbox, out_dir: Path) -> dict:
         if geometry is None or geometry.is_empty or geometry.area < 1e-8:
             continue
         for clipped in clip_and_round([geometry], clip_box, 3.0, COORD_DECIMALS):
-            park_features.append(
+            park_features.extend(
                 {
                     "type": "Feature",
                     "properties": {"name": norm(getattr(row, "name", None))},
-                    "geometry": round_coords(clipped, COORD_DECIMALS),
+                    "geometry": part,
                 }
+                for part in round_coords(clipped, COORD_DECIMALS)
             )
     stats["parks"] = len(park_features)
 
@@ -1121,15 +1121,16 @@ def extract_features(bbox, out_dir: Path) -> dict:
         if geometry is None or geometry.is_empty:
             continue
         for clipped in clip_and_round([geometry], clip_box, 1.5, COORD_DECIMALS):
-            landmark_features.append(
+            landmark_features.extend(
                 {
                     "type": "Feature",
                     "properties": {
                         "name": norm(getattr(row, "name", None)),
                         "kind": "stadium",
                     },
-                    "geometry": round_coords(clipped, COORD_DECIMALS),
+                    "geometry": part,
                 }
+                for part in round_coords(clipped, COORD_DECIMALS)
             )
     stats["landmarks"] = len(landmark_features)
 
