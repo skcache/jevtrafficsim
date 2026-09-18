@@ -1,13 +1,24 @@
 import { describe, expect, it } from "vitest";
+import { compileShowcaseCity } from "@/cities/showcase-city";
+import { buildPathIndex, type Point } from "@/cities/paths";
 import {
   clamp01,
   frameAlpha,
   interpolateVehicles,
-  vehicleWorldPosition,
+  positionForRoad,
 } from "@/render/interpolate";
-import { buildRenderModel } from "@/render/model";
+import { buildDirectedPathIndexes } from "@/render/showcase-geometry";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
-import { makeStreet } from "./traffic-support";
+
+const model = compileShowcaseCity(2);
+const indexes = buildDirectedPathIndexes(model);
+
+/** A straight synthetic road for exact-math assertions. */
+const straight: Point[] = [
+  [0, 0],
+  [100, 0],
+];
+const straightIndex = buildPathIndex(straight);
 
 function vehicle(overrides: Partial<PresentationVehicle> & { id: number }): PresentationVehicle {
   return {
@@ -28,7 +39,7 @@ function snapshot(
   return {
     sequence,
     timeMs,
-    controller: "fixed",
+    controller: "adaptive",
     vehicles,
     signals: [],
     roadConditions: [],
@@ -37,103 +48,100 @@ function snapshot(
 }
 
 describe("interpolation helpers", () => {
-  it("clamps alpha to [0, 1] and survives nonsense input", () => {
+  it("clamps alpha and survives nonsense timing", () => {
     expect(clamp01(-1)).toBe(0);
     expect(clamp01(0.5)).toBe(0.5);
     expect(clamp01(2)).toBe(1);
     expect(clamp01(Number.NaN)).toBe(0);
     expect(frameAlpha(100, 0, 200)).toBe(0.5);
-    expect(frameAlpha(0, 100, 200)).toBe(0); // clock skew never yields negative
+    expect(frameAlpha(0, 100, 200)).toBe(0);
     expect(frameAlpha(1_000, 0, 200)).toBe(1);
     expect(frameAlpha(50, 0, 0)).toBe(1);
   });
 
-  it("derives world positions from the directed road geometry", () => {
-    const { city } = makeStreet([{ length: 10 }]);
-    const model = buildRenderModel(city);
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, progress: 0 }))).toEqual({ x: 0, y: 0 });
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, progress: 5 }))).toEqual({ x: 5, y: 0 });
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, progress: 10 }))).toEqual({ x: 10, y: 0 });
-    // Clamped beyond the road, defensive on missing geometry.
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, progress: 99 }))).toEqual({ x: 10, y: 0 });
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, roadId: null }))).toBeNull();
-    expect(vehicleWorldPosition(model, vehicle({ id: 0, roadId: 99 }))).toBeNull();
+  it("samples world positions along presentation paths", () => {
+    expect(positionForRoad([straightIndex], 0, 0)).toEqual({ x: 0, y: -3.2, heading: 0 });
+    const mid = positionForRoad([straightIndex], 0, 50)!;
+    expect(mid.x).toBeCloseTo(50, 9);
+    // Lane offset moves the vehicle sideways (right of travel), never along the road.
+    expect(mid.y).toBeCloseTo(-3.2, 9);
+    expect(positionForRoad([straightIndex], null, 0)).toBeNull();
+    expect(positionForRoad([null], 0, 0)).toBeNull();
   });
 
   it("interpolates along a road between two frames", () => {
-    // Road length 100 spans 10 world units (nodes at x=0 and x=10), so world
-    // position = progress / 100 * 10.
-    const { city } = makeStreet([{ length: 100 }]);
-    const model = buildRenderModel(city);
     const previous = snapshot(0, 0, [vehicle({ id: 0, progress: 10 })]);
     const current = snapshot(1, 200, [vehicle({ id: 0, progress: 30 })]);
-    const atStart = interpolateVehicles(model, previous, current, 0);
-    expect(atStart[0].x).toBeCloseTo(1, 10);
-    const middle = interpolateVehicles(model, previous, current, 0.5);
-    expect(middle[0].x).toBeCloseTo(2, 10);
-    const atEnd = interpolateVehicles(model, previous, current, 1);
-    expect(atEnd[0].x).toBeCloseTo(3, 10);
+    const atStart = interpolateVehicles([straightIndex], previous, current, 0);
+    expect(atStart[0].x).toBeCloseTo(10, 9);
+    const middle = interpolateVehicles([straightIndex], previous, current, 0.5);
+    expect(middle[0].x).toBeCloseTo(20, 9);
+    const atEnd = interpolateVehicles([straightIndex], previous, current, 1);
+    expect(atEnd[0].x).toBeCloseTo(30, 9);
   });
 
-  it("interpolates linearly across a road change (no splines)", () => {
-    // Roads are 100 long but 10 units apart: progress 90 on road 0 is x=9;
-    // progress 30 on road 1 is x=10 + 3 = 13.
-    const { city } = makeStreet([{ length: 100 }, { length: 100 }]);
-    const model = buildRenderModel(city);
+  it("interpolates across a road change through the junction", () => {
+    // Road 1 runs (100,0) -> (200,0): a change at the shared node is linear.
+    const second = buildPathIndex([
+      [100, 0],
+      [200, 0],
+    ]);
     const previous = snapshot(0, 0, [vehicle({ id: 0, roadId: 0, progress: 90 })]);
-    const current = snapshot(1, 200, [vehicle({ id: 0, roadId: 1, progress: 30 })]);
-    const middle = interpolateVehicles(model, previous, current, 0.5);
-    expect(middle[0].x).toBeCloseTo(11, 10); // between 9 and 13
+    const current = snapshot(1, 200, [vehicle({ id: 0, roadId: 1, progress: 10 })]);
+    const middle = interpolateVehicles([straightIndex, second], previous, current, 0.5);
+    // 90 on road 0 and 110 on road 1 -> midpoint 100 (the junction).
+    expect(middle[0].x).toBeCloseTo(100, 9);
   });
 
-  it("renders a newly spawned vehicle at its current position", () => {
-    const { city } = makeStreet([{ length: 100 }]);
-    const model = buildRenderModel(city);
-    const previous = snapshot(0, 0, []);
-    const current = snapshot(1, 200, [vehicle({ id: 7, progress: 40 })]);
-    const rendered = interpolateVehicles(model, previous, current, 0.5);
-    expect(rendered.length).toBe(1);
-    expect(rendered[0].id).toBe(7);
-    expect(rendered[0].x).toBeCloseTo(4, 10); // progress 40 of 100 over a 10-unit span
-  });
-
-  it("omits departed vehicles and skips unrenderable ones defensively", () => {
-    const { city } = makeStreet([{ length: 100 }]);
-    const model = buildRenderModel(city);
+  it("renders newly spawned vehicles and omits departed ones", () => {
     const previous = snapshot(0, 0, [
       vehicle({ id: 0, progress: 50 }),
       vehicle({ id: 1, progress: 20 }),
     ]);
     const current = snapshot(1, 200, [
       vehicle({ id: 1, progress: 30 }),
-      vehicle({ id: 2, roadId: null }), // pending: no position
-      vehicle({ id: 3, roadId: 99 }), // invalid: skipped
+      vehicle({ id: 2, progress: 40 }),
+      vehicle({ id: 3, roadId: null }),
+      vehicle({ id: 4, roadId: 99 }),
     ]);
-    const rendered = interpolateVehicles(model, previous, current, 0.5);
-    expect(rendered.map((entry) => entry.id)).toEqual([1]);
+    const rendered = interpolateVehicles([straightIndex], previous, current, 0.5);
+    expect(rendered.map((entry) => entry.id)).toEqual([1, 2]);
+    const spawned = rendered.find((entry) => entry.id === 2)!;
+    expect(spawned.x).toBeCloseTo(40, 9);
   });
 
   it("never mutates the received snapshots", () => {
-    const { city } = makeStreet([{ length: 100 }]);
-    const model = buildRenderModel(city);
     const previous = snapshot(0, 0, [vehicle({ id: 0, progress: 10 })]);
     const current = snapshot(1, 200, [vehicle({ id: 0, progress: 30 })]);
-    const previousBefore = JSON.stringify(previous);
-    const currentBefore = JSON.stringify(current);
-    interpolateVehicles(model, previous, current, 0.5);
-    expect(JSON.stringify(previous)).toBe(previousBefore);
-    expect(JSON.stringify(current)).toBe(currentBefore);
+    const beforePrevious = JSON.stringify(previous);
+    const beforeCurrent = JSON.stringify(current);
+    interpolateVehicles([straightIndex], previous, current, 0.5);
+    expect(JSON.stringify(previous)).toBe(beforePrevious);
+    expect(JSON.stringify(current)).toBe(beforeCurrent);
   });
 
-  it("carries wait heat and stable lane signs into the frame", () => {
-    const { city } = makeStreet([{ length: 100 }]);
-    const model = buildRenderModel(city);
+  it("carries wait heat and headings into rendered vehicles", () => {
     const current = snapshot(1, 200, [
       vehicle({ id: 0, progress: 10, state: "queued", blockedWaitMs: 42_000 }),
     ]);
-    const rendered = interpolateVehicles(model, null, current, 0.5);
+    const rendered = interpolateVehicles([straightIndex], null, current, 0.5);
     expect(rendered[0].blockedWaitMs).toBe(42_000);
-    expect(rendered[0].laneSign).toBe(1);
-    expect(rendered[0].headingRadians).toBeCloseTo(0, 10);
+    expect(rendered[0].headingRadians).toBeCloseTo(0, 9);
+    expect(rendered[0].y).toBeCloseTo(-3.2, 9);
+  });
+
+  it("renders the whole showcase fleet without dropping vehicles", () => {
+    const snapshotVehicles: PresentationVehicle[] = [];
+    for (let roadId = 0; roadId < 40; roadId += 1) {
+      snapshotVehicles.push(vehicle({ id: roadId, roadId, progress: model.city.roads[roadId].length / 2 }));
+    }
+    const current = snapshot(1, 200, snapshotVehicles);
+    const rendered = interpolateVehicles(indexes, null, current, 0.5);
+    expect(rendered.length).toBe(40);
+    for (const entry of rendered) {
+      expect(Number.isFinite(entry.x)).toBe(true);
+      expect(Number.isFinite(entry.y)).toBe(true);
+      expect(Number.isFinite(entry.headingRadians)).toBe(true);
+    }
   });
 });

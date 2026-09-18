@@ -60,27 +60,6 @@ describe("sim/ + controllers/ environment discipline", () => {
     }
   });
 
-  it("keeps pure showcase modules free of browser/map/react imports", () => {
-    // cities/ and the pure render helpers may be imported by the worker, so
-    // they must stay presentation-library free. MapLibre/deck.gl belong to
-    // the component layer only.
-    const pureFiles = [
-      "cities/paths.ts",
-      "cities/showcase-city.ts",
-      "cities/showcase-city-data.ts",
-      "render/interpolate.ts",
-      "render/showcase-geometry.ts",
-      "render/showcase-geojson.ts",
-      "components/ui-model.ts",
-    ];
-    const forbidden = /from\s+["'](react|react-dom|next\/|maplibre-gl|\@deck\.gl|zustand|motion)/;
-    for (const file of pureFiles) {
-      const content = readFileSync(path.join(process.cwd(), file), "utf8");
-      expect(forbidden.test(content), `${file} must stay pure (no UI/map libraries)`).toBe(false);
-      expect(content.includes("Math.random"), `${file} must not call Math.random`).toBe(false);
-    }
-  });
-
   it("imports no framework, browser, or UI modules", () => {
     const forbidden =
       /from\s+["'](react|react-dom|zustand|next\/|\@\/app|\@\/components|\@\/render|\@\/worker|\@\/store)/;

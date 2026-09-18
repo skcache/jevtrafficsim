@@ -11,7 +11,7 @@ body {
 
 body {
   margin: 0;
-  background: #faf9f7;
+  background: #f6f2ea;
   color: #262626;
   font-family:
     ui-sans-serif,
@@ -25,4 +25,49 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overscroll-behavior: none;
+}
+
+/* Showcase district / landmark labels (MapLibre DOM markers). */
+.jev-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(64, 58, 48, 0.68);
+  text-shadow:
+    0 0 3px rgba(250, 248, 243, 0.95),
+    0 0 8px rgba(250, 248, 243, 0.85);
+  white-space: nowrap;
+  transition: opacity 240ms ease-out;
+  pointer-events: none;
+  user-select: none;
+}
+
+.jev-label-landmark {
+  font-size: 9px;
+  color: rgba(64, 58, 48, 0.5);
+}
+
+/* Soften MapLibre's default controls to match the product surface. */
+.maplibregl-ctrl-group {
+  border: 1px solid rgba(23, 23, 23, 0.1) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 2px rgba(23, 23, 23, 0.06) !important;
+  background: rgba(255, 255, 255, 0.88) !important;
+  backdrop-filter: blur(4px);
+}
+
+.maplibregl-ctrl-group button {
+  width: 26px !important;
+  height: 26px !important;
+}
+
+.maplibregl-ctrl button .maplibregl-ctrl-icon {
+  opacity: 0.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jev-label {
+    transition: none;
+  }
 }

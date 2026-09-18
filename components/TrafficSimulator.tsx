@@ -1,29 +1,29 @@
 "use client";
 
 /**
- * TrafficSimulator (Task 11): the single client-side owner of the worker.
- * Instantiates the worker once, wires the message listener, keeps only the
- * latest frames (in refs) and metrics (2 Hz store slot), and sends commands.
- * Engine state never crosses into React.
+ * TrafficSimulator (Task 11 visual correction): the single client-side owner
+ * of the worker and the product composition.
  *
- * Initial behavior (documented): defaults are Medium / Everyday / Adaptive /
- * seed 42 and the run starts automatically once READY arrives.
+ * Landing → configuration → "Enter City" (INIT) → camera flies into Central →
+ * minimal live chrome. The map surface compiles the same deterministic
+ * showcase geography the worker simulates; no EngineState ever crosses into
+ * React. Presentation frames live in a ref shared with the map's rAF loop.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { showcaseCity } from "@/cities/showcase-city";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
-import type { ControllerChoice, WorkerCommand, WorkerEvent } from "@/worker/protocol";
+import { buildDirectedPathIndexes } from "@/render/showcase-geometry";
 import { useUiStore } from "@/store/ui-store";
-import { CityCanvas } from "./CityCanvas";
-import { ControlBar } from "./ControlBar";
+import type { ControllerChoice, WorkerCommand, WorkerEvent } from "@/worker/protocol";
+import { CityMap, type MapHandle } from "./CityMap";
+import { createFrameBuffer, pushFrame, setFrameModel, type FrameBuffer } from "./frame-buffer";
 import { IncidentBar } from "./IncidentBar";
 import { MetricsHUD } from "./MetricsHUD";
-import { createFrameBuffer, pushFrame, setFrameModel, type FrameBuffer } from "./frame-buffer";
+import { Onboarding } from "./Onboarding";
+import { SimChrome } from "./SimChrome";
+import { scaleIndexForSize } from "./ui-model";
 
-/**
- * Dev-only inspection hook (never rendered): lets automated smoke checks read
- * the latest worker state without scraping pixels. Stripped in production.
- */
 interface JevDebugHook {
   config: unknown;
   snapshot: {
@@ -39,14 +39,11 @@ interface JevDebugHook {
   error: string | null;
 }
 
-/** Debug mode is opt-in via ?debug=1 — the default product surface stays clean. */
-function debugEnabled(): boolean {
-  return (
-    typeof window !== "undefined" && window.location.search.includes("debug")
-  );
-}
-
 let lastByteMeasureAt = -Infinity;
+
+function debugEnabled(): boolean {
+  return typeof window !== "undefined" && window.location.search.includes("debug");
+}
 
 function updateDebugHook(event: WorkerEvent): void {
   if (!debugEnabled()) {
@@ -54,17 +51,15 @@ function updateDebugHook(event: WorkerEvent): void {
   }
   const target = window as unknown as { __jevDebug?: JevDebugHook };
   const store = useUiStore.getState();
-  const previous = target.__jevDebug;
-  const hook: JevDebugHook = previous ?? { config: null, snapshot: null, metrics: null, error: null };
+  const hook: JevDebugHook =
+    target.__jevDebug ?? { config: null, snapshot: null, metrics: null, error: null };
   switch (event.type) {
     case "READY":
-      hook.config = event.config;
+      hook.config = { ...event.config, scaleIndex: event.scaleIndex, scaleLabel: event.scaleLabel };
       hook.snapshot = null;
       hook.error = null;
       break;
     case "SNAPSHOT": {
-      // Byte measurement is throttled to 1 Hz: stringifying the full frame at
-      // 5 Hz would itself load the main thread at Large + Rush.
       const nowMs = performance.now();
       const measure = hook.snapshot === null || nowMs - lastByteMeasureAt >= 1_000;
       if (measure) {
@@ -75,9 +70,7 @@ function updateDebugHook(event: WorkerEvent): void {
         timeMs: event.snapshot.timeMs,
         vehicles: event.snapshot.vehicles.length,
         controller: event.snapshot.controller,
-        incidents: event.snapshot.incidents.map(
-          (incident) => `${incident.kind}:${incident.status}`,
-        ),
+        incidents: event.snapshot.incidents.map((incident) => `${incident.kind}:${incident.status}`),
         closedRoads: event.snapshot.roadConditions.filter((road) => road.closed).length,
         snapshotBytes: measure
           ? JSON.stringify(event.snapshot).length
@@ -95,17 +88,26 @@ function updateDebugHook(event: WorkerEvent): void {
       hook.error = event.message;
       break;
   }
-  const config = store.config;
-  hook.config = config
-    ? { ...config, controller: store.controller, seed: store.seed }
-    : hook.config;
+  if (store.config) {
+    const previous = hook.config as { scaleIndex?: number; scaleLabel?: string } | null;
+    hook.config = {
+      ...store.config,
+      controller: store.controller,
+      seed: store.seed,
+      scaleIndex: previous?.scaleIndex,
+      scaleLabel: previous?.scaleLabel,
+    };
+  }
   target.__jevDebug = hook;
 }
 
 export function TrafficSimulator() {
   const framesRef = useRef<FrameBuffer>(createFrameBuffer());
   const workerRef = useRef<Worker | null>(null);
-  const [debugOverlay, setDebugOverlay] = useState(false);
+  const mapHandleRef = useRef<MapHandle | null>(null);
+  const lastScaleRef = useRef<number | null>(null);
+  const phase = useUiStore((state) => state.phase);
+  const citySize = useUiStore((state) => state.citySize);
 
   useEffect(() => {
     const worker = new Worker(new URL("../worker/simulation.worker.ts", import.meta.url), {
@@ -118,8 +120,18 @@ export function TrafficSimulator() {
       const store = useUiStore.getState();
       switch (data.type) {
         case "READY": {
-          setFrameModel(framesRef.current, data.renderModel);
-          store.applyReady(data.config);
+          const model = showcaseCity(data.scaleIndex);
+          setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
+          const entering = store.phase === "entering";
+          const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
+          lastScaleRef.current = data.scaleIndex;
+          store.applyReady(data.config, data.scaleLabel);
+          store.setPhase("city");
+          if (entering || scaleChanged) {
+            // Deliberate transition: the camera flies into Central while the
+            // onboarding surface fades away.
+            mapHandleRef.current?.flyToCentral();
+          }
           break;
         }
         case "SNAPSHOT": {
@@ -147,23 +159,6 @@ export function TrafficSimulator() {
       store.setError(event.message || "simulation worker crashed");
       store.setRunning(false);
     };
-    const initial = useUiStore.getState();
-    // Debug runs may shorten the horizon (?debug=1&duration=30000) so smoke
-    // checks can exercise RUN_COMPLETE quickly; the product default stands.
-    const params = new URLSearchParams(window.location.search);
-    const debugDuration =
-      debugEnabled() && params.get("duration") ? Number(params.get("duration")) : undefined;
-    worker.postMessage({
-      type: "INIT",
-      citySize: initial.citySize,
-      trafficLevel: initial.trafficLevel,
-      controller: initial.controller,
-      seed: initial.seed,
-      durationMs:
-        debugDuration !== undefined && Number.isFinite(debugDuration) && debugDuration > 0
-          ? debugDuration
-          : undefined,
-    } satisfies WorkerCommand);
     return () => {
       worker.terminate();
       workerRef.current = null;
@@ -174,14 +169,8 @@ export function TrafficSimulator() {
     workerRef.current?.postMessage(command);
   }, []);
 
-  /** City/traffic changes reset the run with the same seed (worker-side). */
-  const initRun = useCallback(
-    (overrides: {
-      citySize?: CitySize;
-      trafficLevel?: TrafficLevel;
-      controller?: ControllerChoice;
-      seed?: number;
-    }) => {
+  const startRun = useCallback(
+    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; seed: number }> = {}) => {
       const state = useUiStore.getState();
       state.setError(null);
       state.setRunComplete(false);
@@ -189,9 +178,33 @@ export function TrafficSimulator() {
         type: "INIT",
         citySize: overrides.citySize ?? state.citySize,
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
-        controller: overrides.controller ?? state.controller,
+        controller: state.controller,
         seed: overrides.seed ?? state.seed,
       });
+    },
+    [send],
+  );
+
+  const enterCity = useCallback(() => {
+    useUiStore.getState().setPhase("entering");
+    startRun();
+  }, [startRun]);
+
+  const onPause = useCallback(() => {
+    send({ type: "PAUSE" });
+    useUiStore.getState().setRunning(false);
+  }, [send]);
+
+  const onResume = useCallback(() => {
+    send({ type: "START" });
+    useUiStore.getState().setRunning(true);
+  }, [send]);
+
+  const onController = useCallback(
+    (controller: ControllerChoice) => {
+      // Live switch: no restart, no rebuild.
+      useUiStore.getState().setController(controller);
+      send({ type: "SET_CONTROLLER", controller });
     },
     [send],
   );
@@ -199,37 +212,26 @@ export function TrafficSimulator() {
   const onCitySize = useCallback(
     (citySize: CitySize) => {
       useUiStore.getState().setCitySize(citySize);
-      initRun({ citySize });
+      startRun({ citySize });
     },
-    [initRun],
+    [startRun],
   );
 
   const onTrafficLevel = useCallback(
     (trafficLevel: TrafficLevel) => {
       useUiStore.getState().setTrafficLevel(trafficLevel);
-      initRun({ trafficLevel });
+      startRun({ trafficLevel });
     },
-    [initRun],
+    [startRun],
   );
 
-  const onController = useCallback(
-    (controller: ControllerChoice) => {
-      // In-place switch: no reset, no rebuild, policy changes next tick.
-      useUiStore.getState().setController(controller);
-      send({ type: "SET_CONTROLLER", controller });
+  const onSeed = useCallback(
+    (seed: number) => {
+      useUiStore.getState().setSeed(seed);
+      startRun({ seed });
     },
-    [send],
+    [startRun],
   );
-
-  const onStart = useCallback(() => {
-    send({ type: "START" });
-    useUiStore.getState().setRunning(true);
-  }, [send]);
-
-  const onPause = useCallback(() => {
-    send({ type: "PAUSE" });
-    useUiStore.getState().setRunning(false);
-  }, [send]);
 
   const onRestart = useCallback(() => {
     const store = useUiStore.getState();
@@ -239,7 +241,7 @@ export function TrafficSimulator() {
     store.setRunning(true);
   }, [send]);
 
-  const onNewSeed = useCallback(() => {
+  const onNewScenario = useCallback(() => {
     const store = useUiStore.getState();
     store.setError(null);
     store.setRunComplete(false);
@@ -254,69 +256,40 @@ export function TrafficSimulator() {
     [send],
   );
 
+  const onHome = useCallback(() => {
+    mapHandleRef.current?.fitCity();
+  }, []);
+
+  const handleMap = useCallback((handle: MapHandle | null) => {
+    mapHandleRef.current = handle;
+  }, []);
+
+  const scaleIndex = scaleIndexForSize(citySize);
+  const live = phase === "city";
+
   return (
-    <div className="absolute inset-0 overflow-hidden bg-[#faf9f7] text-neutral-800">
-      <CityCanvas frames={framesRef} debug={debugOverlay} />
-      <div className="pointer-events-none absolute left-4 top-4 z-10">
-        <div className="text-[11px] font-semibold uppercase tracking-widest text-neutral-500">
-          Jev Traffic Sim
-        </div>
-        <StatusLine />
-        <button
-          type="button"
-          onClick={() => setDebugOverlay((value) => !value)}
-          className="pointer-events-auto mt-1 text-[10px] tracking-wide text-neutral-300 transition-colors hover:text-neutral-500"
-        >
-          debug
-        </button>
+    <div className="absolute inset-0 overflow-hidden bg-[#f6f2ea] text-neutral-800">
+      <div
+        className={`absolute inset-0 transition-[filter,opacity] duration-[1400ms] ease-out ${
+          live ? "blur-0 opacity-100" : "opacity-90 blur-[5px]"
+        }`}
+      >
+        <CityMap scaleIndex={scaleIndex} frames={framesRef} live={live} onHandle={handleMap} />
       </div>
-      <ControlBar
+      <Onboarding onEnterCity={enterCity} />
+      <SimChrome
+        onPause={onPause}
+        onResume={onResume}
+        onController={onController}
         onCitySize={onCitySize}
         onTrafficLevel={onTrafficLevel}
-        onController={onController}
-        onStart={onStart}
-        onPause={onPause}
+        onSeed={onSeed}
         onRestart={onRestart}
-        onNewSeed={onNewSeed}
+        onNewScenario={onNewScenario}
+        onHome={onHome}
       />
       <MetricsHUD />
       <IncidentBar onIncident={onIncident} />
-      <ErrorBanner />
     </div>
   );
 }
-
-function StatusLine() {
-  const controller = useUiStore((state) => state.controller);
-  const running = useUiStore((state) => state.running);
-  const ready = useUiStore((state) => state.ready);
-  const runComplete = useUiStore((state) => state.runComplete);
-  const label = !ready
-    ? "starting…"
-    : runComplete
-      ? "complete"
-      : running
-        ? "running"
-        : "paused";
-  return (
-    <div className="mt-0.5 text-[10px] uppercase tracking-wide text-neutral-400">
-      {controller} · {label}
-    </div>
-  );
-}
-
-function ErrorBanner() {
-  const error = useUiStore((state) => state.error);
-  if (!error) {
-    return null;
-  }
-  return (
-    <div className="pointer-events-none absolute inset-x-0 top-20 z-20 flex justify-center px-4">
-      <div className="pointer-events-auto max-w-md rounded-lg border border-red-900/20 bg-white/95 px-3 py-2 text-xs text-red-800 shadow-sm">
-        Simulation stopped: {error}
-        <span className="text-red-500"> — use Restart to continue.</span>
-      </div>
-    </div>
-  );
-}
-

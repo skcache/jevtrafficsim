@@ -6,7 +6,6 @@
  */
 import type { IncidentKind } from "@/sim/incidents";
 import type { CitySize, TrafficLevel } from "@/sim/types";
-import type { StaticRenderModel } from "@/render/model";
 import type {
   PresentationMetrics,
   PresentationSnapshot,
@@ -76,7 +75,9 @@ export type WorkerEvent =
   | {
       readonly type: "READY";
       readonly config: RunConfig;
-      readonly renderModel: StaticRenderModel;
+      /** Showcase scale (0..4) — the main thread compiles the same geography. */
+      readonly scaleIndex: number;
+      readonly scaleLabel: string;
       readonly timeMs: number;
       readonly incidentSeed: number;
     }

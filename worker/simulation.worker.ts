@@ -14,7 +14,8 @@
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import { generateCity } from "@/sim/city-generator";
+import { showcaseCity, showcaseScaleForSize } from "@/cities/showcase-city";
+import { SHOWCASE_SCALE_LABELS } from "@/cities/showcase-city-data";
 import { generateDemand } from "@/sim/demand";
 import {
   createEngine,
@@ -24,7 +25,6 @@ import {
   type EngineState,
 } from "@/sim/engine";
 import { createRng } from "@/sim/rng";
-import { buildRenderModel, type StaticRenderModel } from "@/render/model";
 import {
   buildPresentationMetrics,
   buildPresentationSnapshot,
@@ -53,7 +53,7 @@ const scope = self as unknown as WorkerScope;
 interface WorkerState {
   config: RunConfig | null;
   engine: EngineState | null;
-  renderModel: StaticRenderModel | null;
+  scaleIndex: number;
   incidentSeed: number;
   running: boolean;
   complete: boolean;
@@ -64,7 +64,7 @@ interface WorkerState {
 const state: WorkerState = {
   config: null,
   engine: null,
-  renderModel: null,
+  scaleIndex: 2,
   incidentSeed: 0,
   running: false,
   complete: false,
@@ -110,7 +110,11 @@ function buildRun(config: RunConfig): void {
   clearTimer();
   state.running = false;
   state.complete = false;
-  const city = generateCity(config.citySize, config.seed);
+  // The browser demo runs the handcrafted showcase city; the procedural
+  // generator stays for tests and the headless benchmark (Task 12).
+  const scaleIndex = showcaseScaleForSize(config.citySize);
+  const model = showcaseCity(scaleIndex);
+  const city = model.city;
   const spawns = generateDemand({
     city,
     level: config.trafficLevel,
@@ -128,13 +132,14 @@ function buildRun(config: RunConfig): void {
   });
   state.config = config;
   state.engine = engine;
-  state.renderModel = buildRenderModel(city);
+  state.scaleIndex = scaleIndex;
   state.incidentSeed = incidentSeed;
   state.snapshotSequence = 0;
   post({
     type: "READY",
     config,
-    renderModel: state.renderModel,
+    scaleIndex,
+    scaleLabel: SHOWCASE_SCALE_LABELS[scaleIndex],
     timeMs: engine.traffic.timeMs,
     incidentSeed,
   });

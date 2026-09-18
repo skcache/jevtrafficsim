@@ -1,26 +1,30 @@
 "use client";
 
 /**
- * Frame buffer (Task 11): high-frequency presentation frames live in a plain
- * mutable ref shared between the worker client and CityCanvas — deliberately
- * NOT in React state, so 5 Hz frames never rerender the tree.
+ * Frame buffer (Task 11 visual correction): high-frequency presentation
+ * frames and the compiled showcase geometry live in a plain mutable ref
+ * shared between the worker client and the map surface — deliberately NOT in
+ * React state, so 5 Hz frames never rerender the tree.
  */
-import type { StaticRenderModel } from "@/render/model";
+import type { ShowcaseMapModel } from "@/cities/showcase-city";
+import type { DirectedPathIndexes } from "@/render/showcase-geometry";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 
 export interface FrameBuffer {
-  /** Static city geometry from READY; null until the first run. */
-  model: StaticRenderModel | null;
+  /** Compiled showcase model for the active scale (deterministic, shared with the worker). */
+  model: ShowcaseMapModel | null;
+  paths: DirectedPathIndexes | null;
   previous: PresentationSnapshot | null;
   current: PresentationSnapshot | null;
   currentReceivedAtMs: number;
-  /** Bumped whenever a new render model arrives (INIT/RESET). */
+  /** Bumped whenever a new scale/model arrives (INIT/RESET). */
   generation: number;
 }
 
 export function createFrameBuffer(): FrameBuffer {
   return {
     model: null,
+    paths: null,
     previous: null,
     current: null,
     currentReceivedAtMs: 0,
@@ -28,8 +32,13 @@ export function createFrameBuffer(): FrameBuffer {
   };
 }
 
-export function setFrameModel(buffer: FrameBuffer, model: StaticRenderModel): void {
+export function setFrameModel(
+  buffer: FrameBuffer,
+  model: ShowcaseMapModel,
+  paths: DirectedPathIndexes,
+): void {
   buffer.model = model;
+  buffer.paths = paths;
   buffer.previous = null;
   buffer.current = null;
   buffer.currentReceivedAtMs = 0;
