@@ -6,13 +6,13 @@
  * shared between the worker client and the map surface — deliberately NOT in
  * React state, so 5 Hz frames never rerender the tree.
  */
-import type { ShowcaseMapModel } from "@/cities/showcase-city";
-import type { DirectedPathIndexes } from "@/render/showcase-geometry";
+import type { MapModel } from "@/cities/map-model";
+import type { DirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 
 export interface FrameBuffer {
   /** Compiled showcase model for the active scale (deterministic, shared with the worker). */
-  model: ShowcaseMapModel | null;
+  model: MapModel | null;
   paths: DirectedPathIndexes | null;
   previous: PresentationSnapshot | null;
   current: PresentationSnapshot | null;
@@ -34,7 +34,7 @@ export function createFrameBuffer(): FrameBuffer {
 
 export function setFrameModel(
   buffer: FrameBuffer,
-  model: ShowcaseMapModel,
+  model: MapModel,
   paths: DirectedPathIndexes,
 ): void {
   buffer.model = model;

@@ -1,0 +1,7 @@
+# Chicago showcase-map preprocessing (one-time, offline after the first run).
+# Nothing here is required by the web application: the pipeline only produces
+# the frozen artifacts committed under data/chicago/.
+osmnx==2.0.3
+shapely==2.1.2
+geopandas==1.1.4
+requests==2.34.2

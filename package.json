@@ -4,15 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "predev": "node scripts/sync-maplibre-worker.mjs",
+    "predev": "node scripts/sync-maplibre-worker.mjs && node scripts/sync-chicago-data.mjs",
     "build": "next build",
-    "prebuild": "node scripts/sync-maplibre-worker.mjs",
+    "prebuild": "node scripts/sync-maplibre-worker.mjs && node scripts/sync-chicago-data.mjs",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "sync:maplibre-worker": "node scripts/sync-maplibre-worker.mjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sync:chicago-data": "node scripts/sync-chicago-data.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.0",

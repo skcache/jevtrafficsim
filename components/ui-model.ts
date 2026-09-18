@@ -13,11 +13,11 @@ export interface ScaleOption {
 
 /** Five nested scales of ONE showcase city, in onboarding order. */
 export const CITY_SIZE_OPTIONS: readonly ScaleOption[] = [
-  { value: "small", label: "Tiny", description: "Central core" },
-  { value: "small-medium", label: "Small", description: "Downtown + neighborhoods" },
-  { value: "medium", label: "Medium", description: "River + bridges" },
-  { value: "medium-large", label: "Large", description: "Highway + arena" },
-  { value: "large", label: "Metro", description: "Full city" },
+  { value: "small", label: "Tiny", description: "Loop core" },
+  { value: "small-medium", label: "Small", description: "Loop + river edge" },
+  { value: "medium", label: "Medium", description: "Downtown + Grant Park" },
+  { value: "medium-large", label: "Large", description: "Expressways + West Loop" },
+  { value: "large", label: "Metro", description: "Central Chicago" },
 ];
 
 export const TRAFFIC_OPTIONS: readonly { value: TrafficLevel; label: string }[] = [

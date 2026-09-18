@@ -9,7 +9,7 @@
  */
 import type { Point } from "@/cities/paths";
 import type { VehicleType } from "@/sim/types";
-import { waitHeatBucket, WAIT_HEAT_COLORS, type WaitHeatBucket } from "./showcase-geometry";
+import { waitHeatBucket, WAIT_HEAT_COLORS, type WaitHeatBucket } from "./map-geometry";
 
 /* ------------------------------------------------------------------ */
 /* Vehicles                                                            */

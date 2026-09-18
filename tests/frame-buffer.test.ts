@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { createFrameBuffer, pushFrame, setFrameModel } from "@/components/frame-buffer";
-import { compileShowcaseCity } from "@/cities/showcase-city";
-import { buildDirectedPathIndexes } from "@/render/showcase-geometry";
+import { chicagoModel } from "./chicago-support";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 
 function snapshot(sequence: number, timeMs: number): PresentationSnapshot {
@@ -49,7 +49,7 @@ describe("frame buffer", () => {
   it("clears both frames when a new scale arrives", () => {
     const buffer = createFrameBuffer();
     pushFrame(buffer, snapshot(1, 0), 100);
-    const model = compileShowcaseCity(4);
+    const model = chicagoModel(4);
     setFrameModel(buffer, model, buildDirectedPathIndexes(model));
     expect(buffer.previous).toBeNull();
     expect(buffer.current).toBeNull();

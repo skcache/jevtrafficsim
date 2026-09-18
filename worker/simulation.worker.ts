@@ -14,8 +14,14 @@
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import { showcaseCity, showcaseScaleForSize } from "@/cities/showcase-city";
-import { SHOWCASE_SCALE_LABELS } from "@/cities/showcase-city-data";
+import {
+  CHICAGO_SCALE_LABELS,
+  CHICAGO_VENUES,
+  chicagoScaleForSize,
+  nearestIntersectionTo,
+} from "@/cities/chicago";
+import { loadChicagoCity } from "@/cities/chicago-assets";
+import type { MapModel } from "@/cities/map-model";
 import { generateDemand } from "@/sim/demand";
 import {
   createEngine,
@@ -59,6 +65,12 @@ interface WorkerState {
   complete: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   snapshotSequence: number;
+  /** Intersection ids of the stadium venues, for event-release targeting. */
+  venues: number[];
+  /** Rotates through the venues deterministically as events fire. */
+  venueTurn: number;
+  /** Guards against overlapping async builds (fast scale switching). */
+  buildToken: number;
 }
 
 const state: WorkerState = {
@@ -70,6 +82,9 @@ const state: WorkerState = {
   complete: false,
   timer: null,
   snapshotSequence: 0,
+  venues: [],
+  venueTurn: 0,
+  buildToken: 0,
 };
 
 function post(event: WorkerEvent): void {
@@ -105,15 +120,32 @@ function clearTimer(): void {
   }
 }
 
-/** Full (re)build from a run config: fresh city, demand, engine, render model. */
-function buildRun(config: RunConfig): void {
+/**
+ * Full (re)build from a run config: fresh city, demand, engine, render model.
+ *
+ * The browser demo runs the frozen Chicago showcase geography (committed
+ * artifacts, fetched from the same origin). The procedural generator stays
+ * untouched for tests and the headless benchmark (Task 12).
+ */
+async function buildRun(config: RunConfig): Promise<void> {
   clearTimer();
   state.running = false;
   state.complete = false;
-  // The browser demo runs the handcrafted showcase city; the procedural
-  // generator stays for tests and the headless benchmark (Task 12).
-  const scaleIndex = showcaseScaleForSize(config.citySize);
-  const model = showcaseCity(scaleIndex);
+  const scaleIndex = chicagoScaleForSize(config.citySize);
+  const token = (state.buildToken += 1);
+  let model: MapModel;
+  try {
+    model = await loadChicagoCity(scaleIndex);
+  } catch (error) {
+    post({
+      type: "ERROR",
+      message: `failed to load the Chicago map data: ${String((error as Error)?.message ?? error)}`,
+    });
+    return;
+  }
+  if (token !== state.buildToken) {
+    return; // a newer build superseded this one
+  }
   const city = model.city;
   const spawns = generateDemand({
     city,
@@ -135,11 +167,15 @@ function buildRun(config: RunConfig): void {
   state.scaleIndex = scaleIndex;
   state.incidentSeed = incidentSeed;
   state.snapshotSequence = 0;
+  state.venueTurn = 0;
+  state.venues = CHICAGO_VENUES.map((venue) =>
+    nearestIntersectionTo(model, venue.lon, venue.lat),
+  ).filter((id): id is number => id !== null);
   post({
     type: "READY",
     config,
     scaleIndex,
-    scaleLabel: SHOWCASE_SCALE_LABELS[scaleIndex],
+    scaleLabel: CHICAGO_SCALE_LABELS[scaleIndex] ?? "Medium",
     timeMs: engine.traffic.timeMs,
     incidentSeed,
   });
@@ -258,7 +294,16 @@ function handleCommand(command: WorkerCommand): void {
       }
       // Interactive injection through the Task-10 seam: atMs defaults to the
       // current simulation time; it activates on the next incident phase.
-      queueIncident(state.engine, { kind: command.kind });
+      // An event release targets a real venue (United Center / Soldier Field)
+      // so the crowd pours out of the stadium, not a random interchange.
+      const center =
+        command.kind === "event-release" && state.venues.length > 0
+          ? state.venues[state.venueTurn++ % state.venues.length]
+          : undefined;
+      queueIncident(
+        state.engine,
+        center === undefined ? { kind: command.kind } : { kind: command.kind, centerIntersectionId: center },
+      );
       postSnapshot(); // immediate feedback frame (pending marker)
       return;
     }

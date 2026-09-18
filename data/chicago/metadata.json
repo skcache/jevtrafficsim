@@ -1,0 +1,147 @@
+{
+  "source": "OpenStreetMap (ODbL 1.0)",
+  "attribution": "\u00a9 OpenStreetMap contributors",
+  "attributionUrl": "https://www.openstreetmap.org/copyright",
+  "extraction": {
+    "snapshotDate": "2026-09-18T22:41:12Z",
+    "tool": "tools/chicago-map/extract_chicago.py",
+    "toolVersion": 1,
+    "networkType": "drive",
+    "osmnx": "2.0.3"
+  },
+  "masterBbox": [
+    -87.679,
+    41.861,
+    -87.596,
+    41.901
+  ],
+  "scaleBboxes": {
+    "tiny": [
+      -87.635,
+      41.879,
+      -87.622,
+      41.888
+    ],
+    "small": [
+      -87.64,
+      41.876,
+      -87.617,
+      41.891
+    ],
+    "medium": [
+      -87.648,
+      41.871,
+      -87.61,
+      41.895
+    ],
+    "large": [
+      -87.672,
+      41.862,
+      -87.6,
+      41.9
+    ],
+    "metro": [
+      -87.679,
+      41.861,
+      -87.596,
+      41.901
+    ]
+  },
+  "projection": {
+    "kind": "local equirectangular tangent plane (WGS84 series metres per degree)",
+    "originLon": -87.6375,
+    "originLat": 41.881,
+    "metresPerDegreeLon": 83004.94541546327,
+    "metresPerDegreeLat": 111070.97338777411,
+    "metricDecimals": 2,
+    "coordDecimals": 6
+  },
+  "capacityModel": {
+    "storageMetresPerCarEquivalent": 7.5,
+    "minCapacity": 2,
+    "formula": "clamp(round(lanes * lengthM / storage), min, inf)"
+  },
+  "regionGrid": {
+    "cols": 8,
+    "rows": 6,
+    "basis": "master extent"
+  },
+  "counts": {
+    "tiny": {
+      "intersections": 119,
+      "roads": 222,
+      "signals": 78,
+      "stops": 14,
+      "bridges": 9,
+      "bridgeGroups": 4,
+      "highways": 3,
+      "arterials": 199,
+      "locals": 11,
+      "roundaboutNodes": 0,
+      "corridors": 8,
+      "regions": 5
+    },
+    "small": {
+      "intersections": 447,
+      "roads": 817,
+      "signals": 222,
+      "stops": 60,
+      "bridges": 147,
+      "bridgeGroups": 66,
+      "highways": 27,
+      "arterials": 590,
+      "locals": 53,
+      "roundaboutNodes": 22,
+      "corridors": 33,
+      "regions": 9
+    },
+    "medium": {
+      "intersections": 987,
+      "roads": 1900,
+      "signals": 462,
+      "stops": 134,
+      "bridges": 263,
+      "bridgeGroups": 128,
+      "highways": 103,
+      "arterials": 1306,
+      "locals": 228,
+      "roundaboutNodes": 40,
+      "corridors": 72,
+      "regions": 18
+    },
+    "large": {
+      "intersections": 2157,
+      "roads": 4598,
+      "signals": 768,
+      "stops": 541,
+      "bridges": 353,
+      "bridgeGroups": 203,
+      "highways": 245,
+      "arterials": 2522,
+      "locals": 1478,
+      "roundaboutNodes": 40,
+      "corridors": 102,
+      "regions": 41
+    },
+    "metro": {
+      "intersections": 2371,
+      "roads": 5162,
+      "signals": 819,
+      "stops": 616,
+      "bridges": 357,
+      "bridgeGroups": 205,
+      "highways": 253,
+      "arterials": 2784,
+      "locals": 1768,
+      "roundaboutNodes": 40,
+      "corridors": 107,
+      "regions": 41
+    }
+  },
+  "features": {
+    "buildings": 1676,
+    "water": 1,
+    "parks": 1653,
+    "landmarks": 6
+  }
+}

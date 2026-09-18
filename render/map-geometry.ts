@@ -5,7 +5,7 @@
  *
  * Framework-free: no map library, no React, no DOM.
  */
-import type { ShowcaseMapModel } from "@/cities/showcase-city";
+import type { MapModel } from "@/cities/map-model";
 import { buildPathIndex, samplePathIndex, type PathIndex, type PathSample } from "@/cities/paths";
 import type { RoadId } from "@/sim/types";
 
@@ -62,7 +62,7 @@ export function applyLaneOffset(
 /** Per-directed-road path indexes, built once per compiled scale. */
 export type DirectedPathIndexes = readonly (PathIndex | null)[];
 
-export function buildDirectedPathIndexes(model: ShowcaseMapModel): DirectedPathIndexes {
+export function buildDirectedPathIndexes(model: MapModel): DirectedPathIndexes {
   return model.directedPaths.map((points) => (points ? buildPathIndex(points) : null));
 }
 

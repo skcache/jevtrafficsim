@@ -10,7 +10,7 @@
  */
 import { samplePathIndex, type PathIndex } from "@/cities/paths";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
-import { applyLaneOffset } from "./showcase-geometry";
+import { applyLaneOffset } from "./map-geometry";
 
 export function clamp01(value: number): number {
   if (!Number.isFinite(value)) {

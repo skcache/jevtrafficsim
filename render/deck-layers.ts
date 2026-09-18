@@ -11,13 +11,13 @@
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, LineLayer, PathLayer, PolygonLayer, ScatterplotLayer } from "@deck.gl/layers";
-import type { ShowcaseMapModel } from "@/cities/showcase-city";
+import type { MapModel } from "@/cities/map-model";
 import { deriveApproachGroups } from "@/sim/signals";
 import type { RoadId } from "@/sim/types";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 import type { RenderedVehicle } from "./interpolate";
-import { METRES_PER_DEGREE } from "./showcase-geojson";
-import { waitHeatBucket, WAIT_HEAT_COLORS } from "./showcase-geometry";
+import { metricToLngLat, type Projection } from "@/cities/map-model";
+import { waitHeatBucket, WAIT_HEAT_COLORS } from "./map-geometry";
 import {
   egressArrows,
   groupByHeatBucket,
@@ -38,8 +38,9 @@ import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
 
-export function toLngLat(x: number, y: number): LngLat {
-  return [x / METRES_PER_DEGREE, y / METRES_PER_DEGREE];
+/** Local metres -> WGS84 through the model's projection. */
+export function toLngLat(projection: Projection, x: number, y: number): LngLat {
+  return metricToLngLat(projection, x, y);
 }
 
 export interface SignalPlanEntry {
@@ -50,7 +51,7 @@ export interface SignalPlanEntry {
   readonly groupBearings: readonly number[];
 }
 
-function meanBearing(model: ShowcaseMapModel, roads: readonly RoadId[]): number {
+function meanBearing(model: MapModel, roads: readonly RoadId[]): number {
   let sx = 0;
   let sy = 0;
   for (const roadId of roads) {
@@ -68,7 +69,7 @@ function meanBearing(model: ShowcaseMapModel, roads: readonly RoadId[]): number 
 }
 
 /** Precomputed per-intersection phase geometry (built once per compiled scale). */
-export function buildSignalPlans(model: ShowcaseMapModel): Map<number, SignalPlanEntry> {
+export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> {
   const plans = new Map<number, SignalPlanEntry>();
   for (const intersection of model.city.intersections) {
     if (intersection.control !== "signal") {
@@ -96,6 +97,7 @@ const SIGNAL_COLORS = {
 /* ------------------------------------------------------------------ */
 
 export function buildVehicleLayers(
+  projection: Projection,
   vehicles: readonly RenderedVehicle[],
   icons: VehicleIconSet,
   zoom: number,
@@ -110,7 +112,7 @@ export function buildVehicleLayers(
     iconAtlas: icons.atlas,
     iconMapping: icons.mapping,
     getIcon: (vehicle) => vehicle.type,
-    getPosition: (vehicle) => toLngLat(vehicle.x, vehicle.y),
+    getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
     getSize: (vehicle) =>
       vehicleLengthPx(vehicle.type, zoom) +
       vehicleHaloExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) * ringScaleForZoom(zoom),
@@ -127,7 +129,7 @@ export function buildVehicleLayers(
     iconAtlas: icons.atlas,
     iconMapping: icons.mapping,
     getIcon: (vehicle) => vehicle.type,
-    getPosition: (vehicle) => toLngLat(vehicle.x, vehicle.y),
+    getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
     getSize: (vehicle) =>
       vehicleLengthPx(vehicle.type, zoom) +
       vehicleRingExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) * ringScaleForZoom(zoom),
@@ -156,7 +158,7 @@ export function buildVehicleLayers(
         iconAtlas: icons.atlas,
         iconMapping: icons.mapping,
         getIcon: (vehicle) => vehicle.type,
-        getPosition: (vehicle) => toLngLat(vehicle.x, vehicle.y),
+        getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
         getSize: (vehicle) => vehicleLengthPx(vehicle.type, zoom),
         getColor: (vehicle) => [...VEHICLE_BODY_COLORS[vehicle.type], 255],
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
@@ -184,6 +186,7 @@ interface SignalEntry {
 }
 
 export function buildSignalLayers(
+  projection: Projection,
   snapshot: PresentationSnapshot | null,
   plans: Map<number, SignalPlanEntry>,
   zoom: number,
@@ -206,7 +209,7 @@ export function buildSignalLayers(
         : null;
     entries.push({
       intersectionId: signal.intersectionId,
-      position: toLngLat(plan.x, plan.y),
+      position: toLngLat(projection, plan.x, plan.y),
       x: plan.x,
       y: plan.y,
       color: [base[0], base[1], base[2], Math.round(base[3] * opacity)],
@@ -238,9 +241,9 @@ export function buildSignalLayers(
     new LineLayer<SignalEntry>({
       id: "signals-axis",
       data: axes,
-      getSourcePosition: (entry) => toLngLat(entry.x, entry.y),
+      getSourcePosition: (entry) => toLngLat(projection, entry.x, entry.y),
       getTargetPosition: (entry) =>
-        toLngLat(
+        toLngLat(projection, 
           entry.x + Math.cos(entry.bearing!) * reach,
           entry.y + Math.sin(entry.bearing!) * reach,
         ),
@@ -281,12 +284,12 @@ export function buildSignalLayers(
       continue;
     }
     const geometry = stopBarGeometry([entry.x, entry.y], entry.bearing + Math.PI);
-    stopBars.push({ path: geometry.bar.map(([x, y]) => toLngLat(x, y)) });
+    stopBars.push({ path: geometry.bar.map(([x, y]) => toLngLat(projection, x, y)) });
     for (const tick of geometry.crosswalk) {
-      stopBars.push({ path: tick.map(([x, y]) => toLngLat(x, y)) });
+      stopBars.push({ path: tick.map(([x, y]) => toLngLat(projection, x, y)) });
     }
     lamps.push({
-      position: toLngLat(
+      position: toLngLat(projection, 
         entry.x + Math.cos(entry.bearing) * (reach - 6),
         entry.y + Math.sin(entry.bearing) * (reach - 6),
       ),
@@ -336,9 +339,10 @@ export interface IncidentExtras {
 
 export function buildIncidentLayers(
   snapshot: PresentationSnapshot | null,
-  model: ShowcaseMapModel,
+  model: MapModel,
   nowMs: number,
 ): { layers: Layer[]; extras: IncidentExtras } {
+  const projection = model.projection;
   const layers: Layer[] = [];
   const plates: { id: string; kind: string; x: number; y: number; label: string }[] = [];
   if (!snapshot) {
@@ -367,12 +371,12 @@ export function buildIncidentLayers(
       continue;
     }
     seen.add(key);
-    const converted = path.map(([x, y]) => toLngLat(x, y));
+    const converted = path.map(([x, y]) => toLngLat(projection, x, y));
     const isBridge = model.city.roads[roadId]?.kind === "bridge";
     if (isBridge) {
       closedBridgePaths.push(converted);
       const mid = path[Math.floor(path.length / 2)];
-      closedRoundels.push(toLngLat(mid[0], mid[1]));
+      closedRoundels.push(toLngLat(projection, mid[0], mid[1]));
       const piece = model.streets.find((candidate) => candidate.roadIds.includes(roadId));
       const name = piece?.bridge?.name ?? "Bridge";
       const already = plates.some((plate) => plate.label.startsWith(name));
@@ -382,11 +386,11 @@ export function buildIncidentLayers(
     } else {
       closedPaths.push(converted);
       for (const segment of hatchSegments(path, 4, 5)) {
-        closedHatches.push(segment.map(([x, y]) => toLngLat(x, y)));
+        closedHatches.push(segment.map(([x, y]) => toLngLat(projection, x, y)));
       }
-      closedRoundels.push(toLngLat(path[0][0], path[0][1]));
+      closedRoundels.push(toLngLat(projection, path[0][0], path[0][1]));
       closedRoundels.push(
-        toLngLat(path[path.length - 1][0], path[path.length - 1][1]),
+        toLngLat(projection, path[path.length - 1][0], path[path.length - 1][1]),
       );
     }
   }
@@ -407,7 +411,7 @@ export function buildIncidentLayers(
         const next = path[Math.min(path.length - 1, midIndex + 1)];
         const bearing = Math.atan2(next[1] - previous[1], next[0] - previous[0]);
         crashMarkers.push({
-          position: toLngLat(mid[0], mid[1]),
+          position: toLngLat(projection, mid[0], mid[1]),
           x: mid[0],
           y: mid[1],
           bearing,
@@ -417,15 +421,15 @@ export function buildIncidentLayers(
         const py = Math.cos(bearing);
         for (const offset of [-7, 7]) {
           crashDebris.push([
-            toLngLat(mid[0] + px * offset - Math.cos(bearing) * 3, mid[1] + py * offset - Math.sin(bearing) * 3),
-            toLngLat(mid[0] + px * offset + Math.cos(bearing) * 3, mid[1] + py * offset + Math.sin(bearing) * 3),
+            toLngLat(projection, mid[0] + px * offset - Math.cos(bearing) * 3, mid[1] + py * offset - Math.sin(bearing) * 3),
+            toLngLat(projection, mid[0] + px * offset + Math.cos(bearing) * 3, mid[1] + py * offset + Math.sin(bearing) * 3),
           ]);
         }
       }
     } else if (incident.kind === "event-release" && incident.eventCenterIntersectionId !== null) {
       const center = model.city.intersections[incident.eventCenterIntersectionId];
       if (center) {
-        eventCenters.push({ position: toLngLat(center.x, center.y), x: center.x, y: center.y });
+        eventCenters.push({ position: toLngLat(projection, center.x, center.y), x: center.x, y: center.y });
         plates.push({
           id: `event-${incident.id}`,
           kind: "event-release",
@@ -452,8 +456,8 @@ export function buildIncidentLayers(
   });
   const arrows = eventCenters.flatMap((center) =>
     egressArrows([center.x, center.y], eventBearings).map((arrow) => ({
-      source: toLngLat(arrow.source[0], arrow.source[1]),
-      target: toLngLat(arrow.target[0], arrow.target[1]),
+      source: toLngLat(projection, arrow.source[0], arrow.source[1]),
+      target: toLngLat(projection, arrow.target[0], arrow.target[1]),
     })),
   );
 
@@ -569,10 +573,10 @@ export function buildIncidentLayers(
         id: "crash-chevrons",
         data: crashMarkers.map((marker) => ({
           polygon: [
-            toLngLat(marker.x - 2.5, marker.y - 2.5),
-            toLngLat(marker.x + 2.5, marker.y + 2.5),
-            toLngLat(marker.x + 2.5, marker.y + 1.2),
-            toLngLat(marker.x - 1.2, marker.y - 2.5),
+            toLngLat(projection, marker.x - 2.5, marker.y - 2.5),
+            toLngLat(projection, marker.x + 2.5, marker.y + 2.5),
+            toLngLat(projection, marker.x + 2.5, marker.y + 1.2),
+            toLngLat(projection, marker.x - 1.2, marker.y - 2.5),
           ],
         })),
         getPolygon: (entry) => entry.polygon,

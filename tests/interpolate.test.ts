@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileShowcaseCity } from "@/cities/showcase-city";
+import { chicagoModel } from "./chicago-support";
 import { buildPathIndex, type Point } from "@/cities/paths";
 import {
   clamp01,
@@ -7,10 +7,10 @@ import {
   interpolateVehicles,
   positionForRoad,
 } from "@/render/interpolate";
-import { buildDirectedPathIndexes } from "@/render/showcase-geometry";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
 
-const model = compileShowcaseCity(2);
+const model = chicagoModel(2);
 const indexes = buildDirectedPathIndexes(model);
 
 /** A straight synthetic road for exact-math assertions. */

@@ -7,17 +7,21 @@
  * (1° ≈ 111 320 m) so MapLibre's camera, pan and zoom work naturally.
  * Framework-free and deterministic.
  */
-import type { ShowcaseMapModel } from "@/cities/showcase-city";
+import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
-
-export const METRES_PER_DEGREE = 111_320;
 
 export type LngLat = readonly [number, number];
 
-export function toLngLat(point: Point): LngLat {
+/**
+ * Local metres -> WGS84 through the model's own projection (the same numbers
+ * the preprocessing tool used), so the map draws exactly what the sim
+ * simulates. Coordinates are quantized to ~1 cm of longitude/latitude.
+ */
+export function toLngLat(projection: Projection, point: Point): LngLat {
+  const [lon, lat] = metricToLngLat(projection, point[0], point[1]);
   return [
-    Math.round((point[0] / METRES_PER_DEGREE) * 1e7) / 1e7,
-    Math.round((point[1] / METRES_PER_DEGREE) * 1e7) / 1e7,
+    Math.round(lon * 1e7) / 1e7,
+    Math.round(lat * 1e7) / 1e7,
   ];
 }
 
@@ -48,8 +52,8 @@ interface LineGeometry {
 }
 
 /** GeoJSON polygons must be closed rings. */
-function closedRing(points: readonly Point[]): LngLat[] {
-  const ring = points.map(toLngLat);
+function closedRing(projection: Projection, points: readonly Point[]): LngLat[] {
+  const ring = points.map((point) => toLngLat(projection, point));
   const first = ring[0];
   const last = ring[ring.length - 1];
   if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
@@ -59,24 +63,35 @@ function closedRing(points: readonly Point[]): LngLat[] {
 }
 
 function polygonFeature(
+  projection: Projection,
   points: readonly Point[],
   properties: Record<string, string | number | boolean>,
 ): Feature<PolygonGeometry> {
-  return { type: "Feature", properties, geometry: { type: "Polygon", coordinates: [closedRing(points)] } };
+  return { type: "Feature", properties, geometry: { type: "Polygon", coordinates: [closedRing(projection, points)] } };
 }
 
 function pointFeature(
+  projection: Projection,
   point: Point,
   properties: Record<string, string | number | boolean>,
 ): Feature<PointGeometry> {
-  return { type: "Feature", properties, geometry: { type: "Point", coordinates: toLngLat(point) } };
+  return {
+    type: "Feature",
+    properties,
+    geometry: { type: "Point", coordinates: toLngLat(projection, point) },
+  };
 }
 
 function lineFeature(
+  projection: Projection,
   points: readonly Point[],
   properties: Record<string, string | number | boolean>,
 ): Feature<LineGeometry> {
-  return { type: "Feature", properties, geometry: { type: "LineString", coordinates: points.map(toLngLat) } };
+  return {
+    type: "Feature",
+    properties,
+    geometry: { type: "LineString", coordinates: points.map((p) => toLngLat(projection, p)) },
+  };
 }
 
 export interface ShowcaseLabels {
@@ -135,16 +150,18 @@ export interface ShowcaseGeoJson {
   readonly layerOrder: readonly string[];
 }
 
-export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
+export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
+  const projection = model.projection;
   const land: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: [
       polygonFeature(
+        projection,
         [
-          [0, 0],
-          [5600, 0],
-          [5600, 4600],
-          [0, 4600],
+          [model.bounds.minX, model.bounds.minY],
+          [model.bounds.maxX, model.bounds.minY],
+          [model.bounds.maxX, model.bounds.maxY],
+          [model.bounds.minX, model.bounds.maxY],
         ],
         { kind: "land" },
       ),
@@ -153,16 +170,16 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
   const districts: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.districts.map((district) =>
-      polygonFeature(district.polygon, { id: district.id, name: district.name, kind: district.kind }),
+      polygonFeature(projection, district.polygon, { id: district.id, name: district.name, kind: district.kind }),
     ),
   };
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.water.map((polygon, index) => polygonFeature(polygon, { id: `water-${index}` })),
+    features: model.water.map((polygon, index) => polygonFeature(projection, polygon, { id: `water-${index}` })),
   };
   const parks: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.parks.map((polygon, index) => polygonFeature(polygon, { id: `park-${index}` })),
+    features: model.parks.map((polygon, index) => polygonFeature(projection, polygon, { id: `park-${index}` })),
   };
   // Canopy: deterministic groves inside park polygons (a grid with a fixed
   // pattern), so parks read as planted ground rather than flat green squares.
@@ -181,7 +198,7 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
         if (!pointInPolygon([x, y], polygon) || !pointInPolygon([x, y], insetRing(polygon, 9))) {
           continue;
         }
-        canopyFeatures.push(pointFeature([x, y], { r: 6 + (((ix * 3 + iy * 5) % 3) * 2) }));
+        canopyFeatures.push(pointFeature(projection, [x, y], { r: 6 + (((ix * 3 + iy * 5) % 3) * 2) }));
       }
     }
   }
@@ -200,7 +217,7 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
         const [xj, yj] = building.polygon[j];
         area += xj * yi - xi * yj;
       }
-      return polygonFeature(building.polygon, {
+      return polygonFeature(projection, building.polygon, {
         district: building.district,
         prominent: building.prominent,
         area: Math.round(Math.abs(area) / 2),
@@ -218,7 +235,7 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
   for (const piece of model.streets) {
     // One line per PHYSICAL street piece: the two directed roads are the same
     // geometry and must not be drawn twice.
-    const feature = lineFeature(piece.points, {
+    const feature = lineFeature(projection, piece.points, {
       streetId: piece.streetId,
       kind: piece.kind,
       district: piece.district,
@@ -248,12 +265,12 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
     landmarks: {
       type: "FeatureCollection",
       features: model.landmarks.map((landmark) =>
-        polygonFeature(landmark.polygon, { id: landmark.id, name: landmark.name, kind: landmark.kind }),
+        polygonFeature(projection, landmark.polygon, { id: landmark.id, name: landmark.name, kind: landmark.kind }),
       ),
     },
     labels: model.labels.map((label) => ({
       name: label.name,
-      at: toLngLat(label.at),
+      at: toLngLat(projection, label.at),
       rank: label.rank,
       kind: label.kind,
     })),

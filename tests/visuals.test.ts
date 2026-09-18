@@ -24,7 +24,7 @@ import {
   vehicleLengthPx,
   vehicleSizeScale,
 } from "@/render/visuals";
-import { waitHeatBucket, WAIT_HEAT_COLORS } from "@/render/showcase-geometry";
+import { waitHeatBucket, WAIT_HEAT_COLORS } from "@/render/map-geometry";
 
 describe("vehicle sizing", () => {
   it("uses three bands: chip at city zoom, full size mid, larger at street zoom", () => {

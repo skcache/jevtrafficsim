@@ -12,10 +12,10 @@
  */
 import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
-import { showcaseCity } from "@/cities/showcase-city";
+import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
-import { buildDirectedPathIndexes } from "@/render/showcase-geometry";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { useUiStore } from "@/store/ui-store";
 import type { ControllerChoice, WorkerCommand, WorkerEvent } from "@/worker/protocol";
 import { CityMap, type MapHandle } from "./CityMap";
@@ -124,8 +124,11 @@ export function TrafficSimulator() {
       const store = useUiStore.getState();
       switch (data.type) {
         case "READY": {
-          const model = showcaseCity(data.scaleIndex);
-          setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
+          // The frozen Chicago geography loads asynchronously (same committed
+          // bytes the worker compiled); frames only start once it is in place.
+          void loadChicagoCity(data.scaleIndex).then((model) => {
+            setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
+          });
           if (prewarmRef.current) {
             // Landing preview: live traffic behind the title, no chrome.
             prewarmRef.current = false;

@@ -28,19 +28,19 @@ import {
 } from "maplibre-gl";
 import { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Layer } from "@deck.gl/core";
-import { useEffect, useMemo, useRef, type RefObject } from "react";
-import { showcaseCity, type ShowcaseMapModel } from "@/cities/showcase-city";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { loadChicagoCity } from "@/cities/chicago-assets";
+import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
-import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/showcase-geojson";
+import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/map-geojson";
 import {
   buildIncidentLayers,
   buildSignalLayers,
   buildSignalPlans,
   buildVehicleLayers,
-  toLngLat,
   type IncidentExtras,
 } from "@/render/deck-layers";
-import { waitHeatBucket } from "@/render/showcase-geometry";
+import { waitHeatBucket } from "@/render/map-geometry";
 import { createVehicleIcons, type VehicleIconSet } from "@/render/vehicle-icons";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
@@ -83,7 +83,7 @@ interface CityMapProps {
  * polygons, label anchors) rather than authored numbers, so no district or
  * label is ever cropped at either end of the zoom range.
  */
-function presentationBounds(model: ShowcaseMapModel) {
+function presentationBounds(model: MapModel) {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -108,9 +108,12 @@ function presentationBounds(model: ShowcaseMapModel) {
   return { minX, minY, maxX, maxY };
 }
 
-function boundsLngLat(bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
-  const [west, south] = toLngLat(bounds.minX, bounds.minY);
-  const [east, north] = toLngLat(bounds.maxX, bounds.maxY);
+function boundsLngLat(
+  projection: Projection,
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+) {
+  const [west, south] = metricToLngLat(projection, bounds.minX, bounds.minY);
+  const [east, north] = metricToLngLat(projection, bounds.maxX, bounds.maxY);
   return [
     [west, south],
     [east, north],
@@ -427,10 +430,32 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     liveRef.current = live;
   }, [live]);
 
-  const model: ShowcaseMapModel = useMemo(() => showcaseCity(scaleIndex), [scaleIndex]);
-  const geo = useMemo(() => buildShowcaseGeoJson(model), [model]);
-  const signalPlans = useMemo(() => buildSignalPlans(model), [model]);
-  const modelRef = useRef(model);
+  const [model, setModel] = useState<MapModel | null>(null);
+  // The map is created once, as soon as the first geography is available: the
+  // model is loaded asynchronously from the frozen Chicago assets.
+  const ready = model !== null;
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadChicagoCity(scaleIndex)
+      .then((loaded) => {
+        if (!cancelled) {
+          setModel(loaded);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scaleIndex]);
+
+  const geo = useMemo(() => (model ? buildShowcaseGeoJson(model) : null), [model]);
+  const signalPlans = useMemo(() => (model ? buildSignalPlans(model) : null), [model]);
+  const modelRef = useRef<MapModel | null>(model);
   const geoRef = useRef(geo);
   const plansRef = useRef(signalPlans);
   useEffect(() => {
@@ -439,17 +464,22 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     plansRef.current = signalPlans;
   }, [model, geo, signalPlans]);
 
-  // Map lifecycle: created once.
+  // Map lifecycle: created once, as soon as the frozen geography is loaded.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) {
+    const initialGeo = geoRef.current;
+    const initialModel = modelRef.current;
+    if (!container || !initialGeo || !initialModel) {
       return;
     }
+    const projection = initialModel.projection;
+    // Captured non-null for the closures below (TS drops ref narrowing there).
+    const labels = initialGeo.labels;
     configureMapLibreWorker();
     const map = new MapLibreMap({
       container,
-      style: buildStyle(geoRef.current),
-      center: toLngLat(1940, 1550),
+      style: buildStyle(initialGeo),
+      center: metricToLngLat(projection, 1940, 1550),
       zoom: 15.5,
       minZoom: 12,
       maxZoom: 19.5,
@@ -481,14 +511,14 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     function updateLabelVisibility() {
       const zoom = zoomRef.current;
       markers.forEach((marker, index) => {
-        const label = geoRef.current.labels[index];
+        const label = labels[index];
         const visible = labelVisible(label.kind, label.rank, zoom);
         marker.getElement().style.opacity = visible ? "1" : "0";
       });
     }
     function rebuildLabels() {
       markers.forEach((marker) => marker.remove());
-      markers = geoRef.current.labels.map((label) => {
+      markers = labels.map((label) => {
         const element = document.createElement("div");
         element.className =
           label.kind === "landmark" ? "jev-label jev-label-landmark" : "jev-label";
@@ -529,7 +559,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       for (const entry of entries) {
         const existing = plates.get(entry.id);
         if (existing) {
-          existing.setLngLat(toLngLat(entry.x, entry.y));
+          existing.setLngLat(metricToLngLat(projection, entry.x, entry.y));
           continue;
         }
         const element = document.createElement("div");
@@ -539,7 +569,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         element.appendChild(dot);
         element.appendChild(document.createTextNode(entry.label));
         const marker = new Marker({ element, anchor: "bottom" })
-          .setLngLat(toLngLat(entry.x, entry.y))
+          .setLngLat(metricToLngLat(projection, entry.x, entry.y))
           .addTo(map);
         plates.set(entry.id, marker);
       }
@@ -553,7 +583,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
 
     const handle: MapHandle = {
       flyToCentral: (options) => {
-        map.fitBounds(boundsLngLat(modelRef.current.centralCamera), {
+        map.fitBounds(boundsLngLat(projection, initialModel.centralCamera), {
           padding: 40,
           duration: options?.immediate ? 0 : 1500,
           maxZoom: 18.6,
@@ -561,7 +591,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         });
       },
       fitCity: (options) => {
-        map.fitBounds(boundsLngLat(presentationBounds(modelRef.current)), {
+        map.fitBounds(boundsLngLat(projection, presentationBounds(initialModel)), {
           padding: 72,
           duration: options?.immediate ? 0 : 1400,
           maxZoom: 18,
@@ -580,7 +610,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     map.on("load", () => {
       rebuildLabels();
       // Landing shows the whole city; Enter City flies into Central.
-      map.fitBounds(boundsLngLat(presentationBounds(modelRef.current)), {
+      map.fitBounds(boundsLngLat(projection, presentationBounds(initialModel)), {
         padding: 72,
         duration: 0,
         maxZoom: 18,
@@ -607,11 +637,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model, now);
         const layers: Layer[] = [
           ...buildVehicleLayers(
+            projection,
             vehicles,
             iconsRef.current ?? createVehicleIcons() ?? EMPTY_ICONS,
             zoomRef.current,
           ),
-          ...buildSignalLayers(buffer.current, plansRef.current, zoomRef.current),
+          ...buildSignalLayers(projection, buffer.current, plansRef.current ?? new Map(), zoomRef.current),
           ...incidents.layers,
         ];
         overlayRef.current?.setProps({ layers });
@@ -660,16 +691,18 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       mapRef.current = null;
       map.remove();
     };
-  }, [frames, onHandle]);
+    // `ready` is the async-geography gate: the effect must re-run when the
+    // model first arrives, and only then.
+  }, [frames, onHandle, ready]);
 
   // Scale changes: swap the local GeoJSON sources; geography is nested.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) {
+    const current = geoRef.current;
+    if (!map || !current) {
       return;
     }
     const apply = () => {
-      const current = geoRef.current;
       const setData = (id: string, data: unknown) => {
         const source = map.getSource(id) as GeoJSONSource | undefined;
         source?.setData(data as never);
@@ -713,11 +746,32 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   }, [live]);
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute inset-0 h-full w-full"
-      aria-label="Showcase city map"
-    />
+    <>
+      <div
+        ref={containerRef}
+        className="absolute inset-0 h-full w-full"
+        aria-label="Chicago map"
+      />
+      {/*
+        Required attribution: the browser geography is derived from
+        OpenStreetMap. Small, in a map corner, never hidden behind settings.
+      */}
+      <div className="pointer-events-none absolute right-2 top-2 z-10">
+        <a
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noreferrer"
+          className="pointer-events-auto text-[10px] leading-none text-ink-38 on-map-soft transition-colors hover:text-ink-70"
+        >
+          © OpenStreetMap contributors
+        </a>
+      </div>
+      {loadError !== null && (
+        <div className="surface-overlay absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 px-4 py-3">
+          <span className="text-meta text-ink-70">Map data failed to load: {loadError}</span>
+        </div>
+      )}
+    </>
   );
 }
 

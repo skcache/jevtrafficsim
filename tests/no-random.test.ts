@@ -66,11 +66,11 @@ describe("sim/ + controllers/ environment discipline", () => {
     // the component layer only.
     const pureFiles = [
       "cities/paths.ts",
-      "cities/showcase-city.ts",
-      "cities/showcase-city-data.ts",
+      "cities/map-model.ts",
+      "cities/chicago.ts",
       "render/interpolate.ts",
-      "render/showcase-geometry.ts",
-      "render/showcase-geojson.ts",
+      "render/map-geometry.ts",
+      "render/map-geojson.ts",
       "render/visuals.ts",
       "components/ui-model.ts",
     ];

@@ -51,3 +51,11 @@ next-env.d.ts
 
 # MapLibre worker copies are synced from node_modules on dev/build
 public/maplibre/
+
+# Chicago assets are synced from data/chicago on dev/build (the committed
+# source of truth lives in data/chicago/)
+public/chicago/
+
+# python preprocessing environment and raw OSM caches (tools/chicago-map)
+__pycache__/
+*.pyc

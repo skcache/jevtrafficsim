@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileShowcaseCity } from "@/cities/showcase-city";
+import { chicagoModel } from "./chicago-support";
 import { buildPathIndex, pathLength, type Point } from "@/cities/paths";
 import {
   applyLaneOffset,
@@ -9,34 +9,48 @@ import {
   sampleDirectedRoadWithLane,
   waitHeatBucket,
   WAIT_HEAT_COLORS,
-} from "@/render/showcase-geometry";
+} from "@/render/map-geometry";
 
 describe("showcase geometry", () => {
   it("builds a presentation path for every directed road", () => {
     for (const scale of [0, 2, 4]) {
-      const model = compileShowcaseCity(scale);
+      const model = chicagoModel(scale);
       const indexes = buildDirectedPathIndexes(model);
       expect(indexes.length).toBe(model.city.roads.length);
       model.city.roads.forEach((road) => {
         const index = indexes[road.id];
         expect(index, `road ${road.id} path`).not.toBeNull();
         // Road length equals presentation path length (progress maps to distance).
-        expect(index!.total).toBeCloseTo(road.length, 6);
+        // Both are rounded to centimetres by the importer.
+        expect(index!.total).toBeCloseTo(road.length, 1);
       });
     }
   });
 
   it("orients reverse paths backwards along the same physical street", () => {
-    const model = compileShowcaseCity(2);
+    const model = chicagoModel(2);
     const indexes = buildDirectedPathIndexes(model);
+    let checked = 0;
     for (const piece of model.streets) {
+      // One-way Chicago streets have a single directed road; only two-way
+      // streets carry a reverse to compare.
+      if (piece.roadIds.length < 2) {
+        continue;
+      }
       const [forward, reverse] = piece.roadIds;
       const a = indexes[forward]!;
       const b = indexes[reverse]!;
-      expect(a.total).toBeCloseTo(b.total, 6);
-      expect(b.points[0]).toEqual(a.points[a.points.length - 1]);
-      expect(b.points[b.points.length - 1]).toEqual(a.points[0]);
+      // Dual carriageways are separate OSM ways: lengths agree within a few %.
+      expect(Math.abs(a.total - b.total) / Math.max(a.total, b.total)).toBeLessThan(0.05);
+      // Separate OSM ways: the endpoints agree to within a carriageway width,
+      // not exactly.
+      const near = (p: readonly number[], q: readonly number[]) =>
+        Math.hypot(p[0] - q[0], p[1] - q[1]) <= 10;
+      expect(near(b.points[0], a.points[a.points.length - 1])).toBe(true);
+      expect(near(b.points[b.points.length - 1], a.points[0])).toBe(true);
+      checked += 1;
     }
+    expect(checked).toBeGreaterThan(10);
   });
 
   it("samples curved roads by distance with correct headings", () => {
@@ -65,22 +79,24 @@ describe("showcase geometry", () => {
     expect(sampleDirectedRoad([index], 0, -50)!.x).toBeCloseTo(0, 6);
   });
 
-  it("samples showcase streets within world bounds and on the right side", () => {
-    const model = compileShowcaseCity(4);
+  it("samples Chicago streets within the city bounds and on the right side", () => {
+    const model = chicagoModel(4);
     const indexes = buildDirectedPathIndexes(model);
     for (const road of model.city.roads) {
       const sample = sampleDirectedRoad(indexes, road.id, road.length / 2)!;
-      expect(sample.x).toBeGreaterThanOrEqual(0);
-      expect(sample.x).toBeLessThanOrEqual(5600);
-      expect(sample.y).toBeGreaterThanOrEqual(0);
-      expect(sample.y).toBeLessThanOrEqual(4600);
+      expect(sample.x).toBeGreaterThanOrEqual(model.bounds.minX - 1);
+      expect(sample.x).toBeLessThanOrEqual(model.bounds.maxX + 1);
+      expect(sample.y).toBeGreaterThanOrEqual(model.bounds.minY - 1);
+      expect(sample.y).toBeLessThanOrEqual(model.bounds.maxY + 1);
     }
-    // Both directions sample the same centreline point...
-    const piece = model.streets[0];
+    // Both directions sample the same centreline point... (one-way Chicago
+    // streets have a single directed road, so pick a two-way piece).
+    const piece = model.streets.find((candidate) => candidate.roadIds.length > 1)!;
     const [forward, reverse] = piece.roadIds;
     const midForward = sampleDirectedRoad(indexes, forward, model.city.roads[forward].length / 2)!;
     const midReverse = sampleDirectedRoad(indexes, reverse, model.city.roads[reverse].length / 2)!;
-    expect(Math.hypot(midForward.x - midReverse.x, midForward.y - midReverse.y)).toBeCloseTo(0, 4);
+    // Separate OSM ways per direction: centrelines agree to within a carriageway.
+    expect(Math.hypot(midForward.x - midReverse.x, midForward.y - midReverse.y)).toBeLessThan(10);
     // ...but the lane-offset versions sit on opposite sides (right of travel
     // for each direction), so they never overlap.
     const laneForward = sampleDirectedRoadWithLane(indexes, forward, model.city.roads[forward].length / 2)!;
@@ -92,7 +108,7 @@ describe("showcase geometry", () => {
   });
 
   it("applies deterministic right-side lane offsets", () => {
-    const model = compileShowcaseCity(2);
+    const model = chicagoModel(2);
     const indexes = buildDirectedPathIndexes(model);
     const road = model.city.roads[0];
     const plain = sampleDirectedRoad(indexes, road.id, 10)!;
