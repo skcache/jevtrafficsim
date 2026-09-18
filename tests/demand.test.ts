@@ -1,11 +1,61 @@
 import { describe, expect, it } from "vitest";
-import { TRAFFIC_LEVEL_TARGETS } from "@/sim/config";
+import { TRAFFIC_LEVEL_TARGETS, TRAFFIC_LEVEL_TYPE_MIX } from "@/sim/config";
 import { generateCity } from "@/sim/city-generator";
 import { generateDemand } from "@/sim/demand";
+import { createRng } from "@/sim/rng";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 
 const SIZES: CitySize[] = ["small", "small-medium", "medium", "medium-large", "large"];
 const LEVELS: TrafficLevel[] = ["light", "everyday", "rush-hour"];
+
+describe("demand RNG stream isolation", () => {
+  it("keeps calibration, OD and class streams independent", () => {
+    const rootA = createRng(42).fork("traffic");
+    const rootB = createRng(42).fork("traffic");
+    // Both roots derive the same calibration stream...
+    const calibrationA = rootA.fork("calibration");
+    const calibrationB = rootB.fork("calibration");
+    expect(calibrationA.nextUint32()).toBe(calibrationB.nextUint32());
+    // ...then one side is consumed far past normal usage (deep calibration).
+    for (let i = 0; i < 1_000; i += 1) {
+      calibrationA.nextUint32();
+    }
+    // OD and class sequences must not have moved: every subsystem draws from
+    // its own named fork, which derives from (root seed, label) alone.
+    const odA = rootA.fork("od");
+    const odB = rootB.fork("od");
+    const classA = rootA.fork("classes");
+    const classB = rootB.fork("classes");
+    for (let i = 0; i < 64; i += 1) {
+      expect(odA.nextInt(0, 999)).toBe(odB.nextInt(0, 999));
+      expect(classA.nextFloat()).toBe(classB.nextFloat());
+    }
+  });
+
+  it("derives demand draws from the named forks, not one shared stream", () => {
+    const city = generateCity("small", 42);
+    const seed = 99;
+    const schedule = generateDemand({ city, level: "everyday", seed, durationMs: 60_000 });
+    // Reconstruct the exact expected draws from the documented stream layout.
+    const trafficRng = createRng(seed).fork("traffic");
+    const odRng = trafficRng.fork("od");
+    const classRng = trafficRng.fork("classes");
+    const count = city.intersections.length;
+    const mix = TRAFFIC_LEVEL_TYPE_MIX.everyday;
+    for (const spawn of schedule) {
+      const roll = classRng.nextFloat();
+      const expectedType =
+        roll < mix.car ? "car" : roll < mix.car + mix.truck ? "truck" : "bicycle";
+      expect(spawn.type).toBe(expectedType);
+      expect(spawn.origin).toBe(odRng.nextInt(0, count - 1));
+      let destination = odRng.nextInt(0, count - 1);
+      while (destination === spawn.origin) {
+        destination = odRng.nextInt(0, count - 1);
+      }
+      expect(spawn.destination).toBe(destination);
+    }
+  });
+});
 
 describe("deterministic demand", () => {
   it("reproduces identical schedules for identical inputs", () => {

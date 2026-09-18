@@ -60,6 +60,31 @@ describe("spillback admission (decided on projected occupancy)", () => {
     expect(state.occupancy.get(0)).toBeCloseTo(3, 9);
   });
 
+  it("keeps an empty capacity-1 road usable (empty-road exception)", () => {
+    const { city } = makeStreet([{ length: 10, capacity: 1 }]);
+    const state = createTrafficState();
+    // A car footprint (1.0) exceeds the 0.9 headroom, but an EMPTY road with
+    // finite capacity must never be unusable: the first car enters.
+    spawnVehicle(city, state, { id: 0, type: "car", origin: 0, destination: 1, route: [0] });
+    expect(state.vehicles[0].state).toBe("moving");
+    expect(state.occupancy.get(0)).toBe(1);
+    // Once occupied, projected spillback applies normally: the next car waits.
+    spawnVehicle(city, state, { id: 1, type: "car", origin: 0, destination: 1, route: [0] });
+    expect(state.vehicles[1].state).toBe("pending");
+    // Drain, then reopen — the rule is a pure function of state, no hysteresis.
+    for (let tick = 0; tick < 10; tick += 1) {
+      stepTraffic(city, state);
+    }
+    expect(state.vehicles[0].state).toBe("arrived");
+    stepTraffic(city, state); // tick 11: road empty again
+    expect(state.vehicles[1].state).toBe("moving");
+    // Absolute capacity stays hard: an oversized footprint is refused even on
+    // an empty road (truck 2.0 > capacity 1.0).
+    const emptyState = createTrafficState();
+    spawnVehicle(city, emptyState, { id: 0, type: "truck", origin: 0, destination: 1, route: [0] });
+    expect(emptyState.vehicles[0].state).toBe("pending");
+  });
+
   it("reopens admission once occupancy falls back below the headroom", () => {
     // Short road so the whole fleet cycles through within the test window:
     // trucks cover 0.56 units per 100ms tick, bikes 0.64, cars 1.0.

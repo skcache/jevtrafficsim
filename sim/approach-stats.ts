@@ -42,7 +42,7 @@ export interface ApproachStats {
   peakWaitMs: Map<RoadId, number>;
   /** Worst peak ever seen across all approaches (ms). */
   worstPeakWaitMs: number;
-  /** The approach that produced worstPeakWaitMs (first to reach it wins ties). */
+  /** The approach that produced worstPeakWaitMs (lowest road id wins equal positive peak ties). */
   worstPeakRoadId: RoadId | null;
 }
 

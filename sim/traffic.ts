@@ -164,12 +164,21 @@ function removeOccupancy(
  *   PROJECTED occupancy (current + this vehicle's footprint). Once occupancy
  *   has reached SPILLBACK_ADMISSION_RATIO of capacity nothing new is admitted,
  *   and no admitted vehicle may push the road past that threshold — so the
- *   final stretch of every road stays clear for the vehicles already on it.
+ *   final stretch of every road stays clear for the vehicles already on it;
+ * - empty-road exception: the ratio must never make a road with finite
+ *   capacity unusable (a car footprint exceeds the 0.9 headroom of a
+ *   capacity-1 road). An EMPTY road may accept its first vehicle whenever
+ *   absolute capacity permits; once occupied, projected spillback applies
+ *   normally. Pure function of state — no hysteresis, no separate queue.
  */
 function hasCapacity(state: TrafficState, road: Road, footprint: number): boolean {
-  const projected = roadOccupancy(state, road.id) + footprint;
+  const current = roadOccupancy(state, road.id);
+  const projected = current + footprint;
   if (projected > road.capacity + SIMULATION_EPSILON) {
     return false;
+  }
+  if (current <= SIMULATION_EPSILON) {
+    return true;
   }
   return projected <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON;
 }
