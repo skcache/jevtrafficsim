@@ -1,4 +1,4 @@
-import type { City, Intersection, Road } from "@/sim/types";
+import type { City, Intersection, Road, RoadKind } from "@/sim/types";
 import type { TrafficState } from "@/sim/traffic";
 
 export interface StreetSpec {
@@ -91,6 +91,7 @@ export interface CrossArm {
   length: number;
   speedLimit?: number;
   capacity?: number;
+  kind?: RoadKind;
 }
 
 /**
@@ -156,7 +157,7 @@ export function makeCrossroads(options: {
       lanes: 1,
       speedLimit: arm.speedLimit ?? 10,
       capacity: arm.capacity ?? 4,
-      kind: "local",
+      kind: arm.kind ?? "local",
       closed: false,
     });
     const exitRoadId = roads.length;
@@ -168,7 +169,7 @@ export function makeCrossroads(options: {
       lanes: 1,
       speedLimit: arm.speedLimit ?? 10,
       capacity: arm.capacity ?? 4,
-      kind: "local",
+      kind: arm.kind ?? "local",
       closed: false,
     });
     intersections[sourceId].outgoing.push(approachId);

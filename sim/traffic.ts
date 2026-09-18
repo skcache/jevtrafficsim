@@ -8,9 +8,9 @@
  *
  *   1. clock     — state.timeMs += dtMs
  *   2. signals   — every signal advances dtMs (legal mechanics only; axis
- *                  groups served in a ring; single-group holds green;
- *                  hold/advance directives are controller policy, arriving
- *                  with Task 07)
+ *                  groups served in a ring; single-group holds green; the
+ *                  engine passes controller hold/advance directives via
+ *                  options.signalDirectives)
  *   3. trip time — every non-arrived vehicle += dtMs
  *   4. pending   — capacity-blocked spawns retry their first road (id order)
  *   5. queue     — road-end waiters retry transfers in (queuedSinceMs asc,
@@ -54,6 +54,7 @@ import {
   stepSignal,
   validateSignalPlanForCity,
   validateSignalState,
+  type SignalDirective,
   type SignalState,
 } from "./signals";
 import type {
@@ -96,18 +97,23 @@ function ensureSignals(city: City, state: TrafficState): void {
 }
 
 /**
- * Advances every signal by dtMs. No directives are passed yet: multi-group
- * signals advance only through their legal safety bound (maxGreen forces a
- * switch), while single-group signals hold green. Hold/advance directives
- * are controller policy and arrive with Task 07.
+ * Advances every signal by dtMs, applying any controller directives for this
+ * tick. Without a directive a multi-group signal still advances through its
+ * legal safety bound (maxGreen forces a switch); single-group signals hold
+ * green regardless.
  */
-function advanceSignals(city: City, state: TrafficState, dtMs: number): void {
+function advanceSignals(
+  city: City,
+  state: TrafficState,
+  dtMs: number,
+  directives?: ReadonlyMap<IntersectionId, SignalDirective>,
+): void {
   ensureSignals(city, state);
   for (const intersection of city.intersections) {
     if (intersection.control === "signal") {
       const signal = state.signals.get(intersection.id);
       if (signal) {
-        stepSignal(signal, dtMs);
+        stepSignal(signal, dtMs, directives?.get(intersection.id));
       }
     }
   }
@@ -331,10 +337,20 @@ export function spawnVehicle(
   return vehicle;
 }
 
+/**
+ * Optional per-tick inputs from the engine (Task 07). `signalDirectives`
+ * carries the controller's hold/advance decisions for this tick; a missing
+ * entry means "no opinion".
+ */
+export interface TrafficStepOptions {
+  readonly signalDirectives?: ReadonlyMap<IntersectionId, SignalDirective>;
+}
+
 export function stepTraffic(
   city: City,
   state: TrafficState,
   dtMs: number = SIMULATION_TIMESTEP_MS,
+  options: TrafficStepOptions = {},
 ): void {
   if (!Number.isFinite(dtMs) || dtMs <= 0) {
     throw new RangeError(`dtMs must be a finite positive number, received ${dtMs}`);
@@ -342,7 +358,7 @@ export function stepTraffic(
   state.timeMs += dtMs;
   const dtSeconds = dtMs / 1000;
 
-  advanceSignals(city, state, dtMs);
+  advanceSignals(city, state, dtMs, options.signalDirectives);
 
   for (const vehicle of state.vehicles) {
     if (vehicle.state !== "arrived") {

@@ -2,18 +2,24 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SIM_DIR = path.join(process.cwd(), "sim");
+const SOURCE_DIRS = ["sim", "controllers"].map((dir) => path.join(process.cwd(), dir));
 
 function simSources(): Array<{ file: string; content: string }> {
-  return readdirSync(SIM_DIR)
-    .filter((file) => file.endsWith(".ts"))
-    .map((file) => ({
-      file,
-      content: readFileSync(path.join(SIM_DIR, file), "utf8"),
-    }));
+  const sources: Array<{ file: string; content: string }> = [];
+  for (const dir of SOURCE_DIRS) {
+    for (const file of readdirSync(dir)) {
+      if (file.endsWith(".ts")) {
+        sources.push({
+          file: `${path.basename(dir)}/${file}`,
+          content: readFileSync(path.join(dir, file), "utf8"),
+        });
+      }
+    }
+  }
+  return sources;
 }
 
-describe("sim/ environment discipline", () => {
+describe("sim/ + controllers/ environment discipline", () => {
   it("contains no Math.random calls", () => {
     for (const { file, content } of simSources()) {
       expect(content.includes("Math.random"), `${file} must not call Math.random`).toBe(
