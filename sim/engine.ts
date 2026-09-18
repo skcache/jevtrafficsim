@@ -109,6 +109,7 @@ import {
   type IncidentConfig,
   type IncidentRecord,
   type IncidentRuntime,
+  type IncidentScriptEntry,
   type PhysicalSegment,
 } from "./incidents";
 import {
@@ -175,7 +176,8 @@ export interface EngineState {
   readonly city: City;
   /** The caller's original city; kept immutable as incident-recovery source. */
   readonly baseCity: City;
-  readonly controller: TrafficController;
+  /** Active policy; switchable via setEngineController (no engine rebuild). */
+  controller: TrafficController;
   readonly traffic: TrafficState;
   /** Base schedule, explicitly sorted by (timeMs, original order). */
   readonly spawns: readonly ScheduledSpawn[];
@@ -190,8 +192,12 @@ export interface EngineState {
   readonly partition: CityPartition;
   /** Incident runtime state (records + injection counter), Task 10. */
   readonly incidents: IncidentRuntime;
-  /** Raw incident configuration (per-record streams + entry lookup). */
-  readonly incidentConfig: IncidentConfig | null;
+  /**
+   * Incident configuration (per-record streams + entry lookup). Always
+   * present: engines without scripted incidents get an empty config with
+   * seed 0, so runtime injection via `queueIncident` works everywhere.
+   */
+  readonly incidentConfig: IncidentConfig;
   /** Reroute bookkeeping per vehicle id (Task 10). */
   readonly reroutes: Map<number, RerouteBookkeeping>;
   /** Aggregate reroute counters (exposed in snapshots for replay checks). */
@@ -238,6 +244,7 @@ export function createEngine(options: EngineOptions): EngineState {
     origin: spawn.origin,
     destination: spawn.destination,
   }));
+  const incidentConfig: IncidentConfig = options.incidents ?? { seed: 0, script: [] };
   return {
     city: createRuntimeCity(options.city),
     baseCity: options.city,
@@ -250,10 +257,10 @@ export function createEngine(options: EngineOptions): EngineState {
     arrivals: createApproachArrivalTracker(),
     partition: buildCityPartition(options.city),
     incidents: {
-      ...createIncidentRuntime(options.city, options.incidents),
+      ...createIncidentRuntime(options.city, incidentConfig),
       injectionSequence: INJECTION_SEQUENCE_BASE,
     },
-    incidentConfig: options.incidents ?? null,
+    incidentConfig,
     reroutes: new Map(),
     rerouteStats: { attempted: 0, succeeded: 0, failed: 0 },
     nextSpawnIndex: 0,
@@ -371,9 +378,6 @@ function activateIncident(
   record: IncidentRecord,
 ): "active" | "active-closure" | "not-applicable" {
   const config = engine.incidentConfig;
-  if (!config) {
-    return "not-applicable";
-  }
   const entry = config.script[record.id];
   const T = engine.traffic.timeMs;
   const rng = incidentStreamFor(config, record);
@@ -505,6 +509,66 @@ function applyIncidents(engine: EngineState): void {
     }
   }
 }
+/** Switches the active controller in place: no engine rebuild, no state loss. */
+export function setEngineController(engine: EngineState, controller: TrafficController): void {
+  engine.controller = controller;
+}
+
+/**
+ * Runtime incident injection seam (Task 11): schedules ONE interactive entry
+ * into the existing Task-10 incident lifecycle. Validated with the same script
+ * validator, assigned the next deterministic sequence id, spliced into the
+ * record list preserving (scheduledAtMs, sequence) order, and resolved later
+ * through the engine's existing incident stream / activation / expiry /
+ * targeting / rerouting machinery — no incident logic lives outside
+ * sim/incidents.ts + this phase.
+ *
+ * `atMs` defaults to the current simulation time, i.e. "schedule this now":
+ * the entry activates on the next incident phase (start of the next tick).
+ * Returns the new incident id.
+ */
+export function queueIncident(
+  engine: EngineState,
+  entry: Omit<IncidentScriptEntry, "atMs"> & { atMs?: number },
+): number {
+  const atMs = entry.atMs ?? engine.traffic.timeMs;
+  const full: IncidentScriptEntry = { ...entry, atMs };
+  const problems = validateIncidentScript(engine.city, [full]);
+  if (problems.length > 0) {
+    throw new RangeError(`invalid incident entry: ${problems[0]}`);
+  }
+  const runtime = engine.incidents;
+  const id = runtime.nextIncidentId;
+  runtime.nextIncidentId += 1;
+  engine.incidentConfig.script.push(full); // invariant: script[id] === entry
+  const record: IncidentRecord = {
+    id,
+    kind: full.kind,
+    scheduledAtMs: atMs,
+    activatedAtMs: null,
+    expiresAtMs: null,
+    status: "pending",
+    roadIds: [],
+    eventCenterIntersectionId: null,
+    allowDisconnect: full.allowDisconnect ?? false,
+    injectedSpawnCount: 0,
+    affectedVehicleCount: 0,
+    successfulReroutes: 0,
+    failedReroutes: 0,
+  };
+  const index = runtime.records.findIndex(
+    (existing) =>
+      existing.scheduledAtMs > atMs ||
+      (existing.scheduledAtMs === atMs && existing.id > id),
+  );
+  if (index === -1) {
+    runtime.records.push(record);
+  } else {
+    runtime.records.splice(index, 0, record);
+  }
+  return id;
+}
+
 /**
  * Attempts one reroute for a vehicle. Origin semantics:
  * - pending (never entered): reroute from its origin, replacing the whole route;

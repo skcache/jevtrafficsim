@@ -91,7 +91,12 @@ export interface IncidentScriptEntry {
 
 export interface IncidentConfig {
   readonly seed: number;
-  readonly script: readonly IncidentScriptEntry[];
+  /**
+   * Scripted entries, indexed by their original sequence. Mutable so the
+   * engine seam (`queueIncident`) can append interactive incidents at a
+   * deterministic next sequence id; entries are never removed or reordered.
+   */
+  script: IncidentScriptEntry[];
 }
 
 /** Centralized incident constants (no magic numbers anywhere else). */
@@ -140,8 +145,10 @@ export interface IncidentRecord {
 }
 
 export interface IncidentRuntime {
-  /** Records in script order (sorted by atMs, then original sequence). */
-  readonly records: IncidentRecord[];
+  /** Records in (atMs, sequence) order; interactive entries splice in place. */
+  records: IncidentRecord[];
+  /** Next incident id: base script length, then one per interactive entry. */
+  nextIncidentId: number;
   /** Monotonic counter for injected spawn tie-break sequences. */
   injectionSequence: number;
   /** Set while any road-affecting incident is active (per-tick recompute gate). */
@@ -673,7 +680,7 @@ export function createIncidentRuntime(
   config: IncidentConfig | undefined,
 ): IncidentRuntime {
   if (!config) {
-    return { records: [], injectionSequence: 0, conditionsDirty: false };
+    return { records: [], nextIncidentId: 0, injectionSequence: 0, conditionsDirty: false };
   }
   const ordered = config.script
     .map((entry, sequence) => ({ entry, sequence }))
@@ -693,7 +700,12 @@ export function createIncidentRuntime(
     successfulReroutes: 0,
     failedReroutes: 0,
   }));
-  return { records, injectionSequence: 0, conditionsDirty: false };
+  return {
+    records,
+    nextIncidentId: config.script.length,
+    injectionSequence: 0,
+    conditionsDirty: false,
+  };
 }
 
 /** The private stream of one record: `fork("incidents").fork(seq:kind)`. */

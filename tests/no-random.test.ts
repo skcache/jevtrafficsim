@@ -40,8 +40,29 @@ describe("sim/ + controllers/ environment discipline", () => {
     }
   });
 
+  it("contains no worker, canvas, or DOM machinery (Task 11 boundary)", () => {
+    const forbidden = [
+      "requestAnimationFrame",
+      "postMessage",
+      "new Worker",
+      "getContext",
+      "HTMLCanvasElement",
+      "CanvasRenderingContext",
+      "requestIdleCallback",
+    ];
+    for (const { file, content } of simSources()) {
+      for (const token of forbidden) {
+        expect(
+          content.includes(token),
+          `${file} must not use ${token} — rendering/worker code lives outside sim/ + controllers/`,
+        ).toBe(false);
+      }
+    }
+  });
+
   it("imports no framework, browser, or UI modules", () => {
-    const forbidden = /from\s+["'](react|react-dom|zustand|next\/|\@\/app|\@\/components|\@\/render)/;
+    const forbidden =
+      /from\s+["'](react|react-dom|zustand|next\/|\@\/app|\@\/components|\@\/render|\@\/worker|\@\/store)/;
     for (const { file, content } of simSources()) {
       expect(forbidden.test(content), `${file} must stay framework-independent`).toBe(
         false,
