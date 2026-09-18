@@ -117,3 +117,12 @@ export const ROAD_KIND_DEFAULTS: Record<RoadKind, RoadKindDefaults> = {
   highway: { lanes: 3, speedLimit: 25, capacity: 30 },
   bridge: { lanes: 2, speedLimit: 11, capacity: 12 },
 };
+
+/** Occupancy ratios saturate here when costing roads (PRD §11.3). */
+export const MAX_OCCUPANCY_RATIO = 1;
+
+/** Default congestion multiplier for route costing (PRD §9 bounded penalty). */
+export const DEFAULT_CONGESTION_WEIGHT = 1;
+
+/** Hard ceiling for congestion weights so edge costs stay bounded. */
+export const MAX_CONGESTION_WEIGHT = 10;
