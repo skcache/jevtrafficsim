@@ -12,9 +12,13 @@
  * - stop:         the vehicle must already be queued at the road end (it
  *                 cannot roll through from the movement phase) for at least
  *                 STOP_SIGN_MIN_STOP_MS of simulation time, and at most ONE
- *                 vehicle crosses a stop-controlled intersection per tick —
- *                 chosen by the existing queue order (queuedSinceMs, id),
- *                 first-arrival-first-served.
+ *                 vehicle crosses a stop-controlled intersection per tick.
+ *                 The slot goes to the EARLIEST ELIGIBLE FEASIBLE vehicle in
+ *                 queue order (queuedSinceMs, then id): a head vehicle that
+ *                 is still capacity-blocked does not consume its turn, so
+ *                 the earliest vehicle that can actually proceed may cross
+ *                 — this is deliberately not strict FCFS, but the ordering
+ *                 itself stays fully deterministic.
  * - uncontrolled: always permitted here; closed/capacity rules still apply.
  *
  * Grant consumption: `recordControlGrant` is only called after a transfer
@@ -69,7 +73,7 @@ export function evaluateIntersectionControl(
       return "blocked"; // minimum stop duration not yet satisfied
     }
     if ((context.stopGrants.get(target.id) ?? 0) >= 1) {
-      return "blocked"; // one crossing per tick: first-arrival-first-served
+      return "blocked"; // one crossing per tick: earliest eligible feasible vehicle
     }
     return "granted";
   }

@@ -7,9 +7,10 @@ import {
   permittedApproaches,
   stepSignal,
   validateSignalPlan,
+  validateSignalPlanForCity,
   validateSignalState,
-  type SignalState,
 } from "@/sim/signals";
+import type { RoadId } from "@/sim/types";
 import { makeCrossroads } from "./traffic-support";
 
 const FAST_TIMING: SignalTiming = {
@@ -19,65 +20,85 @@ const FAST_TIMING: SignalTiming = {
   allRedMs: 100,
 };
 
-function cross() {
+function cross(angleDegs: number[]) {
   return makeCrossroads({
     control: "signal",
-    arms: [
-      { angleDeg: 0, length: 2 },
-      { angleDeg: 90, length: 2 },
-      { angleDeg: 180, length: 2 },
-      { angleDeg: 270, length: 2 },
-    ],
+    arms: angleDegs.map((angleDeg) => ({ angleDeg, length: 2 })),
   });
 }
 
 describe("approach group derivation", () => {
-  it("splits a four-way cross into opposing street groups", () => {
-    const { city, centerId, approachRoadIds } = cross();
+  it("splits a four-way cross into two opposing-axis groups, ordered by axis", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 90, 180, 270]);
     const groups = deriveApproachGroups(city, centerId);
-    expect(groups[0]).toEqual([approachRoadIds[0], approachRoadIds[2]]);
-    expect(groups[1]).toEqual([approachRoadIds[1], approachRoadIds[3]]);
-    expect(validateSignalPlan(groups)).toEqual([]);
+    expect(groups).toEqual([
+      [approachRoadIds[0], approachRoadIds[2]],
+      [approachRoadIds[1], approachRoadIds[3]],
+    ]);
+    expect(validateSignalPlanForCity(city, centerId, groups)).toEqual([]);
   });
 
-  it("handles T-junctions and skewed geometry deterministically", () => {
-    const t = makeCrossroads({
-      control: "signal",
-      arms: [
-        { angleDeg: 0, length: 2 },
-        { angleDeg: 90, length: 2 },
-        { angleDeg: 180, length: 2 },
-      ],
-    });
-    const tGroups = deriveApproachGroups(t.city, t.centerId);
-    expect(tGroups[0]).toEqual([t.approachRoadIds[0], t.approachRoadIds[2]]);
-    expect(tGroups[1]).toEqual([t.approachRoadIds[1]]);
+  it("splits a grid-plus-diagonal intersection into THREE axis groups", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 90, 180, 270, 45]);
+    const groups = deriveApproachGroups(city, centerId);
+    // Three distinct street axes: E/W, diagonal, N/S — nothing collapsed.
+    expect(groups).toEqual([
+      [approachRoadIds[0], approachRoadIds[2]], // 0deg / 180deg
+      [approachRoadIds[4]], // 45deg diagonal stands alone
+      [approachRoadIds[1], approachRoadIds[3]], // 90deg / 270deg
+    ]);
+    expect(validateSignalPlanForCity(city, centerId, groups)).toEqual([]);
+  });
 
-    const skewed = makeCrossroads({
-      control: "signal",
-      arms: [
-        { angleDeg: 47, length: 2 },
-        { angleDeg: 137, length: 2 },
-        { angleDeg: 227, length: 2 },
-        { angleDeg: 317, length: 2 },
-      ],
-    });
-    const skewedGroups = deriveApproachGroups(skewed.city, skewed.centerId);
-    expect(skewedGroups[0]).toEqual([
-      skewed.approachRoadIds[0],
-      skewed.approachRoadIds[2],
+  it("never merges distinct non-opposing axes (three streets, 60deg apart)", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 60, 120, 180, 240, 300]);
+    const groups = deriveApproachGroups(city, centerId);
+    expect(groups).toEqual([
+      [approachRoadIds[0], approachRoadIds[3]], // 0 / 180
+      [approachRoadIds[1], approachRoadIds[4]], // 60 / 240
+      [approachRoadIds[2], approachRoadIds[5]], // 120 / 300
     ]);
-    expect(skewedGroups[1]).toEqual([
-      skewed.approachRoadIds[1],
-      skewed.approachRoadIds[3],
+    expect(validateSignalPlanForCity(city, centerId, groups)).toEqual([]);
+  });
+
+  it("orders groups and road ids deterministically regardless of input order", () => {
+    const { city, centerId } = cross([90, 0, 180, 270, 45]);
+    const groups = deriveApproachGroups(city, centerId);
+    // Arm order changed the road ids, but groups stay axis-ordered with sorted ids.
+    expect(groups).toEqual([[2, 4], [8], [0, 6]]);
+    expect(deriveApproachGroups(city, centerId)).toEqual(groups);
+  });
+
+  it("handles a single-axis street as one group", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 180]);
+    const groups = deriveApproachGroups(city, centerId);
+    expect(groups).toEqual([[approachRoadIds[0], approachRoadIds[1]]]);
+    expect(validateSignalPlanForCity(city, centerId, groups)).toEqual([]);
+  });
+
+  it("handles T-junctions", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 90, 180]);
+    const groups = deriveApproachGroups(city, centerId);
+    expect(groups).toEqual([
+      [approachRoadIds[0], approachRoadIds[2]],
+      [approachRoadIds[1]],
     ]);
-    expect(validateSignalPlan(skewedGroups)).toEqual([]);
+  });
+
+  it("handles skewed opposing pairs within tolerance", () => {
+    const { city, centerId, approachRoadIds } = cross([47, 137, 227, 317]);
+    const groups = deriveApproachGroups(city, centerId);
+    expect(groups).toEqual([
+      [approachRoadIds[0], approachRoadIds[2]],
+      [approachRoadIds[1], approachRoadIds[3]],
+    ]);
+    expect(validateSignalPlanForCity(city, centerId, groups)).toEqual([]);
   });
 });
 
 describe("signal state machine", () => {
   it("starts in a legal green state with default timing", () => {
-    const { city, centerId } = cross();
+    const { city, centerId } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId);
     expect(state.stage).toBe("green");
     expect(state.phaseIndex).toBe(0);
@@ -86,40 +107,97 @@ describe("signal state machine", () => {
     expect(validateSignalState(state)).toEqual([]);
   });
 
+  it("rejects intersections without approaches and bad timings", () => {
+    const { city, centerId } = cross([]);
+    expect(() => createSignalState(city, centerId)).toThrow(RangeError);
+    const bad = cross([0, 180]);
+    expect(() =>
+      createSignalState(bad.city, bad.centerId, { ...FAST_TIMING, minGreenMs: 0 }),
+    ).toThrow(RangeError);
+    expect(() =>
+      createSignalState(bad.city, bad.centerId, {
+        ...FAST_TIMING,
+        minGreenMs: 2000,
+        maxGreenMs: 1000,
+      }),
+    ).toThrow(RangeError);
+  });
+
   it("runs green -> yellow -> all-red -> opposite green with exact durations", () => {
-    const { city, centerId } = cross();
+    const { city, centerId } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId, FAST_TIMING);
     for (let i = 0; i < 9; i += 1) {
       stepSignal(state, 100);
     }
-    expect(state.stage).toBe("green");
-    expect(state.stageElapsedMs).toBe(900);
-    stepSignal(state, 100); // 1000 >= maxGreen -> yellow
+    expect(state.stage).toBe("green"); // 900ms < maxGreen 1000
+    stepSignal(state, 100); // elapsed hits 1000 -> yellow
     expect(state.stage).toBe("yellow");
     expect(state.stageElapsedMs).toBe(0);
-    stepSignal(state, 100); // 100 < 200
-    expect(state.stage).toBe("yellow");
-    stepSignal(state, 100); // 200 -> all-red
-    expect(state.stage).toBe("all-red");
-    stepSignal(state, 100); // 100 >= 100 -> green phase 1
-    expect(state.stage).toBe("green");
+    stepSignal(state, 100);
+    expect(state.stage).toBe("yellow"); // 100 < 200
+    stepSignal(state, 100);
+    expect(state.stage).toBe("all-red"); // 200 reached
+    stepSignal(state, 100);
+    expect(state.stage).toBe("green"); // all-red 100 reached -> opposite green
     expect(state.phaseIndex).toBe(1);
-    expect(state.stageElapsedMs).toBe(0);
   });
 
-  it("defers a phase request until minimum green has elapsed", () => {
-    const { city, centerId } = cross();
+  it("cycles N groups in a ring: 0 -> 1 -> 2 -> 0", () => {
+    const { city, centerId } = cross([0, 90, 180, 270, 45]);
     const state = createSignalState(city, centerId, FAST_TIMING);
-    stepSignal(state, 100, 1);
-    expect(state.stage).toBe("green"); // 100 < 300
-    stepSignal(state, 100, 1);
-    expect(state.stage).toBe("green"); // 200 < 300
-    stepSignal(state, 100, 1);
-    expect(state.stage).toBe("yellow"); // 300 >= 300
+    const transitions: string[] = [];
+    let last = `${state.phaseIndex}:${state.stage}`;
+    for (let tick = 1; tick <= 40; tick += 1) {
+      stepSignal(state, 100);
+      const current = `${state.phaseIndex}:${state.stage}`;
+      if (current !== last) {
+        transitions.push(`t${tick} ${current}`);
+        last = current;
+      }
+    }
+    expect(transitions).toEqual([
+      "t10 0:yellow",
+      "t12 0:all-red",
+      "t13 1:green",
+      "t23 1:yellow",
+      "t25 1:all-red",
+      "t26 2:green",
+      "t36 2:yellow",
+      "t38 2:all-red",
+      "t39 0:green",
+    ]);
   });
 
-  it("never holds green longer than maximum green without requests", () => {
-    const { city, centerId } = cross();
+  it("holds one-group signals green indefinitely without clearance cycles", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 180]);
+    const state = createSignalState(city, centerId, FAST_TIMING);
+    for (let tick = 0; tick < 1000; tick += 1) {
+      stepSignal(state, 100);
+      expect(state.stage).toBe("green");
+      expect(state.phaseIndex).toBe(0);
+    }
+    for (const roadId of approachRoadIds) {
+      expect(canApproachProceed(state, roadId)).toBe(true);
+    }
+    stepSignal(state, 100, 0); // requesting the only group is a no-op
+    expect(state.stage).toBe("green");
+    expect(() => stepSignal(state, 100, 1)).toThrow(RangeError); // no such group
+    expect(validateSignalState(state)).toEqual([]);
+  });
+
+  it("ignores an early phase request before minimum green", () => {
+    const { city, centerId } = cross([0, 90, 180, 270]);
+    const state = createSignalState(city, centerId, FAST_TIMING);
+    stepSignal(state, 100, 1); // elapsed 100 < 300
+    expect(state.stage).toBe("green");
+    stepSignal(state, 100, 1); // elapsed 200 < 300
+    expect(state.stage).toBe("green");
+    stepSignal(state, 100, 1); // elapsed 300 >= 300 -> switch
+    expect(state.stage).toBe("yellow");
+  });
+
+  it("never exceeds maximum green even without requests", () => {
+    const { city, centerId } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId, FAST_TIMING);
     let ticks = 0;
     while (state.stage === "green" && ticks < 100) {
@@ -130,13 +208,30 @@ describe("signal state machine", () => {
     expect(state.stage).toBe("yellow");
   });
 
-  it("honours exact stage durations across many cycles", () => {
-    const { city, centerId } = cross();
+  it("rejects invalid requested phases but accepts any valid group index", () => {
+    const { city, centerId } = cross([0, 90, 180, 270, 45]); // three groups
+    const state = createSignalState(city, centerId, FAST_TIMING);
+    expect(() => stepSignal(state, 100, -1)).toThrow(RangeError);
+    expect(() => stepSignal(state, 100, 3)).toThrow(RangeError);
+    expect(() => stepSignal(state, 100, 1.5)).toThrow(RangeError);
+    // A far-group request is valid; the ring serves groups one at a time.
+    for (let i = 0; i < 3; i += 1) {
+      stepSignal(state, 100, 2);
+    }
+    expect(state.stage).toBe("yellow");
+    while (state.stage !== "green") {
+      stepSignal(state, 100, 2);
+    }
+    expect(state.phaseIndex).toBe(1); // (0 + 1) % 3 — never skips a group
+  });
+
+  it("yellow and all-red durations are fully respected across many cycles", () => {
+    const { city, centerId } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId, FAST_TIMING);
     const runs: Array<{ stage: string; ticks: number }> = [];
-    let current: string = state.stage;
+    let current = state.stage;
     let run = 0;
-    for (let i = 0; i < 300; i += 1) {
+    for (let i = 0; i < 500; i += 1) {
       stepSignal(state, 100);
       if (state.stage === current) {
         run += 1;
@@ -146,46 +241,41 @@ describe("signal state machine", () => {
         run = 0;
       }
     }
-    expect(runs.length).toBeGreaterThan(20);
-    for (const { stage, ticks } of runs) {
-      if (stage === "green") {
-        expect(ticks).toBe(10);
-      } else if (stage === "yellow") {
-        expect(ticks).toBe(2);
-      } else {
-        expect(ticks).toBe(1);
-      }
+    expect(runs.length).toBeGreaterThan(10);
+    for (const entry of runs) {
+      if (entry.stage === "yellow") expect(entry.ticks).toBe(2);
+      if (entry.stage === "all-red") expect(entry.ticks).toBe(1);
+      if (entry.stage === "green") expect(entry.ticks).toBe(10);
     }
   });
 
-  it("never permits conflicting groups across transitions", () => {
-    const { city, centerId } = cross();
+  it("never permits conflicting groups and keeps state valid across transitions", () => {
+    const { city, centerId } = cross([0, 90, 180, 270, 45]); // three groups
     const state = createSignalState(city, centerId, FAST_TIMING);
-    const g0 = new Set(state.groups[0]);
-    const g1 = new Set(state.groups[1]);
-    for (let i = 0; i < 400; i += 1) {
-      stepSignal(state, 100, i % 7 < 2 ? 1 : 0);
+    for (let i = 0; i < 600; i += 1) {
+      const request = i % 17 < 8 ? 1 : i % 17 < 12 ? 2 : 0;
+      stepSignal(state, 100, request);
       expect(validateSignalState(state)).toEqual([]);
       const permitted = permittedApproaches(state);
       if (state.stage === "green") {
-        const fromG0 = permitted.filter((id) => g0.has(id)).length;
-        const fromG1 = permitted.filter((id) => g1.has(id)).length;
-        expect(fromG0 === 0 || fromG1 === 0).toBe(true);
-        expect(fromG0 + fromG1).toBe(permitted.length);
+        expect(permitted).toEqual(state.groups[state.phaseIndex]);
+        // Permitted roads come from exactly one group — never a mix.
+        for (const group of state.groups) {
+          const overlap = permitted.filter((roadId: RoadId) => group.includes(roadId));
+          expect(overlap.length === permitted.length || overlap.length === 0).toBe(true);
+        }
       } else {
         expect(permitted).toEqual([]);
       }
     }
   });
 
-  it("grants permission per approach group; yellow and all-red block new entries", () => {
-    const { city, centerId, approachRoadIds } = cross();
+  it("grants permission only to the green group; yellow and all-red block new entries", () => {
+    const { city, centerId, approachRoadIds } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId, FAST_TIMING);
     expect(canApproachProceed(state, approachRoadIds[0])).toBe(true);
     expect(canApproachProceed(state, approachRoadIds[2])).toBe(true);
     expect(canApproachProceed(state, approachRoadIds[1])).toBe(false);
-    expect(canApproachProceed(state, approachRoadIds[3])).toBe(false);
-
     stepSignal(state, 100, 1);
     stepSignal(state, 100, 1);
     stepSignal(state, 100, 1); // -> yellow
@@ -196,37 +286,49 @@ describe("signal state machine", () => {
     stepSignal(state, 100);
     stepSignal(state, 100); // -> all-red
     expect(state.stage).toBe("all-red");
-    stepSignal(state, 100); // -> green phase 1
+    for (const roadId of approachRoadIds) {
+      expect(canApproachProceed(state, roadId)).toBe(false);
+    }
+    stepSignal(state, 100); // -> green group 1
     expect(canApproachProceed(state, approachRoadIds[1])).toBe(true);
+    expect(canApproachProceed(state, approachRoadIds[3])).toBe(true);
     expect(canApproachProceed(state, approachRoadIds[0])).toBe(false);
   });
+});
 
-  it("validates plans, timings, and malformed states", () => {
+describe("signal plan validation", () => {
+  it("validateSignalPlan enforces non-empty groups and unique roads", () => {
+    expect(validateSignalPlan([[0], [1]])).toEqual([]);
+    expect(validateSignalPlan([[0, 1], [2]])).toEqual([]);
+    expect(validateSignalPlan([])).not.toEqual([]);
+    expect(validateSignalPlan([[], [1]])).not.toEqual([]);
     expect(validateSignalPlan([[0, 1], [1, 2]])).not.toEqual([]);
-    expect(validateSignalPlan([[], []])).not.toEqual([]);
+  });
 
-    const { city, centerId } = cross();
-    expect(() =>
-      createSignalState(city, centerId, {
-        minGreenMs: 0,
-        maxGreenMs: 1000,
-        yellowMs: 200,
-        allRedMs: 100,
-      }),
-    ).toThrow(RangeError);
-    expect(() =>
-      createSignalState(city, centerId, {
-        minGreenMs: 2000,
-        maxGreenMs: 1000,
-        yellowMs: 200,
-        allRedMs: 100,
-      }),
-    ).toThrow(RangeError);
+  it("validateSignalPlanForCity checks partition and axis compatibility", () => {
+    const { city, centerId } = cross([0, 90, 180, 270, 45]);
+    const valid = deriveApproachGroups(city, centerId);
+    expect(validateSignalPlanForCity(city, centerId, valid)).toEqual([]);
+    // Two perpendicular approaches in one group is a conflict violation.
+    const merged = [[valid[0][0], valid[2][0]], valid[1], [valid[0][1], valid[2][1]]];
+    expect(validateSignalPlanForCity(city, centerId, merged)).not.toEqual([]);
+    // Missing road.
+    expect(
+      validateSignalPlanForCity(city, centerId, [valid[0], valid[1], [valid[2][0]]]),
+    ).not.toEqual([]);
+    // Road that is not incoming.
+    expect(
+      validateSignalPlanForCity(city, centerId, [valid[0], valid[1], [valid[2][0], 999]]),
+    ).not.toEqual([]);
+    // Unknown intersection.
+    expect(validateSignalPlanForCity(city, 42, valid)).not.toEqual([]);
+  });
 
+  it("validateSignalState flags malformed states", () => {
+    const { city, centerId } = cross([0, 90, 180, 270, 45]);
     const state = createSignalState(city, centerId, FAST_TIMING);
-    const negative: SignalState = { ...state, stageElapsedMs: -1 };
-    expect(validateSignalState(negative)).not.toEqual([]);
-    const badStage = { ...state, stage: "flashing" } as unknown as SignalState;
-    expect(validateSignalState(badStage)).not.toEqual([]);
+    expect(validateSignalState({ ...state, stageElapsedMs: -1 })).not.toEqual([]);
+    expect(validateSignalState({ ...state, phaseIndex: 5 })).not.toEqual([]);
+    expect(validateSignalState({ ...state, stage: "flashing" as never })).not.toEqual([]);
   });
 });

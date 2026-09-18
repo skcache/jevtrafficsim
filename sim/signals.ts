@@ -3,35 +3,54 @@
  *
  * ## Model
  *
- * Each signalized intersection splits its incoming directed roads into TWO
- * approach groups; the signal alternates:
+ * Each signalized intersection splits its incoming directed roads into
+ * ONE OR MORE approach groups — one group per compatible street axis. The
+ * signal serves groups in a deterministic ring:
  *
- *   GREEN(A) -> YELLOW(A) -> ALL-RED -> GREEN(B) -> YELLOW(B) -> ALL-RED -> ...
+ *   GREEN(i) -> YELLOW(i) -> ALL-RED -> GREEN((i + 1) % N) -> ...
  *
  * Phase changes are always executed here, deterministically, and a stage can
- * only be left in this order — conflicting groups can never be green together
- * (only one group is ever green, and everything else is a clearance stage).
+ * only be left in this order — clearance is never skipped or aborted, and
+ * only one group is ever green, so conflicting groups can never be green
+ * together.
  *
  * ## Group derivation (irregular geometry, PRD §11.1)
  *
  * Each incoming road's travel bearing is reduced to its street axis
- * (bearing mod pi). The lowest axis becomes the reference; approaches within
- * 45 degrees of it form group 0, the rest form group 1. Opposite approaches of
- * one street share an axis, so they land in the same group and enjoy green
- * together; near-perpendicular streets split. Boundaries resolve to group 1
- * (strict <), keeping the rule fully deterministic. This is a deliberate
- * two-phase approximation for the aggregate model — protected turns,
- * per-lane movements and geometric turn-conflict matrices are out of scope.
+ * (bearing mod pi). Approaches whose axes lie within SIGNAL_AXIS_TOLERANCE_RAD
+ * (45 degrees) of EVERY current member cluster into one group; anything else
+ * starts a new group. Opposite approaches of one street share an axis, so
+ * they land in the same group and enjoy green together; genuinely distinct
+ * axes (grid + diagonal corridors, multi-street junctions) each get their
+ * own phase — two non-opposing axes are never merged just because both are
+ * far from some reference. Clustering is a deterministic first-fit over
+ * approaches sorted by (axis, roadId); groups come out ordered by their
+ * lowest member axis, with road ids sorted ascending inside each group.
+ * An intersection with no incoming roads throws on signal creation.
+ *
+ * ## V1 assumptions (explicit)
+ *
+ * - Opposing approaches on the same street axis are compatible and share a
+ *   green phase.
+ * - Different street axes are separate phases.
+ * - Turn-level conflict geometry is abstracted away: protected turns,
+ *   per-lane movements and pedestrian phases are out of scope for the
+ *   aggregate model.
  *
  * ## Timing semantics (all advanced by explicit dtMs — no hidden timers)
  *
  * - minGreenMs: a request to switch is ignored until green has run this long.
- * - maxGreenMs: green force-switches to yellow once reached — a movement can
- *   never own the intersection forever (PRD §11.1 hard rule).
+ * - maxGreenMs: with two or more groups, green force-switches to yellow once
+ *   reached — a movement can never own the intersection forever (PRD §11.1
+ *   hard rule).
  * - yellowMs / allRedMs: clearance stages are always entered and their exact
  *   configured durations are fully respected before the next green.
+ * - Single-group signals hold green indefinitely: there is no competing
+ *   movement to serve, so max green does not force artificial clearance
+ *   cycles.
  * - Requests are per-call hints, never latched; transition targets always
- *   alternate (a clearance stage is never aborted).
+ *   advance one step around the ring (a clearance stage is never aborted,
+ *   and no green group is ever skipped).
  *
  * ## Yellow policy (documented, PRD-safe)
  *
@@ -42,59 +61,95 @@
  * ## Policy boundary
  *
  * This module never decides WHICH phase traffic deserves — callers (Task 07
- * controllers) may pass a requested phase and own the policy, while every
- * legality constraint above remains enforced here.
+ * controllers) may request any valid group index and own the policy, while
+ * every legality constraint above remains enforced here. Invalid group
+ * indices are rejected.
  */
 import { DEFAULT_SIGNAL_TIMING, type SignalTiming } from "./config";
 import type { City, IntersectionId, RoadId } from "./types";
 
 export type SignalStage = "green" | "yellow" | "all-red";
-export type ApproachGroupIndex = 0 | 1;
+
+/**
+ * Maximum circular distance (radians) between two street axes for approaches
+ * to share one phase group. 45 degrees: perpendicular streets always split,
+ * and strongly jittered opposing approaches still pair up.
+ */
+export const SIGNAL_AXIS_TOLERANCE_RAD = Math.PI / 4;
 
 export interface SignalState {
   intersectionId: IntersectionId;
-  /** Incoming directed roads split into two legal movement groups. */
-  groups: [RoadId[], RoadId[]];
+  /**
+   * Incoming directed roads split into one or more non-empty phase groups,
+   * one per compatible street axis; ordered by lowest member axis.
+   */
+  groups: RoadId[][];
   /** The group currently green, or finishing its yellow/all-red clearance. */
-  phaseIndex: ApproachGroupIndex;
+  phaseIndex: number;
   stage: SignalStage;
   stageElapsedMs: number;
   timing: SignalTiming;
 }
 
-/** Splits incoming directed roads of an intersection into two approach groups. */
+/** Travel bearing of a directed road, normalized to [0, 2pi). */
+function roadBearing(city: City, roadId: RoadId): number {
+  const road = city.roads[roadId];
+  const from = city.intersections[road.from];
+  const to = city.intersections[road.to];
+  let bearing = Math.atan2(to.y - from.y, to.x - from.x);
+  if (bearing < 0) {
+    bearing += Math.PI * 2;
+  }
+  return bearing;
+}
+
+/** Street axis: a bearing reduced to [0, pi), so opposite directions match. */
+function roadAxis(city: City, roadId: RoadId): number {
+  return roadBearing(city, roadId) % Math.PI;
+}
+
+/** Circular distance between two street axes (the axis circle has length pi). */
+function circularAxisDistance(a: number, b: number): number {
+  const distance = Math.abs(a - b);
+  return distance > Math.PI / 2 ? Math.PI - distance : distance;
+}
+
+/**
+ * Splits the incoming roads of an intersection into compatible-axis groups.
+ * Deterministic: groups ordered by lowest member axis; road ids sorted
+ * ascending inside each group. Never returns empty groups.
+ */
 export function deriveApproachGroups(
   city: City,
   intersectionId: IntersectionId,
-): [RoadId[], RoadId[]] {
+): RoadId[][] {
   const intersection = city.intersections[intersectionId];
   if (!intersection) {
     throw new RangeError(`unknown intersection id ${intersectionId}`);
   }
-  const axes: Array<{ roadId: RoadId; axis: number }> = [];
-  for (const roadId of intersection.incoming) {
-    const road = city.roads[roadId];
-    const from = city.intersections[road.from];
-    const to = city.intersections[road.to];
-    let bearing = Math.atan2(to.y - from.y, to.x - from.x);
-    if (bearing < 0) {
-      bearing += Math.PI * 2;
+  const entries = intersection.incoming
+    .map((roadId) => ({ roadId, axis: roadAxis(city, roadId) }))
+    .sort((a, b) => a.axis - b.axis || a.roadId - b.roadId);
+  const clusters: Array<{ axes: number[]; roadIds: RoadId[] }> = [];
+  for (const entry of entries) {
+    let target: (typeof clusters)[number] | undefined;
+    for (const cluster of clusters) {
+      const compatible = cluster.axes.every(
+        (axis) => circularAxisDistance(axis, entry.axis) < SIGNAL_AXIS_TOLERANCE_RAD,
+      );
+      if (compatible) {
+        target = cluster;
+        break;
+      }
     }
-    axes.push({ roadId, axis: bearing % Math.PI });
-  }
-  const groups: [RoadId[], RoadId[]] = [[], []];
-  if (axes.length === 0) {
-    return groups;
-  }
-  const reference = Math.min(...axes.map((entry) => entry.axis));
-  for (const { roadId, axis } of axes) {
-    let distance = Math.abs(axis - reference);
-    if (distance > Math.PI / 2) {
-      distance = Math.PI - distance; // circular distance on the axis half-circle
+    if (!target) {
+      target = { axes: [], roadIds: [] };
+      clusters.push(target);
     }
-    groups[distance < Math.PI / 4 ? 0 : 1].push(roadId);
+    target.axes.push(entry.axis);
+    target.roadIds.push(entry.roadId);
   }
-  return groups;
+  return clusters.map((cluster) => [...cluster.roadIds].sort((a, b) => a - b));
 }
 
 function validateSignalTiming(timing: SignalTiming): void {
@@ -114,9 +169,15 @@ export function createSignalState(
   timing: SignalTiming = DEFAULT_SIGNAL_TIMING,
 ): SignalState {
   validateSignalTiming(timing);
+  const groups = deriveApproachGroups(city, intersectionId);
+  if (groups.length === 0) {
+    throw new RangeError(
+      `intersection ${intersectionId} has no incoming approaches; cannot create a signal`,
+    );
+  }
   return {
     intersectionId,
-    groups: deriveApproachGroups(city, intersectionId),
+    groups,
     phaseIndex: 0,
     stage: "green",
     stageElapsedMs: 0,
@@ -125,20 +186,35 @@ export function createSignalState(
 }
 
 /**
- * Advances one signal by dtMs. `requestedPhase` (if given) asks for the other
- * group's green; the switch is deferred until minimum green has elapsed and
- * is ignored during clearance stages. Without a request, green still cannot
- * exceed maximum green.
+ * Advances one signal by dtMs. `requestedPhase` (if given) asks to move off
+ * the current group; the switch is deferred until minimum green has elapsed
+ * and is ignored during clearance stages. The actual next green is always the
+ * ring successor, (phaseIndex + 1) % groupCount. Without a request, a
+ * multi-group signal still cannot exceed maximum green; a single-group signal
+ * holds green forever.
  */
 export function stepSignal(
   state: SignalState,
   dtMs: number,
-  requestedPhase?: ApproachGroupIndex,
+  requestedPhase?: number,
 ): void {
   if (!Number.isFinite(dtMs) || dtMs <= 0) {
     throw new RangeError(`dtMs must be a finite positive number, received ${dtMs}`);
   }
+  if (
+    requestedPhase !== undefined &&
+    (!Number.isInteger(requestedPhase) ||
+      requestedPhase < 0 ||
+      requestedPhase >= state.groups.length)
+  ) {
+    throw new RangeError(
+      `requestedPhase ${requestedPhase} is not a valid group index (0..${state.groups.length - 1})`,
+    );
+  }
   state.stageElapsedMs += dtMs;
+  if (state.groups.length === 1) {
+    return; // single-axis intersection: green holds, no clearance cycles
+  }
   const { timing } = state;
   if (state.stage === "green") {
     const wantsSwitch =
@@ -159,7 +235,7 @@ export function stepSignal(
   }
   if (state.stageElapsedMs >= timing.allRedMs) {
     state.stage = "green";
-    state.phaseIndex = state.phaseIndex === 0 ? 1 : 0;
+    state.phaseIndex = (state.phaseIndex + 1) % state.groups.length;
     state.stageElapsedMs = 0;
   }
 }
@@ -172,27 +248,88 @@ export function canApproachProceed(
   if (state.stage !== "green") {
     return false; // yellow and all-red block new entries (documented policy)
   }
-  return state.groups[state.phaseIndex].includes(incomingRoadId);
+  const group = state.groups[state.phaseIndex];
+  return group !== undefined && group.includes(incomingRoadId);
 }
 
 /** Approach roads currently allowed to enter (green stage only). */
 export function permittedApproaches(state: SignalState): RoadId[] {
-  return state.stage === "green" ? [...state.groups[state.phaseIndex]] : [];
+  if (state.stage !== "green") {
+    return [];
+  }
+  return [...(state.groups[state.phaseIndex] ?? [])];
 }
 
-/** Structural checks on a two-group plan; empty list means valid. */
-export function validateSignalPlan(groups: [RoadId[], RoadId[]]): string[] {
+/**
+ * Structural checks on a phase plan; empty list means valid.
+ * Requires at least one group, every group non-empty, and unique road ids.
+ */
+export function validateSignalPlan(groups: RoadId[][]): string[] {
   const problems: string[] = [];
-  if (groups[0].length + groups[1].length === 0) {
-    problems.push("plan has no approaches");
+  if (groups.length === 0) {
+    problems.push("plan has no groups");
   }
+  groups.forEach((group, index) => {
+    if (group.length === 0) {
+      problems.push(`group ${index} is empty`);
+    }
+  });
   const seen = new Set<RoadId>();
   for (const group of groups) {
     for (const roadId of group) {
       if (seen.has(roadId)) {
-        problems.push(`road ${roadId} appears in both groups`);
+        problems.push(`road ${roadId} appears more than once`);
       }
       seen.add(roadId);
+    }
+  }
+  return problems;
+}
+
+/**
+ * City-aware plan validation: the plan must partition exactly the incoming
+ * roads of the intersection, and every grouped pair of approaches must lie
+ * on compatible street axes within SIGNAL_AXIS_TOLERANCE_RAD. Empty list
+ * means valid.
+ */
+export function validateSignalPlanForCity(
+  city: City,
+  intersectionId: IntersectionId,
+  groups: RoadId[][],
+): string[] {
+  const intersection = city.intersections[intersectionId];
+  if (!intersection) {
+    return [`unknown intersection id ${intersectionId}`];
+  }
+  const problems = validateSignalPlan(groups);
+  const incoming = new Set(intersection.incoming);
+  const planned = new Set<RoadId>();
+  groups.forEach((group, index) => {
+    const axes: Array<{ roadId: RoadId; axis: number }> = [];
+    for (const roadId of group) {
+      if (!incoming.has(roadId)) {
+        problems.push(`road ${roadId} is not an incoming road of intersection ${intersectionId}`);
+        continue;
+      }
+      if (planned.has(roadId)) {
+        continue; // duplication already reported by validateSignalPlan
+      }
+      planned.add(roadId);
+      axes.push({ roadId, axis: roadAxis(city, roadId) });
+    }
+    for (let i = 0; i < axes.length; i += 1) {
+      for (let j = i + 1; j < axes.length; j += 1) {
+        if (circularAxisDistance(axes[i].axis, axes[j].axis) >= SIGNAL_AXIS_TOLERANCE_RAD) {
+          problems.push(
+            `group ${index} merges incompatible axes: roads ${axes[i].roadId} and ${axes[j].roadId}`,
+          );
+        }
+      }
+    }
+  });
+  for (const roadId of intersection.incoming) {
+    if (!planned.has(roadId)) {
+      problems.push(`incoming road ${roadId} is missing from the plan`);
     }
   }
   return problems;
@@ -204,7 +341,11 @@ export function validateSignalState(state: SignalState): string[] {
   if (state.stage !== "green" && state.stage !== "yellow" && state.stage !== "all-red") {
     problems.push(`invalid stage ${state.stage as string}`);
   }
-  if (state.phaseIndex !== 0 && state.phaseIndex !== 1) {
+  if (
+    !Number.isInteger(state.phaseIndex) ||
+    state.phaseIndex < 0 ||
+    state.phaseIndex >= state.groups.length
+  ) {
     problems.push(`invalid phase index ${state.phaseIndex as number}`);
   }
   if (!Number.isFinite(state.stageElapsedMs) || state.stageElapsedMs < 0) {

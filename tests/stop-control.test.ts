@@ -127,6 +127,43 @@ describe("stop-controlled intersections", () => {
     expect(state.vehicles[1].waitTimeMs).toBe(15 * DT);
   });
 
+  it("lets the earliest eligible FEASIBLE vehicle cross while a blocked head waits", () => {
+    // Policy under test (see sim/intersection.ts): the stop-sign slot goes to
+    // the earliest eligible feasible vehicle in queue order — a capacity-blocked
+    // head does not consume its turn, so a later feasible vehicle may proceed.
+    const fixture = makeCrossroads({
+      control: "stop",
+      arms: [
+        { angleDeg: 90, length: 2 },
+        { angleDeg: 270, length: 2 },
+      ],
+    });
+    const approachA = fixture.city.roads[0];
+    const exitA = { ...fixture.city.roads[1], capacity: 1, length: 20 };
+    const approachB = fixture.city.roads[2];
+    const exitB = fixture.city.roads[3];
+    const city = { ...fixture.city, roads: [approachA, exitA, approachB, exitB] };
+    const state = createTrafficState();
+    spawn(city, state, 0, [exitA.id], 0, 2); // C parks on A's exit road
+    spawn(city, state, 1, [approachA.id, exitA.id], 1, 2); // earliest arrival, blocked downstream
+    spawn(city, state, 2, [approachB.id, exitB.id], 3, 4); // later arrival, clear downstream
+
+    stepChecked(city, state, 2);
+    expect(state.vehicles[1].state).toBe("queued");
+    expect(state.vehicles[2].state).toBe("queued");
+
+    stepChecked(city, state, STOP_TICKS); // through tick 17 (both past their stop minimum)
+    expect(state.vehicles[1].state).toBe("queued"); // feasible check fails for A
+    expect(state.vehicles[2].state).toBe("moving"); // feasible B crosses at tick 17
+    expect(state.vehicles[2].waitTimeMs).toBe(15 * DT);
+
+    stepChecked(city, state, 3); // ticks 18-20: C clears its exit road on tick 20
+    expect(state.vehicles[1].state).toBe("queued");
+    stepChecked(city, state, 1); // tick 21: A finally feasible
+    expect(state.vehicles[1].state).toBe("moving");
+    expect(state.vehicles[1].waitTimeMs).toBe(19 * DT);
+  });
+
   it("keeps a blocked head vehicle waiting and never lets the follower through", () => {
     const fixture = makeCrossroads({
       control: "stop",

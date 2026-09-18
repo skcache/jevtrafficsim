@@ -7,7 +7,8 @@
  * ## Tick order (documented policy)
  *
  *   1. clock     — state.timeMs += dtMs
- *   2. signals   — every signal advances dtMs (legal mechanics only; phase
+ *   2. signals   — every signal advances dtMs (legal mechanics only; axis
+ *                  groups served in a ring; single-group holds green; phase
  *                  requests are controller policy, arriving with Task 07)
  *   3. trip time — every non-arrived vehicle += dtMs
  *   4. pending   — capacity-blocked spawns retry their first road (id order)
@@ -50,6 +51,7 @@ import {
 import {
   createSignalState,
   stepSignal,
+  validateSignalPlanForCity,
   validateSignalState,
   type SignalState,
 } from "./signals";
@@ -93,9 +95,10 @@ function ensureSignals(city: City, state: TrafficState): void {
 }
 
 /**
- * Advances every signal by dtMs. Task 06 passes no phase requests: signals
- * cycle only through their legal safety bound (maxGreen forces a switch).
- * Requesting a preferred phase is controller policy and arrives with Task 07.
+ * Advances every signal by dtMs. No phase requests are passed yet: multi-group
+ * signals advance only through their legal safety bound (maxGreen forces a
+ * switch), while single-group signals hold green. Requesting a preferred
+ * phase is controller policy and arrives with Task 07.
  */
 function advanceSignals(city: City, state: TrafficState, dtMs: number): void {
   ensureSignals(city, state);
@@ -276,6 +279,15 @@ function advance(
   }
 }
 
+/**
+ * Registers a vehicle at the caller's current simulation time
+ * (spawnTimeMs = state.timeMs) and enters it onto the first road — or parks
+ * it as `pending` when that road is closed or full, retrying each tick in id
+ * order. Spawning is deliberately not gated by intersection control: origins
+ * are abstract (Task 05 contract). The caller is responsible for invoking
+ * this at the intended spawn time; demand scheduling is caller policy
+ * (Task 07), not simulation machinery — no hidden timers exist here.
+ */
 export function spawnVehicle(
   city: City,
   state: TrafficState,
@@ -450,6 +462,9 @@ export function checkTrafficInvariants(
 
   for (const [intersectionId, signal] of state.signals) {
     for (const problem of validateSignalState(signal)) {
+      problems.push(`signal[${intersectionId}]: ${problem}`);
+    }
+    for (const problem of validateSignalPlanForCity(city, intersectionId, signal.groups)) {
       problems.push(`signal[${intersectionId}]: ${problem}`);
     }
     if (city.intersections[intersectionId]?.control !== "signal") {
