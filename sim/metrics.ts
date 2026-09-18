@@ -23,9 +23,12 @@
  * - averageRoadOccupancy = per-tick total occupancy units divided by the
  *   number of directed roads, averaged over ticks; maxRoadOccupancy is the
  *   peak units seen on any single directed road.
+ * - maxApproachWaitMs = peak over the run of the maximum queue wait on any
+ *   single approach (directed incoming road) — the approach-level starvation
+ *   watch of PRD §11.4, and the policy input later controllers consume.
  * - signalPhaseChanges counts stage/group transitions across all signals.
  */
-import type { City, IntersectionId, VehicleId } from "./types";
+import type { City, IntersectionId, RoadId, VehicleId } from "./types";
 import type { TrafficState } from "./traffic";
 
 export interface ArrivalRecord {
@@ -47,6 +50,8 @@ export interface SimulationMetrics {
   readonly averageRoadOccupancy: number;
   readonly maxRoadOccupancy: number;
   readonly averageRouteDistance: number;
+  /** Peak over the run of the max queue wait on any single approach (ms). */
+  readonly maxApproachWaitMs: number;
   readonly signalPhaseChanges: number;
   readonly failedSpawns: number;
 }
@@ -61,6 +66,7 @@ export interface MetricsAccumulator {
   blockedVehicleMs: number;
   occupancyPerTickSum: number;
   maxRoadOccupancy: number;
+  maxApproachWaitMs: number;
   roadCount: number;
   signalPhaseChanges: number;
   previousSignals: Map<IntersectionId, string>;
@@ -107,6 +113,7 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     blockedVehicleMs: 0,
     occupancyPerTickSum: 0,
     maxRoadOccupancy: 0,
+    maxApproachWaitMs: 0,
     roadCount: 0,
     signalPhaseChanges: 0,
     previousSignals: new Map(),
@@ -141,6 +148,7 @@ export function recordTick(
   accumulator.roadCount = city.roads.length;
   let active = 0;
   let blocked = 0;
+  const approachWaits = new Map<RoadId, number>();
   for (const vehicle of state.vehicles) {
     if (vehicle.state === "arrived") {
       continue;
@@ -149,9 +157,20 @@ export function recordTick(
     if (vehicle.state === "queued" || vehicle.state === "pending") {
       blocked += 1;
     }
+    if (vehicle.state === "queued" && vehicle.roadId !== null) {
+      const previous = approachWaits.get(vehicle.roadId) ?? 0;
+      if (vehicle.waitTimeMs > previous) {
+        approachWaits.set(vehicle.roadId, vehicle.waitTimeMs);
+      }
+    }
   }
   accumulator.activeVehicleMs += active * dtMs;
   accumulator.blockedVehicleMs += blocked * dtMs;
+  for (const wait of approachWaits.values()) {
+    if (wait > accumulator.maxApproachWaitMs) {
+      accumulator.maxApproachWaitMs = wait;
+    }
+  }
   let units = 0;
   for (const value of state.occupancy.values()) {
     units += value;
@@ -203,6 +222,7 @@ export function computeMetrics(
         : 0,
     maxRoadOccupancy: accumulator.maxRoadOccupancy,
     averageRouteDistance: mean(distances),
+    maxApproachWaitMs: accumulator.maxApproachWaitMs,
     signalPhaseChanges: accumulator.signalPhaseChanges,
     failedSpawns: accumulator.failedSpawns,
   };

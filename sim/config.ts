@@ -5,7 +5,7 @@
  * live here. Tunables arrive with the tasks that use them — no speculative
  * configuration surface.
  */
-import type { CitySize, RoadKind, VehicleType } from "./types";
+import type { CitySize, RoadKind, TrafficLevel, VehicleType } from "./types";
 
 /** Fixed world-update timestep in milliseconds (PRD §10: 10 Hz). */
 export const SIMULATION_TIMESTEP_MS = 100;
@@ -160,3 +160,66 @@ export const DEFAULT_SIGNAL_TIMING: SignalTiming = {
 
 /** Minimum time a vehicle must remain stopped at a stop sign (PRD §11.2). */
 export const STOP_SIGN_MIN_STOP_MS = 1500;
+
+/**
+ * Spillback admission ratio (PRD §11.3): once a road's occupancy reaches this
+ * fraction of its capacity, it stops admitting NEW vehicles — upstream flow is
+ * restricted before the road is absolutely full, keeping the final stretch of
+ * every road clear for the vehicles already on it. Absolute capacity
+ * (`occupancy + footprint <= capacity`) always remains the hard ceiling.
+ */
+export const SPILLBACK_ADMISSION_RATIO = 0.9;
+
+/** Target active-vehicle range per city size and traffic level (PRD §5). */
+export interface ActiveVehicleTargets {
+  readonly min: number;
+  readonly max: number;
+}
+
+export const TRAFFIC_LEVEL_TARGETS: Record<
+  CitySize,
+  Record<TrafficLevel, ActiveVehicleTargets>
+> = {
+  small: {
+    light: { min: 20, max: 40 },
+    everyday: { min: 40, max: 70 },
+    "rush-hour": { min: 70, max: 110 },
+  },
+  "small-medium": {
+    light: { min: 50, max: 90 },
+    everyday: { min: 90, max: 150 },
+    "rush-hour": { min: 150, max: 230 },
+  },
+  medium: {
+    light: { min: 120, max: 180 },
+    everyday: { min: 200, max: 320 },
+    "rush-hour": { min: 320, max: 500 },
+  },
+  "medium-large": {
+    light: { min: 250, max: 400 },
+    everyday: { min: 450, max: 650 },
+    "rush-hour": { min: 650, max: 950 },
+  },
+  large: {
+    light: { min: 500, max: 800 },
+    everyday: { min: 850, max: 1200 },
+    "rush-hour": { min: 1200, max: 2000 },
+  },
+};
+
+/**
+ * Vehicle class mix per traffic level (game-tuned). Commercial traffic (trucks)
+ * is relatively inelastic, so its share rises slightly with demand while
+ * discretionary car traffic dominates at every level.
+ */
+export interface VehicleTypeMix {
+  readonly car: number;
+  readonly truck: number;
+  readonly bicycle: number;
+}
+
+export const TRAFFIC_LEVEL_TYPE_MIX: Record<TrafficLevel, VehicleTypeMix> = {
+  light: { car: 0.85, truck: 0.1, bicycle: 0.05 },
+  everyday: { car: 0.82, truck: 0.12, bicycle: 0.06 },
+  "rush-hour": { car: 0.8, truck: 0.14, bicycle: 0.06 },
+};

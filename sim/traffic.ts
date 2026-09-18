@@ -42,7 +42,11 @@
  * Normal movement — even slowly, even in a truck — never accrues wait time.
  * tripTimeMs accrues every tick for every spawned, non-arrived vehicle.
  */
-import { SIMULATION_EPSILON, SIMULATION_TIMESTEP_MS } from "./config";
+import {
+  SIMULATION_EPSILON,
+  SIMULATION_TIMESTEP_MS,
+  SPILLBACK_ADMISSION_RATIO,
+} from "./config";
 import {
   createIntersectionStepContext,
   evaluateIntersectionControl,
@@ -152,10 +156,20 @@ function removeOccupancy(
   }
 }
 
+/**
+ * Entry check for every admission path (spawns, pending retries, transfers):
+ * - absolute capacity (Task 05): occupancy + footprint must fit, so a vehicle
+ *   is never released into a full edge;
+ * - spillback headroom (Task 08, PRD §11.3): a road already at or above
+ *   SPILLBACK_ADMISSION_RATIO of its capacity stops admitting NEW vehicles,
+ *   restricting upstream flow BEFORE the road is absolutely full.
+ */
 function hasCapacity(state: TrafficState, road: Road, footprint: number): boolean {
-  return (
-    roadOccupancy(state, road.id) + footprint <= road.capacity + SIMULATION_EPSILON
-  );
+  const current = roadOccupancy(state, road.id);
+  if (current + footprint > road.capacity + SIMULATION_EPSILON) {
+    return false;
+  }
+  return current <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON;
 }
 
 function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {

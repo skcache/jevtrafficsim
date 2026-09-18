@@ -45,6 +45,7 @@
  * snapshots for the same tick sequence. No randomness and no wall-clock reads
  * exist anywhere in this loop.
  */
+import { createApproachStats, updateApproachStats, type ApproachStats } from "./approach-stats";
 import { findRoute } from "./astar";
 import { SIMULATION_TIMESTEP_MS, VEHICLE_TYPE_SPECS } from "./config";
 import {
@@ -91,6 +92,8 @@ export interface EngineState {
   /** Stable-sorted copy of the schedule (by timeMs, original order preserved). */
   readonly spawns: readonly ScheduledSpawn[];
   readonly metrics: MetricsAccumulator;
+  /** Per-approach queue + starvation statistics (Task 08 policy input). */
+  readonly approaches: ApproachStats;
   nextSpawnIndex: number;
   ticks: number;
 }
@@ -119,6 +122,7 @@ export function createEngine(options: EngineOptions): EngineState {
     traffic: createTrafficState(),
     spawns: [...options.spawns].sort((a, b) => a.timeMs - b.timeMs),
     metrics: createMetricsAccumulator(),
+    approaches: createApproachStats(),
     nextSpawnIndex: 0,
     ticks: 0,
   };
@@ -180,6 +184,7 @@ export function stepEngine(engine: EngineState): void {
   engine.ticks += 1;
   recordArrivals(engine);
   recordTick(engine.metrics, city, traffic, SIMULATION_TIMESTEP_MS);
+  updateApproachStats(engine.approaches, city, traffic);
 }
 
 /** Steps until simulated time reaches or passes `untilMs`. */
