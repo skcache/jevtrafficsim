@@ -60,14 +60,11 @@ describe("vehicle movement on generated cities", () => {
       expect(checkTrafficInvariants(city, state)).toEqual([]);
       for (const vehicle of state.vehicles) {
         expect(vehicle.state).toBe("arrived");
-        expect(vehicle.waitTimeMs).toBe(0);
         expect(vehicle.tripTimeMs).toBeGreaterThan(0);
       }
       expect(state.occupancy.size).toBe(0);
-
-      const [car, truck, bicycle] = state.vehicles;
-      expect(car.tripTimeMs).toBeLessThan(bicycle.tripTimeMs);
-      expect(bicycle.tripTimeMs).toBeLessThan(truck.tripTimeMs);
+      // Cross-class trip-time ordering is not asserted here: signal waits make
+      // it non-monotonic. Class speed ordering is covered by unit movement tests.
     }
   });
 });

@@ -141,3 +141,22 @@ export const VEHICLE_TYPE_SPECS: Record<VehicleType, VehicleTypeSpec> = {
 
 /** Shared tolerance for floating-point comparisons in the traffic layer. */
 export const SIMULATION_EPSILON = 1e-9;
+
+/** Signal timing configuration for one intersection (Task 06 legal mechanics). */
+export interface SignalTiming {
+  minGreenMs: number;
+  maxGreenMs: number;
+  yellowMs: number;
+  allRedMs: number;
+}
+
+/** Default legal signal timings — simplified for gameplay (PRD §11.1). */
+export const DEFAULT_SIGNAL_TIMING: SignalTiming = {
+  minGreenMs: 5000,
+  maxGreenMs: 30000,
+  yellowMs: 3000,
+  allRedMs: 1000,
+};
+
+/** Minimum time a vehicle must remain stopped at a stop sign (PRD §11.2). */
+export const STOP_SIGN_MIN_STOP_MS = 1500;

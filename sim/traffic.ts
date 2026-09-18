@@ -7,15 +7,18 @@
  * ## Tick order (documented policy)
  *
  *   1. clock     — state.timeMs += dtMs
- *   2. trip time — every non-arrived vehicle += dtMs
- *   3. pending   — capacity-blocked spawns retry their first road (id order)
- *   4. queue     — road-end waiters retry transfers in (queuedSinceMs asc,
+ *   2. signals   — every signal advances dtMs (legal mechanics only; phase
+ *                  requests are controller policy, arriving with Task 07)
+ *   3. trip time — every non-arrived vehicle += dtMs
+ *   4. pending   — capacity-blocked spawns retry their first road (id order)
+ *   5. queue     — road-end waiters retry transfers in (queuedSinceMs asc,
  *                  id asc) order, so the longest-waiting vehicle is served
- *                  first and late arrivals cannot jump the queue
- *   5. movement  — moving vehicles advance; road ends transfer with leftover
+ *                  first and late arrivals cannot jump the queue; transfers
+ *                  require open + capacity + intersection permission
+ *   6. movement  — moving vehicles advance; road ends transfer with leftover
  *                  distance in a route-length-bounded loop; blocked transfers
  *                  park the vehicle at the road end (state queued)
- *   6. wait time — vehicles still pending/queued at tick end += dtMs
+ *   7. wait time — vehicles still pending/queued at tick end += dtMs
  *
  * Queues are served before movement, so capacity freed by this tick's
  * arrivals becomes visible to waiters on the NEXT tick; a vehicle released
@@ -31,11 +34,25 @@
  * ## Waiting rules
  *
  * waitTimeMs accrues only while the vehicle is blocked at tick end: pending
- * (first road unavailable) or queued (road end; next road full or closed).
+ * (first road unavailable) or queued (road end; next road full, closed, or
+ * its intersection control — red signal, unsatisfied stop minimum — not yet
+ * passed).
  * Normal movement — even slowly, even in a truck — never accrues wait time.
  * tripTimeMs accrues every tick for every spawned, non-arrived vehicle.
  */
 import { SIMULATION_EPSILON, SIMULATION_TIMESTEP_MS } from "./config";
+import {
+  createIntersectionStepContext,
+  evaluateIntersectionControl,
+  recordControlGrant,
+  type IntersectionStepContext,
+} from "./intersection";
+import {
+  createSignalState,
+  stepSignal,
+  validateSignalState,
+  type SignalState,
+} from "./signals";
 import type {
   City,
   IntersectionId,
@@ -58,10 +75,38 @@ export interface TrafficState {
   vehicles: Vehicle[];
   /** Footprint units currently occupying each directed road. */
   occupancy: Map<RoadId, number>;
+  /** Signal mechanics per signal-controlled intersection (Task 06). */
+  signals: Map<IntersectionId, SignalState>;
 }
 
 export function createTrafficState(): TrafficState {
-  return { timeMs: 0, vehicles: [], occupancy: new Map() };
+  return { timeMs: 0, vehicles: [], occupancy: new Map(), signals: new Map() };
+}
+
+/** Creates signal states for signal-controlled intersections that lack one. */
+function ensureSignals(city: City, state: TrafficState): void {
+  for (const intersection of city.intersections) {
+    if (intersection.control === "signal" && !state.signals.has(intersection.id)) {
+      state.signals.set(intersection.id, createSignalState(city, intersection.id));
+    }
+  }
+}
+
+/**
+ * Advances every signal by dtMs. Task 06 passes no phase requests: signals
+ * cycle only through their legal safety bound (maxGreen forces a switch).
+ * Requesting a preferred phase is controller policy and arrives with Task 07.
+ */
+function advanceSignals(city: City, state: TrafficState, dtMs: number): void {
+  ensureSignals(city, state);
+  for (const intersection of city.intersections) {
+    if (intersection.control === "signal") {
+      const signal = state.signals.get(intersection.id);
+      if (signal) {
+        stepSignal(signal, dtMs);
+      }
+    }
+  }
 }
 
 export interface VehicleSpawnSpec {
@@ -137,10 +182,12 @@ function attemptTransfer(
   city: City,
   state: TrafficState,
   vehicle: Vehicle,
+  context: IntersectionStepContext,
 ): void {
   const nextRoadId = vehicle.route[vehicle.routeIndex + 1];
-  if (nextRoadId === undefined) {
-    // A queued vehicle always has a next road; defensive only.
+  const currentRoadId = vehicle.roadId;
+  if (nextRoadId === undefined || currentRoadId === null) {
+    // A queued vehicle always has a current and a next road; defensive only.
     return;
   }
   const next = city.roads[nextRoadId];
@@ -150,9 +197,22 @@ function attemptTransfer(
   if (!hasCapacity(state, next, vehicleFootprint(vehicle.type))) {
     return;
   }
+  if (
+    evaluateIntersectionControl(
+      city,
+      state,
+      currentRoadId,
+      nextRoadId,
+      vehicle.queuedSinceMs,
+      context,
+    ) !== "granted"
+  ) {
+    return;
+  }
   leaveRoad(state, vehicle);
   vehicle.routeIndex += 1;
   enterRoad(state, vehicle, next);
+  recordControlGrant(city, nextRoadId, context);
 }
 
 function arrive(state: TrafficState, vehicle: Vehicle): void {
@@ -167,6 +227,7 @@ function advance(
   state: TrafficState,
   vehicle: Vehicle,
   dtSeconds: number,
+  context: IntersectionStepContext,
 ): void {
   let remaining = vehicle.speed * dtSeconds;
   let guard = 0;
@@ -194,7 +255,15 @@ function advance(
     if (
       !next ||
       next.closed ||
-      !hasCapacity(state, next, vehicleFootprint(vehicle.type))
+      !hasCapacity(state, next, vehicleFootprint(vehicle.type)) ||
+      evaluateIntersectionControl(
+        city,
+        state,
+        roadId,
+        nextRoadId,
+        vehicle.queuedSinceMs,
+        context,
+      ) !== "granted"
     ) {
       vehicle.state = "queued";
       vehicle.queuedSinceMs = state.timeMs;
@@ -203,6 +272,7 @@ function advance(
     leaveRoad(state, vehicle);
     vehicle.routeIndex += 1;
     enterRoad(state, vehicle, next);
+    recordControlGrant(city, nextRoadId, context);
   }
 }
 
@@ -259,6 +329,8 @@ export function stepTraffic(
   state.timeMs += dtMs;
   const dtSeconds = dtMs / 1000;
 
+  advanceSignals(city, state, dtMs);
+
   for (const vehicle of state.vehicles) {
     if (vehicle.state !== "arrived") {
       vehicle.tripTimeMs += dtMs;
@@ -271,6 +343,7 @@ export function stepTraffic(
     }
   }
 
+  const context = createIntersectionStepContext();
   const queued = state.vehicles
     .filter((vehicle) => vehicle.state === "queued")
     .sort(
@@ -278,12 +351,12 @@ export function stepTraffic(
         (a.queuedSinceMs ?? 0) - (b.queuedSinceMs ?? 0) || a.id - b.id,
     );
   for (const vehicle of queued) {
-    attemptTransfer(city, state, vehicle);
+    attemptTransfer(city, state, vehicle, context);
   }
 
   for (const vehicle of state.vehicles) {
     if (vehicle.state === "moving") {
-      advance(city, state, vehicle, dtSeconds);
+      advance(city, state, vehicle, dtSeconds, context);
     }
   }
 
@@ -372,6 +445,15 @@ export function checkTrafficInvariants(
   for (const [roadId, units] of expected) {
     if (!state.occupancy.has(roadId) && units > 1e-6) {
       problems.push(`occupancy missing road ${roadId} (${units} units)`);
+    }
+  }
+
+  for (const [intersectionId, signal] of state.signals) {
+    for (const problem of validateSignalState(signal)) {
+      problems.push(`signal[${intersectionId}]: ${problem}`);
+    }
+    if (city.intersections[intersectionId]?.control !== "signal") {
+      problems.push(`signal state for non-signal intersection ${intersectionId}`);
     }
   }
 
