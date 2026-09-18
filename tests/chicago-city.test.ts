@@ -11,6 +11,7 @@ import { createFixedController } from "@/controllers/fixed";
 import { CHICAGO_SCALES, CHICAGO_VENUES, chicagoScaleForSize, nearestIntersectionTo } from "@/cities/chicago";
 import { metricToLngLat } from "@/cities/map-model";
 import { createEngine, queueIncident, stepEngine, takeSnapshot } from "@/sim/engine";
+import { findRoute } from "@/sim/astar";
 import { generateDemand } from "@/sim/demand";
 import { checkTrafficInvariants } from "@/sim/traffic";
 import { buildCityPartition, validatePartition } from "@/sim/regions";
@@ -374,6 +375,82 @@ describe("Chicago engine compatibility", () => {
         expect(snapshot.vehicles.length).toBeGreaterThan(0);
         expect(snapshot.timeMs).toBeGreaterThan(0);
       }
+    }
+  });
+
+  it("keeps the Metro network connected enough for demand and routing", () => {
+    const model = chicagoModel(4);
+    const city = model.city;
+    const count = city.intersections.length;
+    // Deterministic sample: every 37th intersection (coprime with the id space).
+    const samples: number[] = [];
+    for (let id = 0; id < count && samples.length < 40; id += 37) {
+      samples.push(id);
+    }
+    let worst = 1;
+    let total = 0;
+    for (const start of samples) {
+      const seen = new Set<number>([start]);
+      const queue = [start];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        for (const roadId of city.intersections[current].outgoing) {
+          const next = city.roads[roadId].to;
+          if (!seen.has(next)) {
+            seen.add(next);
+            queue.push(next);
+          }
+        }
+      }
+      const share = seen.size / count;
+      total += share;
+      worst = Math.min(worst, share);
+    }
+    const average = total / samples.length;
+    console.log(
+      `[chicago metro connectivity] average reachable=${(average * 100).toFixed(1)}% ` +
+        `worst=${(worst * 100).toFixed(1)}% of ${count} intersections`,
+    );
+    // Chicago's one-way grid plus grade-separated expressways: a driver can
+    // reach the large majority of the network, and no sampled origin is trapped
+    // in a tiny pocket.
+    expect(average).toBeGreaterThan(0.85);
+    expect(worst).toBeGreaterThan(0.5);
+  });
+
+  it("routes between representative Chicago OD pairs", () => {
+    const model = chicagoModel(4);
+    const city = model.city;
+    const pairs: Array<[string, number, number, string, number, number]> = [
+      ["The Loop", -87.6278, 41.8819, "United Center", -87.6742, 41.8806],
+      ["The Loop", -87.6278, 41.8819, "Soldier Field", -87.6167, 41.8623],
+      ["River North", -87.635, 41.892, "South Loop", -87.63, 41.865],
+      ["West Loop", -87.64, 41.878, "Grant Park", -87.62, 41.872],
+      ["Museum Campus", -87.617, 41.866, "River North", -87.635, 41.892],
+    ];
+    for (const [fromName, fromLon, fromLat, toName, toLon, toLat] of pairs) {
+      const from = nearestIntersectionTo(model, fromLon, fromLat)!;
+      const to = nearestIntersectionTo(model, toLon, toLat)!;
+      expect(from, `${fromName} intersection`).not.toBeNull();
+      expect(to, `${toName} intersection`).not.toBeNull();
+      expect(from).not.toBe(to);
+      const route = findRoute(city, from, to);
+      expect(route.found, `${fromName} -> ${toName} must route`).toBe(true);
+      if (!route.found) {
+        continue;
+      }
+      expect(route.cost).toBeGreaterThan(0);
+      expect(route.roadIds.length).toBeGreaterThan(0);
+      // The route is a legal walk: each road starts where the previous ended.
+      let cursor = from;
+      for (const roadId of route.roadIds) {
+        const road = city.roads[roadId];
+        expect(road.from, `route ${fromName}->${toName} continuity`).toBe(cursor);
+        cursor = road.to;
+      }
+      expect(cursor).toBe(to);
+      // Deterministic: the same OD pair routes identically.
+      expect(JSON.stringify(findRoute(city, from, to))).toBe(JSON.stringify(route));
     }
   });
 
