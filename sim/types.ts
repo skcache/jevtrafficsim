@@ -24,8 +24,13 @@ export type IntersectionControl = "signal" | "stop" | "uncontrolled";
 /** Vehicle classes with distinct footprint/speed behaviour (PRD §6.4). */
 export type VehicleType = "car" | "truck" | "bicycle";
 
-/** Vehicle lifecycle state (PRD §8). */
-export type VehicleState = "moving" | "queued" | "rerouting" | "arrived";
+/** Vehicle lifecycle state (PRD §8; `pending` covers capacity-blocked spawns). */
+export type VehicleState =
+  | "pending"
+  | "moving"
+  | "queued"
+  | "rerouting"
+  | "arrived";
 
 /** The three selectable controllers (PRD §4.1, §12). */
 export type ControllerType = "fixed" | "adaptive" | "jev";
@@ -73,13 +78,19 @@ export interface Vehicle {
   destination: IntersectionId;
   route: RoadId[];
   routeIndex: number;
-  roadId: RoadId;
-  /** 0..1 progress along the current road. */
+  /** Current directed road; null while pending. Kept after arrival for diagnostics. */
+  roadId: RoadId | null;
+  /** Distance (world units) traveled along the current road. */
   progress: number;
+  /** Effective free-flow speed for the current road and vehicle type. */
   speed: number;
   waitTimeMs: number;
   tripTimeMs: number;
   state: VehicleState;
+  /** Simulation time at which the vehicle was created. */
+  spawnTimeMs: number;
+  /** Simulation time when the vehicle began waiting at a road end; null otherwise. */
+  queuedSinceMs: number | null;
 }
 
 /** Corridor classification for structural policy metadata (PRD §12.5). */

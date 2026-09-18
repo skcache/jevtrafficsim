@@ -43,6 +43,8 @@ describe("core world-model types", () => {
       waitTimeMs: 0,
       tripTimeMs: 0,
       state: "queued",
+      spawnTimeMs: 0,
+      queuedSinceMs: null,
     };
 
     expect(intersection.control).toBe("signal");

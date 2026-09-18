@@ -22,6 +22,18 @@ describe("sim/ environment discipline", () => {
     }
   });
 
+  it("contains no wall-clock or timer APIs", () => {
+    const forbidden = ["setInterval", "setTimeout", "Date.now", "performance.now"];
+    for (const { file, content } of simSources()) {
+      for (const token of forbidden) {
+        expect(
+          content.includes(token),
+          `${file} must not use ${token} — the caller owns time`,
+        ).toBe(false);
+      }
+    }
+  });
+
   it("imports no framework, browser, or UI modules", () => {
     const forbidden = /from\s+["'](react|react-dom|zustand|next\/|\@\/app|\@\/components|\@\/render)/;
     for (const { file, content } of simSources()) {

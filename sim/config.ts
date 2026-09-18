@@ -5,7 +5,7 @@
  * live here. Tunables arrive with the tasks that use them — no speculative
  * configuration surface.
  */
-import type { CitySize, RoadKind } from "./types";
+import type { CitySize, RoadKind, VehicleType } from "./types";
 
 /** Fixed world-update timestep in milliseconds (PRD §10: 10 Hz). */
 export const SIMULATION_TIMESTEP_MS = 100;
@@ -126,3 +126,18 @@ export const DEFAULT_CONGESTION_WEIGHT = 1;
 
 /** Hard ceiling for congestion weights so edge costs stay bounded. */
 export const MAX_CONGESTION_WEIGHT = 10;
+
+/** Vehicle-class parameters (PRD §6.4): footprint in capacity units, speed multiplier. */
+export interface VehicleTypeSpec {
+  footprint: number;
+  speedMultiplier: number;
+}
+
+export const VEHICLE_TYPE_SPECS: Record<VehicleType, VehicleTypeSpec> = {
+  car: { footprint: 1, speedMultiplier: 1 },
+  truck: { footprint: 2, speedMultiplier: 0.7 },
+  bicycle: { footprint: 0.3, speedMultiplier: 0.8 },
+};
+
+/** Shared tolerance for floating-point comparisons in the traffic layer. */
+export const SIMULATION_EPSILON = 1e-9;
