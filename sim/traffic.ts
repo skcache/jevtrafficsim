@@ -8,8 +8,9 @@
  *
  *   1. clock     — state.timeMs += dtMs
  *   2. signals   — every signal advances dtMs (legal mechanics only; axis
- *                  groups served in a ring; single-group holds green; phase
- *                  requests are controller policy, arriving with Task 07)
+ *                  groups served in a ring; single-group holds green;
+ *                  hold/advance directives are controller policy, arriving
+ *                  with Task 07)
  *   3. trip time — every non-arrived vehicle += dtMs
  *   4. pending   — capacity-blocked spawns retry their first road (id order)
  *   5. queue     — road-end waiters retry transfers in (queuedSinceMs asc,
@@ -95,10 +96,10 @@ function ensureSignals(city: City, state: TrafficState): void {
 }
 
 /**
- * Advances every signal by dtMs. No phase requests are passed yet: multi-group
+ * Advances every signal by dtMs. No directives are passed yet: multi-group
  * signals advance only through their legal safety bound (maxGreen forces a
- * switch), while single-group signals hold green. Requesting a preferred
- * phase is controller policy and arrives with Task 07.
+ * switch), while single-group signals hold green. Hold/advance directives
+ * are controller policy and arrive with Task 07.
  */
 function advanceSignals(city: City, state: TrafficState, dtMs: number): void {
   ensureSignals(city, state);

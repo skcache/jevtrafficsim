@@ -179,20 +179,20 @@ describe("signal state machine", () => {
     for (const roadId of approachRoadIds) {
       expect(canApproachProceed(state, roadId)).toBe(true);
     }
-    stepSignal(state, 100, 0); // requesting the only group is a no-op
+    stepSignal(state, 100, "hold"); // explicit hold — still green
+    stepSignal(state, 100, "advance"); // nothing to advance to — still green
     expect(state.stage).toBe("green");
-    expect(() => stepSignal(state, 100, 1)).toThrow(RangeError); // no such group
     expect(validateSignalState(state)).toEqual([]);
   });
 
-  it("ignores an early phase request before minimum green", () => {
+  it("ignores an early advance directive before minimum green", () => {
     const { city, centerId } = cross([0, 90, 180, 270]);
     const state = createSignalState(city, centerId, FAST_TIMING);
-    stepSignal(state, 100, 1); // elapsed 100 < 300
+    stepSignal(state, 100, "advance"); // elapsed 100 < 300
     expect(state.stage).toBe("green");
-    stepSignal(state, 100, 1); // elapsed 200 < 300
+    stepSignal(state, 100, "advance"); // elapsed 200 < 300
     expect(state.stage).toBe("green");
-    stepSignal(state, 100, 1); // elapsed 300 >= 300 -> switch
+    stepSignal(state, 100, "advance"); // elapsed 300 >= 300 -> switch
     expect(state.stage).toBe("yellow");
   });
 
@@ -206,21 +206,28 @@ describe("signal state machine", () => {
     }
     expect(ticks).toBe(10);
     expect(state.stage).toBe("yellow");
+    // An explicit hold cannot keep green past max green either.
+    const held = createSignalState(city, centerId, FAST_TIMING);
+    let heldTicks = 0;
+    while (held.stage === "green" && heldTicks < 100) {
+      stepSignal(held, 100, "hold");
+      heldTicks += 1;
+    }
+    expect(heldTicks).toBe(10);
+    expect(held.stage).toBe("yellow");
   });
 
-  it("rejects invalid requested phases but accepts any valid group index", () => {
+  it("rejects invalid directives and advances the ring one group at a time", () => {
     const { city, centerId } = cross([0, 90, 180, 270, 45]); // three groups
     const state = createSignalState(city, centerId, FAST_TIMING);
-    expect(() => stepSignal(state, 100, -1)).toThrow(RangeError);
-    expect(() => stepSignal(state, 100, 3)).toThrow(RangeError);
-    expect(() => stepSignal(state, 100, 1.5)).toThrow(RangeError);
-    // A far-group request is valid; the ring serves groups one at a time.
+    expect(() => stepSignal(state, 100, "jump" as never)).toThrow(RangeError);
+    expect(() => stepSignal(state, 100, 2 as never)).toThrow(RangeError);
     for (let i = 0; i < 3; i += 1) {
-      stepSignal(state, 100, 2);
+      stepSignal(state, 100, "advance");
     }
     expect(state.stage).toBe("yellow");
     while (state.stage !== "green") {
-      stepSignal(state, 100, 2);
+      stepSignal(state, 100, "advance");
     }
     expect(state.phaseIndex).toBe(1); // (0 + 1) % 3 — never skips a group
   });
@@ -253,8 +260,8 @@ describe("signal state machine", () => {
     const { city, centerId } = cross([0, 90, 180, 270, 45]); // three groups
     const state = createSignalState(city, centerId, FAST_TIMING);
     for (let i = 0; i < 600; i += 1) {
-      const request = i % 17 < 8 ? 1 : i % 17 < 12 ? 2 : 0;
-      stepSignal(state, 100, request);
+      const directive = i % 17 < 12 ? "advance" : "hold";
+      stepSignal(state, 100, directive);
       expect(validateSignalState(state)).toEqual([]);
       const permitted = permittedApproaches(state);
       if (state.stage === "green") {
@@ -276,9 +283,9 @@ describe("signal state machine", () => {
     expect(canApproachProceed(state, approachRoadIds[0])).toBe(true);
     expect(canApproachProceed(state, approachRoadIds[2])).toBe(true);
     expect(canApproachProceed(state, approachRoadIds[1])).toBe(false);
-    stepSignal(state, 100, 1);
-    stepSignal(state, 100, 1);
-    stepSignal(state, 100, 1); // -> yellow
+    stepSignal(state, 100, "advance");
+    stepSignal(state, 100, "advance");
+    stepSignal(state, 100, "advance"); // -> yellow
     expect(state.stage).toBe("yellow");
     for (const roadId of approachRoadIds) {
       expect(canApproachProceed(state, roadId)).toBe(false);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findRoute } from "@/sim/astar";
 import { generateCity } from "@/sim/city-generator";
 import {
+  approachAxisKey,
   deriveApproachGroups,
   validateSignalPlan,
   validateSignalPlanForCity,
@@ -58,9 +59,22 @@ describe("intersection controls on generated cities", () => {
           expect(deriveApproachGroups(city, intersection.id)).toEqual(signal.groups);
           const grouped = signal.groups.flat().sort((a, b) => a - b);
           expect(grouped).toEqual([...intersection.incoming].sort((a, b) => a - b));
-          // No group may pair approaches from different street axes.
+          // Structural families: every road classifies, no phase mixes two
+          // distinct families, and no family is split across phases.
+          const seenFamilies: string[] = [];
           for (const group of signal.groups) {
             expect(group.length).toBeGreaterThanOrEqual(1);
+            const families = new Set(
+              group.map((roadId) => {
+                const key = approachAxisKey(city, roadId);
+                expect(key.kind).toBe("family");
+                return key.kind === "family" ? key.family : "geometric";
+              }),
+            );
+            expect(families.size).toBe(1);
+            const family = [...families][0];
+            expect(seenFamilies.includes(family)).toBe(false);
+            seenFamilies.push(family);
           }
           if (signal.groups.length === 1) {
             singleGroup += 1;
