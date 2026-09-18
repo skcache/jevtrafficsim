@@ -81,3 +81,28 @@ export interface Vehicle {
   tripTimeMs: number;
   state: VehicleState;
 }
+
+/** Corridor classification for structural policy metadata (PRD §12.5). */
+export type CorridorKind = "arterial" | "highway" | "diagonal";
+
+/** A named continuous corridor: the unit controllers may later favor (PRD §12.5). */
+export interface Corridor {
+  id: number;
+  kind: CorridorKind;
+  roadIds: RoadId[];
+}
+
+/**
+ * A generated city. `intersections` and `roads` are dense arrays where the
+ * index equals the id. `corridors` are stable structural groups feeding
+ * hierarchical control (PRD §7.2 step 10, §12.4).
+ */
+export interface City {
+  size: CitySize;
+  seed: number;
+  gridWidth: number;
+  gridHeight: number;
+  intersections: Intersection[];
+  roads: Road[];
+  corridors: Corridor[];
+}
