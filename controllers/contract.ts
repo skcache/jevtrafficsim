@@ -8,13 +8,33 @@
  * sim/signals.ts regardless of what a controller asks for. A missing entry in
  * the returned map means "no opinion".
  *
- * Controllers must be pure with respect to the world: they may read the city
- * and traffic state, but never mutate it, so repeated calls with identical
- * input yield identical directives.
+ * Controllers must be pure with respect to the world: they may read the city,
+ * traffic state and engine-owned context, but never mutate them, so repeated
+ * calls with identical input yield identical directives.
+ *
+ * ## Controller context (Task 09)
+ *
+ * Policy that needs more than raw state (queue pressure, arrival rates,
+ * region/corridor metadata) reads it from this engine-owned context instead
+ * of keeping its own hidden history: `directives` receives the frame the
+ * engine just derived from the current state, so the same complete input
+ * always produces the same directives. The parameter is optional — simple
+ * controllers (Fixed) ignore it and unit tests may call them without one —
+ * while the engine always supplies it during normal execution.
  */
+import type { ObservationFrame } from "@/sim/observations";
+import type { CityPartition } from "@/sim/regions";
 import type { SignalDirective } from "@/sim/signals";
 import type { TrafficState } from "@/sim/traffic";
 import type { City, IntersectionId } from "@/sim/types";
+
+/** Read-only, engine-owned observations for policy controllers. */
+export interface TrafficControllerContext {
+  /** Deterministic observations of the current tick (queues, waits, rates). */
+  readonly observations: ObservationFrame;
+  /** Static region/corridor partition, built once per engine. */
+  readonly partition: CityPartition;
+}
 
 export interface TrafficController {
   /** Stable identifier used in run metadata (e.g. "fixed"). */
@@ -23,5 +43,6 @@ export interface TrafficController {
   directives(
     city: City,
     traffic: TrafficState,
+    context?: TrafficControllerContext,
   ): ReadonlyMap<IntersectionId, SignalDirective>;
 }

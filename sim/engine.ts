@@ -10,8 +10,10 @@
  *                    spawned yet enters the network FIRST (route via A* with
  *                    the live occupancy map, then spawnVehicle), so a t=0
  *                    vehicle participates in the very first tick
- *   2. controller  — controller.directives(city, traffic) is computed from
- *                    the resulting current state (policy for this tick)
+ *   2. controller  — the engine builds the observation frame + static
+ *                    partition into a read-only context and calls
+ *                    controller.directives(city, traffic, context) on the
+ *                    resulting current state (policy for this tick)
  *   3. traffic     — stepTraffic: clock -> signals (with directives) ->
  *                    trip -> pending -> queue -> movement -> wait
  *   4. arrivals    — vehicles that reached their destination this tick are
@@ -49,6 +51,14 @@ import { createApproachStats, updateApproachStats, type ApproachStats } from "./
 import { findRoute } from "./astar";
 import { SIMULATION_TIMESTEP_MS, VEHICLE_TYPE_SPECS } from "./config";
 import {
+  buildObservationFrame,
+  createApproachArrivalTracker,
+  expireApproachArrivals,
+  recordApproachArrival,
+  type ApproachArrivalTracker,
+} from "./observations";
+import { buildCityPartition, type CityPartition } from "./regions";
+import {
   computeMetrics,
   createMetricsAccumulator,
   recordArrival,
@@ -63,7 +73,7 @@ import {
   stepTraffic,
   type TrafficState,
 } from "./traffic";
-import type { TrafficController } from "@/controllers/contract";
+import type { TrafficController, TrafficControllerContext } from "@/controllers/contract";
 import type {
   City,
   IntersectionId,
@@ -94,6 +104,10 @@ export interface EngineState {
   readonly metrics: MetricsAccumulator;
   /** Per-approach queue + starvation statistics (Task 08 policy input). */
   readonly approaches: ApproachStats;
+  /** Rolling approach-arrival history (Task 09), window = 5 simulated seconds. */
+  readonly arrivals: ApproachArrivalTracker;
+  /** Static region/corridor partition (Task 09), built once per engine. */
+  readonly partition: CityPartition;
   nextSpawnIndex: number;
   ticks: number;
 }
@@ -123,6 +137,8 @@ export function createEngine(options: EngineOptions): EngineState {
     spawns: [...options.spawns].sort((a, b) => a.timeMs - b.timeMs),
     metrics: createMetricsAccumulator(),
     approaches: createApproachStats(),
+    arrivals: createApproachArrivalTracker(),
+    partition: buildCityPartition(options.city),
     nextSpawnIndex: 0,
     ticks: 0,
   };
@@ -179,8 +195,18 @@ function spawnDueVehicles(engine: EngineState): void {
 export function stepEngine(engine: EngineState): void {
   const { city, traffic, controller } = engine;
   spawnDueVehicles(engine);
-  const directives = controller.directives(city, traffic);
-  stepTraffic(city, traffic, SIMULATION_TIMESTEP_MS, { signalDirectives: directives });
+  // Controller context: derived from the CURRENT state (after spawns, before
+  // this tick's movement) so identical inputs always yield identical policy.
+  expireApproachArrivals(engine.arrivals, traffic.timeMs);
+  const context: TrafficControllerContext = {
+    observations: buildObservationFrame(city, traffic, engine.arrivals),
+    partition: engine.partition,
+  };
+  const directives = controller.directives(city, traffic, context);
+  stepTraffic(city, traffic, SIMULATION_TIMESTEP_MS, {
+    signalDirectives: directives,
+    onApproachArrival: (roadId) => recordApproachArrival(engine.arrivals, traffic.timeMs, roadId),
+  });
   engine.ticks += 1;
   recordArrivals(engine);
   recordTick(engine.metrics, city, traffic, SIMULATION_TIMESTEP_MS);

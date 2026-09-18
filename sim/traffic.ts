@@ -263,6 +263,7 @@ function advance(
   vehicle: Vehicle,
   dtSeconds: number,
   context: IntersectionStepContext,
+  onApproachArrival?: (roadId: RoadId) => void,
 ): void {
   let remaining = vehicle.speed * dtSeconds;
   let guard = 0;
@@ -286,6 +287,12 @@ function advance(
       arrive(state, vehicle);
       return;
     }
+    // Reaching a road end with a continuing route is ONE approach arrival —
+    // recorded whether the vehicle proceeds now or has to queue. (Leftover
+    // distance may legitimately cross several road ends in one timestep; each
+    // reach reports.) Queued retries go through attemptTransfer and never
+    // report again.
+    onApproachArrival?.(roadId);
     const next = city.roads[nextRoadId];
     if (
       !next ||
@@ -363,12 +370,17 @@ export function spawnVehicle(
 }
 
 /**
- * Optional per-tick inputs from the engine (Task 07). `signalDirectives`
- * carries the controller's hold/advance decisions for this tick; a missing
- * entry means "no opinion".
+ * Optional per-tick inputs from the engine. `signalDirectives` carries the
+ * controller's hold/advance decisions for this tick; a missing entry means
+ * "no opinion". `onApproachArrival` is the Task-09 arrival-event collector:
+ * called once with the current road id each time a MOVING vehicle reaches
+ * the end of that road while its route continues — whether it proceeds
+ * immediately or has to queue. Queued retries and final trip arrivals never
+ * call it (see sim/observations.ts for the full event contract).
  */
 export interface TrafficStepOptions {
   readonly signalDirectives?: ReadonlyMap<IntersectionId, SignalDirective>;
+  readonly onApproachArrival?: (roadId: RoadId) => void;
 }
 
 export function stepTraffic(
@@ -410,7 +422,7 @@ export function stepTraffic(
 
   for (const vehicle of state.vehicles) {
     if (vehicle.state === "moving") {
-      advance(city, state, vehicle, dtSeconds, context);
+      advance(city, state, vehicle, dtSeconds, context, options.onApproachArrival);
     }
   }
 
