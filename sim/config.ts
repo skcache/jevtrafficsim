@@ -162,11 +162,13 @@ export const DEFAULT_SIGNAL_TIMING: SignalTiming = {
 export const STOP_SIGN_MIN_STOP_MS = 1500;
 
 /**
- * Spillback admission ratio (PRD §11.3): once a road's occupancy reaches this
- * fraction of its capacity, it stops admitting NEW vehicles — upstream flow is
- * restricted before the road is absolutely full, keeping the final stretch of
- * every road clear for the vehicles already on it. Absolute capacity
- * (`occupancy + footprint <= capacity`) always remains the hard ceiling.
+ * Spillback admission ratio (PRD §11.3). Admission is decided on PROJECTED
+ * occupancy (`current + footprint`): once a road's occupancy has reached this
+ * fraction of its capacity it stops admitting NEW vehicles, and no admitted
+ * vehicle may push it past the threshold — upstream flow is restricted before
+ * the road is absolutely full, keeping the final stretch of every road clear
+ * for the vehicles already on it. Absolute capacity remains documented as the
+ * hard ceiling, but with a ratio below 1 the spillback limit binds first.
  */
 export const SPILLBACK_ADMISSION_RATIO = 0.9;
 

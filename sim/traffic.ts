@@ -160,16 +160,18 @@ function removeOccupancy(
  * Entry check for every admission path (spawns, pending retries, transfers):
  * - absolute capacity (Task 05): occupancy + footprint must fit, so a vehicle
  *   is never released into a full edge;
- * - spillback headroom (Task 08, PRD §11.3): a road already at or above
- *   SPILLBACK_ADMISSION_RATIO of its capacity stops admitting NEW vehicles,
- *   restricting upstream flow BEFORE the road is absolutely full.
+ * - spillback headroom (Task 08, PRD §11.3): the admission decision uses the
+ *   PROJECTED occupancy (current + this vehicle's footprint). Once occupancy
+ *   has reached SPILLBACK_ADMISSION_RATIO of capacity nothing new is admitted,
+ *   and no admitted vehicle may push the road past that threshold — so the
+ *   final stretch of every road stays clear for the vehicles already on it.
  */
 function hasCapacity(state: TrafficState, road: Road, footprint: number): boolean {
-  const current = roadOccupancy(state, road.id);
-  if (current + footprint > road.capacity + SIMULATION_EPSILON) {
+  const projected = roadOccupancy(state, road.id) + footprint;
+  if (projected > road.capacity + SIMULATION_EPSILON) {
     return false;
   }
-  return current <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON;
+  return projected <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON;
 }
 
 function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {

@@ -87,7 +87,7 @@ describe("signalized intersection traffic", () => {
     const edited = {
       ...city,
       roads: city.roads.map((road) =>
-        road.id === exitRoadIds[1] ? { ...road, capacity: 1 } : road,
+        road.id === exitRoadIds[1] ? { ...road, capacity: 2 } : road,
       ),
     };
     const state = createTrafficState();
@@ -98,7 +98,7 @@ describe("signalized intersection traffic", () => {
     spawn(edited, state, 1, [approach, exit], 3, 4);
 
     stepChecked(edited, state, 12); // both queued through red
-    stepChecked(edited, state, 1); // tick 13: green, but only one capacity unit exists
+    stepChecked(edited, state, 1); // tick 13: green, but one car aboard blocks the next (1 + 1 > 0.9 * 2)
     expect(state.vehicles[0].state).toBe("moving");
     expect(state.vehicles[0].roadId).toBe(exit);
     expect(state.vehicles[1].state).toBe("queued"); // green && downstream full => blocked

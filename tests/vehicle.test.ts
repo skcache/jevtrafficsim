@@ -158,7 +158,8 @@ describe("spawn validation", () => {
     expect(blocked.roadId).toBeNull();
     expect(closedState.occupancy.size).toBe(0);
 
-    const full = makeStreet([{ length: 10, capacity: 1 }]);
+    // Capacity 2 with one car aboard: the second car (1 + 1 > 1.8) waits.
+    const full = makeStreet([{ length: 10, capacity: 2 }]);
     const fullState = createTrafficState();
     spawnVehicle(full.city, fullState, {
       id: 0,

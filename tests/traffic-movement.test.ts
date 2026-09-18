@@ -91,7 +91,7 @@ describe("movement at the fixed timestep", () => {
     const build = (): { city: City; state: TrafficState } => {
       const { city } = makeStreet([
         { length: 2, speedLimit: 10 },
-        { length: 10, speedLimit: 10, capacity: 1 },
+        { length: 10, speedLimit: 10, capacity: 2 },
       ]);
       const state = createTrafficState();
       spawnVehicle(city, state, {

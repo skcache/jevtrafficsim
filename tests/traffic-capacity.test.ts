@@ -31,20 +31,20 @@ function stepChecked(city: City, state: TrafficState, ticks: number): void {
 }
 
 describe("capacity semantics", () => {
-  it("never exceeds capacity units (cars)", () => {
+  it("never exceeds the spillback headroom (cars)", () => {
     const { city } = makeStreet([{ length: 10, capacity: 4 }]);
     const state = createTrafficState();
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       spawn(city, state, i, "car", [0], 0, 1);
     }
     const waiting = spawnVehicle(city, state, {
-      id: 4,
+      id: 3,
       type: "car",
       origin: 0,
       destination: 1,
       route: [0],
     });
-    expect(roadOccupancy(state, 0)).toBe(4);
+    expect(roadOccupancy(state, 0)).toBe(3); // 4.0 would exceed 0.9 * 4
     expect(waiting.state).toBe("pending");
   });
 
@@ -104,7 +104,9 @@ describe("queueing", () => {
   it("waits while the downstream road is full and holds upstream capacity", () => {
     const { city } = makeStreet([
       { length: 2, speedLimit: 10, capacity: 4 },
-      { length: 20, speedLimit: 10, capacity: 1 },
+      // Capacity 2 with one car aboard: the spillback headroom (1.8) admits
+      // no second car, so this road blocks downstream exactly as before.
+      { length: 20, speedLimit: 10, capacity: 2 },
     ]);
     const state = createTrafficState();
     spawn(city, state, 0, "car", [1], 1, 2); // occupies road 1
@@ -137,7 +139,8 @@ describe("queueing", () => {
   it("releases waiters in queue order without jumping", () => {
     const { city } = makeStreet([
       { length: 2, speedLimit: 10, capacity: 8 },
-      { length: 10, speedLimit: 10, capacity: 1 },
+      // Capacity 2 with one car aboard: no second car may be admitted.
+      { length: 10, speedLimit: 10, capacity: 2 },
     ]);
     const state = createTrafficState();
     spawn(city, state, 0, "car", [1], 1, 2); // blocks road 1 until tick 10

@@ -139,7 +139,7 @@ describe("stop-controlled intersections", () => {
       ],
     });
     const approachA = fixture.city.roads[0];
-    const exitA = { ...fixture.city.roads[1], capacity: 1, length: 20 };
+    const exitA = { ...fixture.city.roads[1], capacity: 2, length: 20 };
     const approachB = fixture.city.roads[2];
     const exitB = fixture.city.roads[3];
     const city = { ...fixture.city, roads: [approachA, exitA, approachB, exitB] };
@@ -170,14 +170,15 @@ describe("stop-controlled intersections", () => {
       arms: [{ angleDeg: 90, length: 2 }],
     });
     const approachRoad = fixture.city.roads[0];
-    const exitRoad = { ...fixture.city.roads[1], capacity: 1, length: 20 };
+    const exitRoad = { ...fixture.city.roads[1], capacity: 2, length: 20 };
     const exitEnd = 2;
     const edited = {
       ...fixture.city,
       roads: [approachRoad, exitRoad],
     };
     const state = createTrafficState();
-    // C parks on the exit road (occupying its only capacity unit until tick 20).
+    // C parks on the exit road (its occupancy keeps the spillback headroom
+    // closed to newcomers until C clears at tick 20).
     spawn(edited, state, 0, [exitRoad.id], 0, exitEnd);
     spawn(edited, state, 1, [approachRoad.id, exitRoad.id], 1, exitEnd);
     spawn(edited, state, 2, [approachRoad.id, exitRoad.id], 1, exitEnd);

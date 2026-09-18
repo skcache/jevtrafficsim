@@ -129,7 +129,8 @@ describe("simulation engine", () => {
   });
 
   it("parks a scheduled vehicle as pending when the first road is full, then lets it in", () => {
-    const { city } = makeStreet([{ length: 20, capacity: 1 }]);
+    // Capacity 2 with one car aboard: 1 + 1 > 1.8, so the second car waits.
+    const { city } = makeStreet([{ length: 20, capacity: 2 }]);
     const engine = createEngine({
       city,
       controller: createFixedController(),
@@ -148,10 +149,11 @@ describe("simulation engine", () => {
   });
 
   it("routes scheduled spawns with live occupancy (congestion-aware initial routing)", () => {
-    // Path A (free-flow 3.0s): rA1 (len 20, cap 1) + rA2 (len 10).
+    // Path A (free-flow 3.0s): rA1 (len 20, cap 2) + rA2 (len 10).
     // Path B (free-flow 3.6s): rB1 (len 20) + rB2 (len 16).
     // Node 1 is signalized: rA1's approach group is red first, so X parks on
-    // rA1 and its occupancy makes path A cost 5.0s — B becomes cheaper.
+    // rA1 and its live occupancy (1 of 2 units) makes path A cost
+    // 2.0 * (1 + 0.5) + 1.0 = 4.0s — B becomes cheaper.
     // Geometry must stay coherent (every road.length >= euclidean endpoint
     // distance) or the admissible heuristic loses admissibility.
     const nodes: Intersection[] = [
@@ -162,7 +164,7 @@ describe("simulation engine", () => {
       { id: 4, x: -20, y: 20, incoming: [], outgoing: [], control: "uncontrolled", regionId: 0 },
     ];
     const roads: Road[] = [
-      { id: 0, from: 0, to: 1, length: 20, lanes: 1, speedLimit: 10, capacity: 1, kind: "local", closed: false }, // rA1
+      { id: 0, from: 0, to: 1, length: 20, lanes: 1, speedLimit: 10, capacity: 2, kind: "local", closed: false }, // rA1
       { id: 1, from: 1, to: 3, length: 10, lanes: 1, speedLimit: 10, capacity: 4, kind: "local", closed: false }, // rA2
       { id: 2, from: 0, to: 2, length: 20, lanes: 1, speedLimit: 10, capacity: 4, kind: "local", closed: false }, // rB1
       { id: 3, from: 2, to: 3, length: 16, lanes: 1, speedLimit: 10, capacity: 4, kind: "local", closed: false }, // rB2
@@ -192,7 +194,7 @@ describe("simulation engine", () => {
     runEngine(engine, 4_100);
     const [first, second] = engine.traffic.vehicles;
     // X picked the free-flow winner and is now queued at the red signal,
-    // occupying the whole capacity of rA1.
+    // loading rA1's occupancy (1 of 2 units).
     expect(first.route).toEqual([0, 1]);
     expect(first.state).toBe("queued");
     expect(first.roadId).toBe(0);
