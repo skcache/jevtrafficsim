@@ -4,34 +4,45 @@
  * into a single loop. No DOM, no React, no timers — the caller owns time and
  * drives `stepEngine`/`runEngine` explicitly.
  *
- * ## Tick order (per 100 ms step)
+ * ## Tick order (per 100 ms step, at simulation time T)
  *
- *   1. controller  — controller.directives(city, traffic) is computed from
- *                    the PRE-step state (policy for this tick)
- *   2. traffic     — stepTraffic: clock -> signals (with directives) ->
+ *   1. spawns      — every scheduled event with timeMs <= T that has not
+ *                    spawned yet enters the network FIRST (route via A* with
+ *                    the live occupancy map, then spawnVehicle), so a t=0
+ *                    vehicle participates in the very first tick
+ *   2. controller  — controller.directives(city, traffic) is computed from
+ *                    the resulting current state (policy for this tick)
+ *   3. traffic     — stepTraffic: clock -> signals (with directives) ->
  *                    trip -> pending -> queue -> movement -> wait
- *   3. arrivals    — vehicles that reached their destination this tick are
+ *   4. arrivals    — vehicles that reached their destination this tick are
  *                    recorded once (trip time, wait time, route distance)
- *   4. metrics     — congestion/occupancy/signal sampling at tick end
- *   5. spawns      — vehicles scheduled at or before the new tick time enter
- *                    the network (route via A*, then spawnVehicle)
+ *   5. metrics     — congestion/occupancy/signal sampling at tick end, with
+ *                    the explicit step duration
  *
  * ## Spawn timing semantics
  *
- * A vehicle scheduled at T enters the network at the END of the tick whose
- * clock reads T: spawnTimeMs === T exactly, and its first movement happens on
- * tick T + dt. Schedule times that do not fall on tick boundaries snap to the
- * first tick whose time is >= the scheduled time. Spawning is NOT gated by
- * intersection control (origins are abstract), but it IS gated by the first
- * road's capacity/closure: a blocked entrant parks as `pending` and retries
- * each tick. A scheduled vehicle whose route cannot be found (e.g. the only
- * path is closed) counts as a failed spawn instead of throwing.
+ * A vehicle scheduled at T enters at the START of the tick whose clock reads
+ * T: it exists before that tick's movement phase, so it participates in the
+ * T -> T+dt step, and spawnTimeMs === T is its ACTUAL simulated entry time
+ * (never a fabricated scheduled time). Schedule times that do not fall on
+ * tick boundaries snap FORWARD to the first tick whose time is >= the
+ * scheduled time. Spawning is NOT gated by intersection control (origins are
+ * abstract), but it IS gated by the first road's capacity/closure: a blocked
+ * entrant parks as `pending` and retries each tick. A scheduled vehicle whose
+ * route cannot be found (e.g. the only path is closed) counts as a failed
+ * spawn instead of throwing.
+ *
+ * ## Routing at spawn
+ *
+ * Initial routes use the congestion-aware A* cost model with the LIVE
+ * occupancy map of the current state ({ occupancy: traffic.occupancy }): a
+ * vehicle entering a busy street can choose a slightly longer free-flow
+ * detour. No route caching and no rerouting exist here.
  *
  * ## Determinism
  *
  * Same city + controller + spawn schedule => identical state, metrics and
- * snapshots for the same tick sequence. Routes are computed once at spawn
- * with default (free-flow) A* costs; no randomness and no wall-clock reads
+ * snapshots for the same tick sequence. No randomness and no wall-clock reads
  * exist anywhere in this loop.
  */
 import { findRoute } from "./astar";
@@ -140,7 +151,9 @@ function spawnDueVehicles(engine: EngineState): void {
   ) {
     const spawn = engine.spawns[engine.nextSpawnIndex];
     engine.nextSpawnIndex += 1;
-    const route = findRoute(city, spawn.origin, spawn.destination);
+    const route = findRoute(city, spawn.origin, spawn.destination, {
+      occupancy: traffic.occupancy,
+    });
     if (!route.found) {
       engine.metrics.failedSpawns += 1;
       continue;
@@ -155,15 +168,18 @@ function spawnDueVehicles(engine: EngineState): void {
   }
 }
 
-/** Advances the simulation by exactly one fixed timestep. */
+/**
+ * Advances the simulation by exactly one fixed timestep: scheduled events due
+ * at the current simulation time enter first, then the tick runs.
+ */
 export function stepEngine(engine: EngineState): void {
   const { city, traffic, controller } = engine;
+  spawnDueVehicles(engine);
   const directives = controller.directives(city, traffic);
   stepTraffic(city, traffic, SIMULATION_TIMESTEP_MS, { signalDirectives: directives });
   engine.ticks += 1;
   recordArrivals(engine);
-  recordTick(engine.metrics, city, traffic);
-  spawnDueVehicles(engine);
+  recordTick(engine.metrics, city, traffic, SIMULATION_TIMESTEP_MS);
 }
 
 /** Steps until simulated time reaches or passes `untilMs`. */
@@ -181,6 +197,7 @@ export interface VehicleSnapshot {
   readonly type: VehicleType;
   readonly state: VehicleState;
   readonly roadId: RoadId | null;
+  readonly routeIndex: number;
   readonly progress: number;
   readonly waitTimeMs: number;
   readonly tripTimeMs: number;
@@ -226,6 +243,7 @@ export function takeSnapshot(engine: EngineState): SimulationSnapshot {
       type: vehicle.type,
       state: vehicle.state,
       roadId: vehicle.roadId,
+      routeIndex: vehicle.routeIndex,
       progress: vehicle.progress,
       waitTimeMs: vehicle.waitTimeMs,
       tripTimeMs: vehicle.tripTimeMs,

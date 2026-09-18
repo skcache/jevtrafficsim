@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type SignalTiming } from "@/sim/config";
+import { SIMULATION_TIMESTEP_MS as DT, type SignalTiming } from "@/sim/config";
 import {
   computeMetrics,
   createMetricsAccumulator,
@@ -53,37 +53,103 @@ describe("metrics accumulation", () => {
     });
     for (let tick = 0; tick < 20; tick += 1) {
       stepTraffic(blockedCity, state);
-      recordTick(metrics, blockedCity, state);
+      recordTick(metrics, blockedCity, state, DT);
     }
     const vehicle = state.vehicles[0];
     expect(vehicle.state).toBe("queued");
     const result = computeMetrics(metrics, state);
-    // Active 1 vehicle every tick; blocked (queued) from tick 10 on: 11/20.
+    // Vehicle-time weighting: active 20 ticks * 1 = 2000ms; blocked 11 ticks
+    // * 1 = 1100ms -> 1100/2000 (same value as the old mean here because the
+    // active count is constant; the weighting test below shows the difference).
     expect(result.gridlockRatio).toBeCloseTo(11 / 20, 12);
     expect(result.averageRoadOccupancy).toBeCloseTo(20 / 20 / 2, 12); // 1 unit on road 0, 2 roads
     expect(result.maxRoadOccupancy).toBe(1);
     expect(result.completedTrips).toBe(0);
     expect(result.averageTripTimeMs).toBe(0);
-    expect(result.p95WaitTimeMs).toBe(0);
+    // Wait pressure covers the active queued car, so these are NOT zero.
+    expect(result.averageWaitTimeMs).toBe(vehicle.waitTimeMs);
+    expect(result.p95WaitTimeMs).toBe(vehicle.waitTimeMs);
+    expect(result.maxWaitTimeMs).toBe(vehicle.waitTimeMs);
     expect(result.throughputPerMinute).toBe(0);
   });
 
-  it("derives arrival metrics from recorded arrivals", () => {
+  it("keeps trip stats on completed vehicles and wait stats on ALL spawned vehicles", () => {
+    // Real ugly case: two cars that arrive quickly, plus one car stuck at a
+    // closed road end accruing a huge wait. Wait stats must expose it.
+    const { city } = makeStreet([{ length: 10 }, { length: 10 }]);
+    const blocked = withClosedRoads(city, [1]);
     const state = createTrafficState();
     const metrics = createMetricsAccumulator();
-    state.timeMs = 60_000;
-    recordArrival(metrics, { vehicleId: 0, tripTimeMs: 1000, waitTimeMs: 800, routeDistance: 50 });
-    recordArrival(metrics, { vehicleId: 1, tripTimeMs: 2000, waitTimeMs: 400, routeDistance: 60 });
-    recordArrival(metrics, { vehicleId: 2, tripTimeMs: 1500, waitTimeMs: 0, routeDistance: 70 });
-    recordArrival(metrics, { vehicleId: 2, tripTimeMs: 1500, waitTimeMs: 0, routeDistance: 70 }); // dedupe
+    spawnVehicle(blocked, state, { id: 0, type: "car", origin: 0, destination: 1, route: [0] });
+    spawnVehicle(blocked, state, { id: 1, type: "car", origin: 0, destination: 1, route: [0] });
+    spawnVehicle(blocked, state, { id: 2, type: "car", origin: 0, destination: 2, route: [0, 1] });
+    for (let tick = 0; tick < 500; tick += 1) {
+      stepTraffic(blocked, state);
+      for (const vehicle of state.vehicles) {
+        if (vehicle.state === "arrived") {
+          recordArrival(metrics, {
+            vehicleId: vehicle.id,
+            tripTimeMs: vehicle.tripTimeMs,
+            waitTimeMs: vehicle.waitTimeMs,
+          routeDistance: 10,
+          });
+        }
+      }
+    }
+    const [done0, done1, stuck] = state.vehicles;
+    expect(done0.state).toBe("arrived");
+    expect(done1.state).toBe("arrived");
+    expect(stuck.state).toBe("queued");
     const result = computeMetrics(metrics, state);
-    expect(result.completedTrips).toBe(3);
-    expect(result.averageTripTimeMs).toBeCloseTo(1500, 12);
-    expect(result.averageWaitTimeMs).toBeCloseTo(400, 12);
-    expect(result.p95WaitTimeMs).toBe(800); // [0, 400, 800] -> ceil(2.85)-1 = 2
-    expect(result.maxWaitTimeMs).toBe(800);
-    expect(result.throughputPerMinute).toBe(3);
-    expect(result.averageRouteDistance).toBeCloseTo(60, 12);
+    // Trip performance: completed population only.
+    expect(result.completedTrips).toBe(2);
+    expect(result.averageTripTimeMs).toBeCloseTo((done0.tripTimeMs + done1.tripTimeMs) / 2, 9);
+    // Wait pressure: the entire spawned population, including the stuck car.
+    expect(result.averageWaitTimeMs).toBeCloseTo(
+      (done0.waitTimeMs + done1.waitTimeMs + stuck.waitTimeMs) / 3,
+      9,
+    );
+    expect(result.maxWaitTimeMs).toBe(stuck.waitTimeMs);
+    expect(result.p95WaitTimeMs).toBe(stuck.waitTimeMs);
+    // And it is clearly not the completed-only value.
+    expect(result.averageWaitTimeMs).toBeGreaterThan(10_000);
+  });
+
+  it("weights gridlock by vehicle time, not by averaging per-tick ratios", () => {
+    // Phase 1 (ticks 1..10): only the stuck car exists -> 1 active, blocked
+    // from tick 6. Phase 2 (ticks 11..20): 100 movers join -> 101 active,
+    // still 1 blocked. Vehicle-time ratio = blockedMs / activeMs.
+    const { city, approachRoadIds, exitRoadIds } = makeCrossroads({
+      control: "uncontrolled",
+      arms: [
+        { angleDeg: 0, length: 6, capacity: 500 },
+        { angleDeg: 180, length: 10_000, capacity: 500 },
+      ],
+    });
+    const blocked = withClosedRoads(city, [exitRoadIds[0]]);
+    const state = createTrafficState();
+    const metrics = createMetricsAccumulator();
+    // Stuck car: enters via arm 0 and queues at the closed arm-0 exit.
+    spawnVehicle(blocked, state, { id: 0, type: "car", origin: 1, destination: 2, route: [approachRoadIds[0], exitRoadIds[0]] });
+    for (let tick = 0; tick < 10; tick += 1) {
+      stepTraffic(blocked, state);
+      recordTick(metrics, blocked, state, DT);
+    }
+    expect(state.vehicles[0].state).toBe("queued");
+    // 100 movers cross to the long open exit and keep moving.
+    for (let extra = 1; extra <= 100; extra += 1) {
+      spawnVehicle(blocked, state, { id: extra, type: "car", origin: 1, destination: 4, route: [approachRoadIds[0], exitRoadIds[1]] });
+    }
+    for (let tick = 0; tick < 10; tick += 1) {
+      stepTraffic(blocked, state);
+      recordTick(metrics, blocked, state, DT);
+    }
+    const result = computeMetrics(metrics, state);
+    // activeMs = 10*1*100 + 10*101*100 = 102000; blockedMs = 15*1*100 = 1500.
+    expect(result.gridlockRatio).toBeCloseTo(1500 / 102_000, 12);
+    // Mean-of-per-tick-ratios would give ~0.255 — the vehicle-time definition
+    // must NOT produce that.
+    expect(result.gridlockRatio).toBeLessThan(0.05);
   });
 
   it("counts signal phase changes", () => {
@@ -100,7 +166,7 @@ describe("metrics accumulation", () => {
     const metrics = createMetricsAccumulator();
     for (let tick = 0; tick < 13; tick += 1) {
       stepTraffic(city, state);
-      recordTick(metrics, city, state);
+      recordTick(metrics, city, state, DT);
     }
     // tick 10 green->yellow, tick 12 yellow->all-red, tick 13 all-red->green
     const result = computeMetrics(metrics, state);

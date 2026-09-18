@@ -2,16 +2,24 @@
  * Core metrics (PRD §14) — accumulated from explicit simulation ticks.
  *
  * Definitions (fixed once, used consistently):
- * - Trip/wait statistics come from COMPLETED vehicles only: every arrival is
- *   recorded exactly once at the moment it happens, so the numbers are stable
- *   for any run length. Vehicles still en route at run end are excluded.
+ * - TRIP performance uses the COMPLETED population: every arrival is recorded
+ *   exactly once at the moment it happens, so trip statistics are stable for
+ *   any run length.
+ * - WAIT pressure uses the ENTIRE successfully spawned population (pending,
+ *   moving, queued and arrived vehicles currently in TrafficState): each
+ *   vehicle's current waitTimeMs feeds average/P95/max, so a badly starved
+ *   vehicle that has not arrived yet still shows up. Failed route requests
+ *   that never became vehicles do not belong to the wait population.
  * - P95 wait uses the nearest-rank definition: sort the waits, take index
  *   ceil(0.95 * n) - 1. Empty population -> 0.
  * - Throughput = completed trips / (simulated time in minutes).
- * - Gridlock ratio = time-average of blocked/active over every tick that had
- *   at least one active (non-arrived) vehicle, where "blocked" means queued or
- *   pending at tick end (i.e. unable to advance due to signal/capacity/entry
- *   constraints). No active vehicles at all -> 0.
+ * - Gridlock ratio is VEHICLE-TIME weighted:
+ *       totalBlockedVehicleTime / totalActiveVehicleTime
+ *   where each post-step sample adds activeCount * dtMs to the active total
+ *   and blockedCount * dtMs to the blocked total ("blocked" = queued or
+ *   pending at tick end; "active" = spawned and not yet arrived). This weights
+ *   ticks by how many vehicles were actually exposed to conditions. No active
+ *   vehicle time at all -> 0. Per-tick ratios are never averaged.
  * - averageRoadOccupancy = per-tick total occupancy units divided by the
  *   number of directed roads, averaged over ticks; maxRoadOccupancy is the
  *   peak units seen on any single directed road.
@@ -47,8 +55,10 @@ export interface MetricsAccumulator {
   arrivals: ArrivalRecord[];
   recordedArrivalIds: Set<VehicleId>;
   ticks: number;
-  congestionSampleTicks: number;
-  congestionRatioSum: number;
+  /** Σ activeCount * dtMs over all samples (vehicle-time exposure). */
+  activeVehicleMs: number;
+  /** Σ blockedCount * dtMs over all samples (vehicle-time blocked). */
+  blockedVehicleMs: number;
   occupancyPerTickSum: number;
   maxRoadOccupancy: number;
   roadCount: number;
@@ -93,8 +103,8 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     arrivals: [],
     recordedArrivalIds: new Set(),
     ticks: 0,
-    congestionSampleTicks: 0,
-    congestionRatioSum: 0,
+    activeVehicleMs: 0,
+    blockedVehicleMs: 0,
     occupancyPerTickSum: 0,
     maxRoadOccupancy: 0,
     roadCount: 0,
@@ -113,12 +123,20 @@ export function recordArrival(accumulator: MetricsAccumulator, record: ArrivalRe
   accumulator.arrivals.push(record);
 }
 
-/** Samples congestion, occupancy and signal transitions at the end of a tick. */
+/**
+ * Samples congestion, occupancy and signal transitions at the end of a tick.
+ * The step duration is explicit: vehicle-time exposure is accumulated as
+ * count * dtMs per sample.
+ */
 export function recordTick(
   accumulator: MetricsAccumulator,
   city: City,
   state: TrafficState,
+  dtMs: number,
 ): void {
+  if (!Number.isFinite(dtMs) || dtMs <= 0) {
+    throw new RangeError(`dtMs must be a finite positive number, received ${dtMs}`);
+  }
   accumulator.ticks += 1;
   accumulator.roadCount = city.roads.length;
   let active = 0;
@@ -132,10 +150,8 @@ export function recordTick(
       blocked += 1;
     }
   }
-  if (active > 0) {
-    accumulator.congestionSampleTicks += 1;
-    accumulator.congestionRatioSum += blocked / active;
-  }
+  accumulator.activeVehicleMs += active * dtMs;
+  accumulator.blockedVehicleMs += blocked * dtMs;
   let units = 0;
   for (const value of state.occupancy.values()) {
     units += value;
@@ -160,7 +176,8 @@ export function computeMetrics(
   state: TrafficState,
 ): SimulationMetrics {
   const tripTimes = accumulator.arrivals.map((arrival) => arrival.tripTimeMs);
-  const waits = accumulator.arrivals.map((arrival) => arrival.waitTimeMs);
+  // Wait pressure covers the whole spawned population, not only arrivals.
+  const waits = state.vehicles.map((vehicle) => vehicle.waitTimeMs);
   const distances = accumulator.arrivals.map((arrival) => arrival.routeDistance);
   let maxWaitTimeMs = 0;
   for (const wait of waits) {
@@ -177,8 +194,8 @@ export function computeMetrics(
     maxWaitTimeMs,
     throughputPerMinute: throughputPerMinute(accumulator.arrivals.length, state.timeMs),
     gridlockRatio:
-      accumulator.congestionSampleTicks > 0
-        ? accumulator.congestionRatioSum / accumulator.congestionSampleTicks
+      accumulator.activeVehicleMs > 0
+        ? accumulator.blockedVehicleMs / accumulator.activeVehicleMs
         : 0,
     averageRoadOccupancy:
       accumulator.ticks > 0 && accumulator.roadCount > 0
