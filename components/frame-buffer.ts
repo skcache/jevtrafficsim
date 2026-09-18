@@ -50,7 +50,11 @@ export function pushFrame(
   snapshot: PresentationSnapshot,
   receivedAtMs: number,
 ): void {
-  buffer.previous = buffer.current;
+  // A reset (same-seed restart) restarts the clock: interpolating between the
+  // finished run's last frame and the new run's first would draw nonsense for
+  // one frame interval, so the baseline is dropped instead.
+  const restarted = buffer.current !== null && snapshot.timeMs <= buffer.current.timeMs;
+  buffer.previous = restarted ? null : buffer.current;
   buffer.current = snapshot;
   buffer.currentReceivedAtMs = receivedAtMs;
 }

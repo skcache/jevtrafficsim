@@ -12,13 +12,17 @@ import type { RoadId } from "@/sim/types";
 /** Wait-heat thresholds (blocked time, ms) — the product's congestion signal. */
 export const WAIT_HEAT_THRESHOLDS_MS = [5_000, 15_000, 30_000, 60_000] as const;
 export type WaitHeatBucket = 0 | 1 | 2 | 3 | 4;
-/** neutral -> warm -> orange -> red -> deep red */
+/**
+ * Warm ink ramp (blocked time): neutral -> amber -> orange -> red -> deep red.
+ * Bucket 1 is deliberately darker than the highway gold (#F8CE8B / #D9A85C)
+ * so a waiting vehicle never disappears on an arterial.
+ */
 export const WAIT_HEAT_COLORS = [
-  [76, 82, 94],
-  [214, 158, 46],
-  [222, 122, 39],
-  [206, 68, 46],
-  [150, 30, 30],
+  [74, 70, 64],
+  [184, 134, 42],
+  [192, 90, 24],
+  [163, 51, 40],
+  [110, 27, 26],
 ] as const;
 
 export function waitHeatBucket(blockedWaitMs: number): WaitHeatBucket {

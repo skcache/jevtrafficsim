@@ -32,6 +32,11 @@ interface FeatureCollection<G> {
   readonly features: readonly Feature<G>[];
 }
 
+interface PointGeometry {
+  readonly type: "Point";
+  readonly coordinates: LngLat;
+}
+
 interface PolygonGeometry {
   readonly type: "Polygon";
   readonly coordinates: readonly (readonly LngLat[])[];
@@ -60,6 +65,13 @@ function polygonFeature(
   return { type: "Feature", properties, geometry: { type: "Polygon", coordinates: [closedRing(points)] } };
 }
 
+function pointFeature(
+  point: Point,
+  properties: Record<string, string | number | boolean>,
+): Feature<PointGeometry> {
+  return { type: "Feature", properties, geometry: { type: "Point", coordinates: toLngLat(point) } };
+}
+
 function lineFeature(
   points: readonly Point[],
   properties: Record<string, string | number | boolean>,
@@ -74,11 +86,44 @@ export interface ShowcaseLabels {
   readonly kind: "district" | "landmark";
 }
 
+/** Ray-cast point-in-polygon (deterministic, no dependencies). */
+function pointInPolygon(point: readonly [number, number], polygon: readonly Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if (yi > point[1] !== yj > point[1]) {
+      const x = ((xj - xi) * (point[1] - yi)) / (yj - yi) + xi;
+      if (point[0] < x) {
+        inside = !inside;
+      }
+    }
+  }
+  return inside;
+}
+
+/**
+ * Crude inward offset: scales the polygon about its centroid so canopy blobs
+ * keep clear of the park edge. Parks are convex enough for this to hold.
+ */
+function insetRing(polygon: readonly Point[], metres: number): Point[] {
+  const cx = polygon.reduce((sum, [x]) => sum + x, 0) / polygon.length;
+  const cy = polygon.reduce((sum, [, y]) => sum + y, 0) / polygon.length;
+  return polygon.map(([x, y]) => {
+    const dx = x - cx;
+    const dy = y - cy;
+    const length = Math.hypot(dx, dy) || 1;
+    const scale = Math.max(0, (length - metres) / length);
+    return [cx + dx * scale, cy + dy * scale];
+  });
+}
+
 export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
   readonly districts: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
   readonly parks: FeatureCollection<PolygonGeometry>;
+  readonly parkCanopy: FeatureCollection<PointGeometry>;
   readonly buildings: FeatureCollection<PolygonGeometry>;
   readonly roadsLocal: FeatureCollection<LineGeometry>;
   readonly roadsArterial: FeatureCollection<LineGeometry>;
@@ -119,14 +164,48 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
     type: "FeatureCollection",
     features: model.parks.map((polygon, index) => polygonFeature(polygon, { id: `park-${index}` })),
   };
+  // Canopy: deterministic groves inside park polygons (a grid with a fixed
+  // pattern), so parks read as planted ground rather than flat green squares.
+  const canopyFeatures: Feature<PointGeometry>[] = [];
+  for (const polygon of model.parks) {
+    const xs = polygon.map(([x]) => x);
+    const ys = polygon.map(([, y]) => y);
+    const step = 26;
+    for (let x = Math.min(...xs) + step / 2; x < Math.max(...xs); x += step) {
+      for (let y = Math.min(...ys) + step / 2; y < Math.max(...ys); y += step) {
+        const ix = Math.round((x - Math.min(...xs)) / step);
+        const iy = Math.round((y - Math.min(...ys)) / step);
+        if ((ix * 7 + iy * 13) % 5 >= 3) {
+          continue;
+        }
+        if (!pointInPolygon([x, y], polygon) || !pointInPolygon([x, y], insetRing(polygon, 9))) {
+          continue;
+        }
+        canopyFeatures.push(pointFeature([x, y], { r: 6 + (((ix * 3 + iy * 5) % 3) * 2) }));
+      }
+    }
+  }
+  const parkCanopy: FeatureCollection<PointGeometry> = {
+    type: "FeatureCollection",
+    features: canopyFeatures,
+  };
+
   const buildings: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.buildings.map((building) =>
-      polygonFeature(building.polygon, {
+    features: model.buildings.map((building) => {
+      // Shoelace area (m²) drives the three building tones in the map style.
+      let area = 0;
+      for (let i = 0, j = building.polygon.length - 1; i < building.polygon.length; j = i, i += 1) {
+        const [xi, yi] = building.polygon[i];
+        const [xj, yj] = building.polygon[j];
+        area += xj * yi - xi * yj;
+      }
+      return polygonFeature(building.polygon, {
         district: building.district,
         prominent: building.prominent,
-      }),
-    ),
+        area: Math.round(Math.abs(area) / 2),
+      });
+    }),
   };
   const roadsLocal: FeatureCollection<LineGeometry> = { type: "FeatureCollection", features: [] };
   const roadsArterial: FeatureCollection<LineGeometry> = { type: "FeatureCollection", features: [] };
@@ -160,6 +239,7 @@ export function buildShowcaseGeoJson(model: ShowcaseMapModel): ShowcaseGeoJson {
     districts,
     water,
     parks,
+    parkCanopy,
     buildings,
     roadsLocal: { ...roadsLocal, features: local },
     roadsArterial: { ...roadsArterial, features: arterial },

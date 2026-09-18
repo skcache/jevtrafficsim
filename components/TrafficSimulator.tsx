@@ -1,14 +1,16 @@
 "use client";
 
 /**
- * TrafficSimulator (Task 11 visual correction): the single client-side owner
- * of the worker and the product composition.
+ * TrafficSimulator (Task 11 polish pass): the single client-side owner of the
+ * worker and the product composition.
  *
- * Landing → configuration → "Enter City" (INIT) → camera flies into Central →
- * minimal live chrome. The map surface compiles the same deterministic
- * showcase geography the worker simulates; no EngineState ever crosses into
- * React. Presentation frames live in a ref shared with the map's rAF loop.
+ * Landing (city seen whole) → configuration → "Enter City" (INIT) → the map
+ * sharpens and the camera flies into Central → minimal live chrome fades in
+ * behind the flight. The map surface compiles the same deterministic showcase
+ * geography the worker simulates; no EngineState ever crosses into React.
+ * Presentation frames live in a ref shared with the map's rAF loop.
  */
+import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
 import { showcaseCity } from "@/cities/showcase-city";
 import type { CitySize, TrafficLevel } from "@/sim/types";
@@ -108,6 +110,8 @@ export function TrafficSimulator() {
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
   const citySize = useUiStore((state) => state.citySize);
+  /** True while the landing's background run is the one on screen. */
+  const prewarmRef = useRef(false);
 
   useEffect(() => {
     const worker = new Worker(new URL("../worker/simulation.worker.ts", import.meta.url), {
@@ -122,14 +126,19 @@ export function TrafficSimulator() {
         case "READY": {
           const model = showcaseCity(data.scaleIndex);
           setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
+          if (prewarmRef.current) {
+            // Landing preview: live traffic behind the title, no chrome.
+            prewarmRef.current = false;
+            break;
+          }
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
           lastScaleRef.current = data.scaleIndex;
           store.applyReady(data.config, data.scaleLabel);
           store.setPhase("city");
           if (entering || scaleChanged) {
-            // Deliberate transition: the camera flies into Central while the
-            // onboarding surface fades away.
+            // The press owns the transition: the camera flies into Central
+            // while the onboarding surface fades away.
             mapHandleRef.current?.flyToCentral();
           }
           break;
@@ -159,6 +168,17 @@ export function TrafficSimulator() {
       store.setError(event.message || "simulation worker crashed");
       store.setRunning(false);
     };
+    // Prewarm the landing with the default scenario so the city is alive
+    // behind the title; Enter City always starts a fresh deterministic run.
+    const defaults = useUiStore.getState();
+    prewarmRef.current = true;
+    worker.postMessage({
+      type: "INIT",
+      citySize: defaults.citySize,
+      trafficLevel: defaults.trafficLevel,
+      controller: defaults.controller,
+      seed: defaults.seed,
+    } satisfies WorkerCommand);
     return () => {
       worker.terminate();
       workerRef.current = null;
@@ -237,6 +257,7 @@ export function TrafficSimulator() {
     const store = useUiStore.getState();
     store.setError(null);
     store.setRunComplete(false);
+    store.resetMetrics();
     send({ type: "RESET", mode: "same-seed" });
     store.setRunning(true);
   }, [send]);
@@ -245,6 +266,7 @@ export function TrafficSimulator() {
     const store = useUiStore.getState();
     store.setError(null);
     store.setRunComplete(false);
+    store.resetMetrics();
     send({ type: "RESET", mode: "new-seed" });
     store.setRunning(true);
   }, [send]);
@@ -260,6 +282,18 @@ export function TrafficSimulator() {
     mapHandleRef.current?.fitCity();
   }, []);
 
+  const onZoomIn = useCallback(() => {
+    mapHandleRef.current?.zoomIn();
+  }, []);
+
+  const onZoomOut = useCallback(() => {
+    mapHandleRef.current?.zoomOut();
+  }, []);
+
+  const onChangeSetup = useCallback(() => {
+    useUiStore.getState().setPhase("config");
+  }, []);
+
   const handleMap = useCallback((handle: MapHandle | null) => {
     mapHandleRef.current = handle;
   }, []);
@@ -268,28 +302,34 @@ export function TrafficSimulator() {
   const live = phase === "city";
 
   return (
-    <div className="absolute inset-0 overflow-hidden bg-[#f6f2ea] text-neutral-800">
-      <div
-        className={`absolute inset-0 transition-[filter,opacity] duration-[1400ms] ease-out ${
-          live ? "blur-0 opacity-100" : "opacity-90 blur-[5px]"
-        }`}
-      >
+    <MotionConfig reducedMotion="user">
+      <div className="absolute inset-0 overflow-hidden bg-paper text-ink">
         <CityMap scaleIndex={scaleIndex} frames={framesRef} live={live} onHandle={handleMap} />
+        {/* The city stays sharp; a warm wash settles the landing, nothing more. */}
+        <div
+          className={`pointer-events-none absolute inset-0 z-10 bg-paper transition-opacity duration-[900ms] ease-out ${
+            live ? "opacity-0" : "opacity-30"
+          }`}
+          aria-hidden="true"
+        />
+        <Onboarding onEnterCity={enterCity} />
+        <SimChrome
+          onPause={onPause}
+          onResume={onResume}
+          onController={onController}
+          onCitySize={onCitySize}
+          onTrafficLevel={onTrafficLevel}
+          onSeed={onSeed}
+          onRestart={onRestart}
+          onNewScenario={onNewScenario}
+          onZoomIn={onZoomIn}
+          onZoomOut={onZoomOut}
+          onHome={onHome}
+          onChangeSetup={onChangeSetup}
+        />
+        <MetricsHUD />
+        <IncidentBar onIncident={onIncident} />
       </div>
-      <Onboarding onEnterCity={enterCity} />
-      <SimChrome
-        onPause={onPause}
-        onResume={onResume}
-        onController={onController}
-        onCitySize={onCitySize}
-        onTrafficLevel={onTrafficLevel}
-        onSeed={onSeed}
-        onRestart={onRestart}
-        onNewScenario={onNewScenario}
-        onHome={onHome}
-      />
-      <MetricsHUD />
-      <IncidentBar onIncident={onIncident} />
-    </div>
+    </MotionConfig>
   );
 }

@@ -1,9 +1,11 @@
 /**
- * Vehicle icon atlas (Task 11 visual correction): clean top-down silhouettes
+ * Vehicle icon atlas (Task 11 polish pass): clean top-down silhouettes
  * generated locally on an offscreen canvas — no image assets, no network.
  *
- * Icons are drawn as WHITE masks so deck.gl can tint them with wait-heat
- * colors. Browser-only (document); returns null when there is no DOM.
+ * Icons are drawn as WHITE masks so deck.gl can tint them: the body layer
+ * paints class colours and the ring layer (the same sprite, drawn slightly
+ * larger) paints the wait-heat halo. Browser-only (document); returns null
+ * when there is no DOM.
  */
 import type { VehicleType } from "@/sim/types";
 
@@ -20,8 +22,6 @@ export interface VehicleIconDefinition {
 export interface VehicleIconSet {
   readonly atlas: string;
   readonly mapping: Record<VehicleType, VehicleIconDefinition>;
-  /** Pixel length of each class at reference zoom (car / truck / bicycle). */
-  readonly lengths: Record<VehicleType, number>;
 }
 
 const CELL_WIDTH = 96;
@@ -29,36 +29,40 @@ const CELL_HEIGHT = 48;
 
 function drawCar(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
   ctx.beginPath();
-  ctx.roundRect(cx - 37, cy - 15, 74, 30, 10);
+  ctx.roundRect(cx - 37, cy - 14.5, 74, 29, 10);
   ctx.fill();
-  // Windshield + rear window cut-outs make the silhouette read as a car.
+  // Glass cut-outs: a car reads from above by its windshield and rear window.
   ctx.globalCompositeOperation = "destination-out";
   ctx.beginPath();
-  ctx.roundRect(cx - 6, cy - 12, 16, 24, 4);
+  ctx.roundRect(cx + 4, cy - 12, 15, 24, 4);
   ctx.fill();
   ctx.beginPath();
-  ctx.roundRect(cx - 26, cy - 11, 12, 22, 3);
+  ctx.roundRect(cx - 24, cy - 11, 11, 22, 3);
+  ctx.fill();
+  // Roof line: one thin transverse cut keeps the cabin from reading as a slab.
+  ctx.beginPath();
+  ctx.rect(cx - 8, cy - 13, 3, 26);
   ctx.fill();
   ctx.globalCompositeOperation = "source-over";
 }
 
 function drawTruck(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
   ctx.beginPath();
-  ctx.roundRect(cx - 43, cy - 17, 86, 34, 7);
+  ctx.roundRect(cx - 43, cy - 16.5, 86, 33, 6);
   ctx.fill();
   ctx.globalCompositeOperation = "destination-out";
-  // Cab / trailer split.
+  // Cab / trailer split — the whole point of a truck silhouette.
   ctx.beginPath();
-  ctx.rect(cx + 6, cy - 16, 5, 32);
+  ctx.rect(cx + 2, cy - 16, 5, 32);
   ctx.fill();
   ctx.beginPath();
-  ctx.roundRect(cx - 36, cy - 13, 10, 26, 3);
+  ctx.roundRect(cx + 9, cy - 13, 12, 26, 3);
   ctx.fill();
   ctx.globalCompositeOperation = "source-over";
 }
 
 function drawBicycle(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
-  ctx.lineWidth = 3.4;
+  ctx.lineWidth = 3.6;
   ctx.strokeStyle = "#ffffff";
   ctx.beginPath();
   ctx.arc(cx - 12, cy, 9, 0, Math.PI * 2);
@@ -68,13 +72,13 @@ function drawBicycle(ctx: CanvasRenderingContext2D, cx: number, cy: number): voi
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(cx - 12, cy);
-  ctx.lineTo(cx, cy - 9);
+  ctx.lineTo(cx - 1, cy - 8);
   ctx.lineTo(cx + 12, cy);
-  ctx.moveTo(cx, cy - 9);
-  ctx.lineTo(cx, cy);
+  ctx.moveTo(cx - 1, cy - 8);
+  ctx.lineTo(cx - 1, cy);
   ctx.stroke();
   ctx.beginPath();
-  ctx.roundRect(cx - 4, cy - 15, 9, 7, 3);
+  ctx.roundRect(cx - 5, cy - 14.5, 9, 7, 3);
   ctx.fill();
 }
 
@@ -93,45 +97,21 @@ export function createVehicleIcons(): VehicleIconSet | null {
   drawCar(ctx, CELL_WIDTH * 0.5, CELL_HEIGHT / 2);
   drawTruck(ctx, CELL_WIDTH * 1.5, CELL_HEIGHT / 2);
   drawBicycle(ctx, CELL_WIDTH * 2.5, CELL_HEIGHT / 2);
-  const mapping: Record<VehicleType, VehicleIconDefinition> = {
-    car: {
-      x: 0,
-      y: 0,
-      width: CELL_WIDTH,
-      height: CELL_HEIGHT,
-      anchorX: CELL_WIDTH / 2,
-      anchorY: CELL_HEIGHT / 2,
-      mask: true,
-    },
-    truck: {
-      x: CELL_WIDTH,
-      y: 0,
-      width: CELL_WIDTH,
-      height: CELL_HEIGHT,
-      anchorX: CELL_WIDTH / 2,
-      anchorY: CELL_HEIGHT / 2,
-      mask: true,
-    },
-    bicycle: {
-      x: CELL_WIDTH * 2,
-      y: 0,
-      width: CELL_WIDTH,
-      height: CELL_HEIGHT,
-      anchorX: CELL_WIDTH / 2,
-      anchorY: CELL_HEIGHT / 2,
-      mask: true,
-    },
-  };
+  const cell = (index: number): VehicleIconDefinition => ({
+    x: CELL_WIDTH * index,
+    y: 0,
+    width: CELL_WIDTH,
+    height: CELL_HEIGHT,
+    anchorX: CELL_WIDTH / 2,
+    anchorY: CELL_HEIGHT / 2,
+    mask: true,
+  });
   return {
     atlas: canvas.toDataURL("image/png"),
-    mapping,
-    // Screen-space goals at close zoom: car 10-12 px, truck 15-18 px, bike 6-8 px.
-    lengths: { car: 12, truck: 18, bicycle: 8 },
+    mapping: {
+      car: cell(0),
+      truck: cell(1),
+      bicycle: cell(2),
+    },
   };
-}
-
-/** Zoom-dependent icon scale with readable minimums at whole-city zoom. */
-export function vehicleSizeScale(zoom: number): number {
-  const t = Math.min(Math.max((zoom - 12) / 4.5, 0), 1);
-  return 0.62 + 0.38 * t;
 }

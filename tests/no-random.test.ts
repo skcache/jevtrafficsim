@@ -71,6 +71,7 @@ describe("sim/ + controllers/ environment discipline", () => {
       "render/interpolate.ts",
       "render/showcase-geometry.ts",
       "render/showcase-geojson.ts",
+      "render/visuals.ts",
       "components/ui-model.ts",
     ];
     const forbidden = /from\s+["'](react|react-dom|next\/|maplibre-gl|\@deck\.gl|zustand|motion)/;

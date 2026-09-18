@@ -3,6 +3,36 @@ import { compileShowcaseCity } from "@/cities/showcase-city";
 import { buildShowcaseGeoJson, toLngLat } from "@/render/showcase-geojson";
 import { METRES_PER_DEGREE } from "@/render/showcase-geojson";
 
+describe("park canopy", () => {
+  it("is deterministic and keeps every blob inside its park", () => {
+    const model = compileShowcaseCity(4);
+    const first = buildShowcaseGeoJson(model).parkCanopy;
+    const second = buildShowcaseGeoJson(model).parkCanopy;
+    expect(first.features.length).toBeGreaterThan(10);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    for (const feature of first.features) {
+      const [lng, lat] = feature.geometry.coordinates;
+      const inside = model.parks.some((polygon) => {
+        let hit = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+          const [xi, yi] = polygon[i];
+          const [xj, yj] = polygon[j];
+          const [px, py] = toLngLat([xi, yi]);
+          const [qx, qy] = toLngLat([xj, yj]);
+          if (py > lat !== qy > lat) {
+            const crossX = ((qx - px) * (lat - py)) / (qy - py) + px;
+            if (lng < crossX) {
+              hit = !hit;
+            }
+          }
+        }
+        return hit;
+      });
+      expect(inside, `canopy blob at ${lng},${lat} outside every park`).toBe(true);
+    }
+  });
+});
+
 describe("showcase GeoJSON", () => {
   it("emits valid GeoJSON for every scale", () => {
     for (const scale of [0, 1, 2, 3, 4]) {
@@ -12,6 +42,10 @@ describe("showcase GeoJSON", () => {
       expect(geo.districts.features.length).toBe(model.districts.length);
       expect(geo.water.features.length).toBeGreaterThan(0);
       expect(geo.buildings.features.length).toBeGreaterThan(10);
+      expect(geo.parkCanopy.features.length).toBeGreaterThan(0);
+      for (const feature of geo.parkCanopy.features) {
+        expect(feature.geometry.type).toBe("Point");
+      }
       for (const collection of [
         geo.land,
         geo.districts,
