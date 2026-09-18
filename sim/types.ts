@@ -1,0 +1,83 @@
+/**
+ * Core world-model types shared by the simulation, controllers, worker,
+ * renderer, and headless benchmark.
+ *
+ * Framework-independent by contract: nothing under `sim/` may import React,
+ * Canvas, or any browser API (PRD §3, §7).
+ *
+ * Shapes mirror the PRD world model (§7.1) and vehicle model (§8) exactly.
+ * Only contracts the current core requires live here; incident, metric, and
+ * Jev policy types are introduced by the tasks that implement them (PRD §26:
+ * no empty abstractions).
+ */
+
+export type IntersectionId = number;
+export type RoadId = number;
+export type VehicleId = number;
+
+/** Road classification (PRD §7.1). */
+export type RoadKind = "local" | "arterial" | "highway" | "bridge";
+
+/** How an intersection is controlled (PRD §7.1, §11). */
+export type IntersectionControl = "signal" | "stop" | "uncontrolled";
+
+/** Vehicle classes with distinct footprint/speed behaviour (PRD §6.4). */
+export type VehicleType = "car" | "truck" | "bicycle";
+
+/** Vehicle lifecycle state (PRD §8). */
+export type VehicleState = "moving" | "queued" | "rerouting" | "arrived";
+
+/** The three selectable controllers (PRD §4.1, §12). */
+export type ControllerType = "fixed" | "adaptive" | "jev";
+
+/** Selectable city sizes (PRD §4.1, §5). */
+export type CitySize =
+  | "small"
+  | "small-medium"
+  | "medium"
+  | "medium-large"
+  | "large";
+
+/** Selectable traffic levels (PRD §4.1). */
+export type TrafficLevel = "light" | "everyday" | "rush-hour";
+
+/** Node = intersection (PRD §7.1). */
+export interface Intersection {
+  id: IntersectionId;
+  x: number;
+  y: number;
+  incoming: RoadId[];
+  outgoing: RoadId[];
+  control: IntersectionControl;
+  regionId: number;
+}
+
+/** Directed edge = traversable road segment (PRD §7.1). */
+export interface Road {
+  id: RoadId;
+  from: IntersectionId;
+  to: IntersectionId;
+  length: number;
+  lanes: number;
+  speedLimit: number;
+  capacity: number;
+  kind: RoadKind;
+  closed: boolean;
+}
+
+/** A vehicle moving along graph edges (PRD §8). */
+export interface Vehicle {
+  id: VehicleId;
+  type: VehicleType;
+  origin: IntersectionId;
+  destination: IntersectionId;
+  route: RoadId[];
+  routeIndex: number;
+  roadId: RoadId;
+  /** 0..1 progress along the current road. */
+  progress: number;
+  speed: number;
+  waitTimeMs: number;
+  tripTimeMs: number;
+  state: VehicleState;
+}
