@@ -75,14 +75,12 @@ export function signalTier(zoom: number): SignalTier {
   return zoom < 16.5 ? "mid" : "close";
 }
 
-/** 0..1 opacity for the tier, ramped over its first 0.6 zoom of existence. */
+/** 0..1 opacity for signal state. Once visible it never fades back out. */
 export function signalTierOpacity(zoom: number): number {
-  const tier = signalTier(zoom);
-  if (tier === "hidden") {
+  if (signalTier(zoom) === "hidden") {
     return 0;
   }
-  const start = tier === "mid" ? 15.8 : 16.5;
-  return Math.min(1, Math.max(0, (zoom - start) / 0.4));
+  return Math.min(1, Math.max(0, (zoom - 15.8) / 0.4));
 }
 
 /* ------------------------------------------------------------------ */
