@@ -172,8 +172,6 @@ export interface ShowcaseGeoJson {
   readonly roadsLocal: FeatureCollection<LineGeometry>;
   readonly roadsArterial: FeatureCollection<LineGeometry>;
   readonly roadsHighway: FeatureCollection<LineGeometry>;
-  /** Short unnamed stubs: real roads, shown only when the camera is close. */
-  readonly roadsDetail: FeatureCollection<LineGeometry>;
   readonly bridges: FeatureCollection<LineGeometry>;
   readonly landmarks: FeatureCollection<PolygonGeometry>;
   readonly labels: FeatureCollection<PointGeometry>;
@@ -278,7 +276,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const local: Feature<LineGeometry>[] = [];
   const arterial: Feature<LineGeometry>[] = [];
   const highway: Feature<LineGeometry>[] = [];
-  const detail: Feature<LineGeometry>[] = [];
   const bridge: Feature<LineGeometry>[] = [];
   for (const piece of model.streets) {
     // One line per PHYSICAL street piece: the two directed roads are the same
@@ -303,10 +300,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       // Surface-street turn channels are routing topology, not cartography.
       // Hiding the line makes a vehicle read as turning through the junction
       // instead of driving along a tiny tan/white pseudo-ramp.
-      continue;
-    }
-    if (presentation === "detail") {
-      detail.push(feature);
       continue;
     }
     // Hierarchy follows the actual road family. In particular, a generic
@@ -340,7 +333,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     roadsLocal: { ...roadsLocal, features: local },
     roadsArterial: { ...roadsArterial, features: arterial },
     roadsHighway: { ...roadsHighway, features: highway },
-    roadsDetail: { type: "FeatureCollection", features: detail },
     bridges: { ...bridges, features: bridge },
     landmarks: {
       type: "FeatureCollection",
