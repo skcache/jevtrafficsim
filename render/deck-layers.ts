@@ -402,8 +402,8 @@ export function buildSignalLayers(
         });
         if (zoom >= SIGNAL_HEAD_MINZOOM) {
           const headSample = applyLaneOffset(
-            samplePathIndex(index, Math.max(0, stopProgress - 1.4)),
-            arm.laneOffsetM + arm.halfWidthM + 1.1,
+            samplePathIndex(index, Math.min(index.total, stopProgress + 0.35)),
+            arm.laneOffsetM + arm.halfWidthM + 1.45,
           );
           heads.push({
             position: toLngLat(projection, headSample.x, headSample.y),
@@ -416,15 +416,16 @@ export function buildSignalLayers(
 
   const layers: Layer[] = [];
   if (bars.length > 0) {
-    // One geometry, two strokes: a quiet neutral keyline under the semantic
-    // state color. This reads as a single stop/go gate on both white roads and
-    // warm highway surfaces, not as the old pair of mysterious parallel lines.
+    // One geometry, two strokes: a dark physical stop-line keyline beneath the
+    // semantic state color. The user sees one deliberate control gate exactly
+    // where traffic stops, rather than detached red/green whiskers around a
+    // junction.
     layers.push(
       new PathLayer<Bar>({
         id: "signals-state-gate-backing",
         data: bars,
         getPath: (bar) => bar.path,
-        getColor: [255, 253, 247, Math.round(230 * opacity)],
+        getColor: [52, 55, 58, Math.round(205 * opacity)],
         getWidth: signalGateBackingWidthPx(zoom),
         widthUnits: "pixels",
         capRounded: true,
