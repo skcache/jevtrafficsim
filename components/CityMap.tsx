@@ -23,14 +23,13 @@ import {
   setWorkerUrl,
   type GeoJSONSource,
   type IControl,
-  type LayerSpecification,
   type StyleSpecification,
 } from "maplibre-gl";
 import { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
-import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
+import { metricToLngLat, type MapModel } from "@/cities/map-model";
 import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
 import { packQueues } from "@/render/queue-packing";
 import {
@@ -39,7 +38,15 @@ import {
   widthMetresForRoad,
 } from "@/render/road-presentation";
 import { roadPressure } from "@/render/congestion";
-import { buildLabelLayers } from "@/render/label-layers";
+import {
+  boundsLngLat as cameraBoundsLngLat,
+  centralBounds,
+  FIT_PADDING,
+  networkBounds,
+  presetPose,
+  PRESET_PADDING,
+} from "@/render/camera-presets";
+import { buildChicagoStyle } from "@/render/chicago-style";
 import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
 import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/map-geojson";
 import {
@@ -89,413 +96,9 @@ interface CityMapProps {
   onHandle?: (handle: MapHandle | null) => void;
 }
 
-/**
- * Camera bounds from the compiled geometry itself (intersections, district
- * polygons, label anchors) rather than authored numbers, so no district or
- * label is ever cropped at either end of the zoom range.
- */
-function presentationBounds(model: MapModel) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  const include = (x: number, y: number) => {
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  };
-  for (const intersection of model.city.intersections) {
-    include(intersection.x, intersection.y);
-  }
-  for (const district of model.districts) {
-    for (const [x, y] of district.rings[0]) {
-      include(x, y);
-    }
-  }
-  for (const label of model.labels) {
-    include(label.at[0], label.at[1]);
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-function boundsLngLat(
-  projection: Projection,
-  bounds: { minX: number; minY: number; maxX: number; maxY: number },
-) {
-  const [west, south] = metricToLngLat(projection, bounds.minX, bounds.minY);
-  const [east, north] = metricToLngLat(projection, bounds.maxX, bounds.maxY);
-  return [
-    [west, south],
-    [east, north],
-  ] as [[number, number], [number, number]];
-}
-
-const zoomWidth = (zFar: number, zMid: number, zClose: number) =>
-  ["interpolate", ["linear"], ["zoom"], 13, zFar, 16, zMid, 19.5, zClose] as unknown as number;
-
-/**
- * Data-driven road width: a feature's physical width in metres converted to
- * pixels at the current zoom. metresPerPixel is `K / 2^zoom`, so pixels are
- * `widthM * 2^zoom / K` — one expression, exact at every zoom, no per-zoom
- * constants. A legibility floor keeps minor streets visible when zoomed out.
- */
-const METRES_PER_PIXEL_AT_Z0 = 156543.03392 * Math.cos((41.881 * Math.PI) / 180);
-
-/**
- * Data-driven road width: a feature's physical width in metres, converted to
- * pixels at the current zoom.
- *
- * MapLibre only allows a `zoom` expression as the input of a top-level
- * `interpolate`/`step`, so the physical conversion is written as an exponential
- * interpolation with base 2 — which is exactly how metres-per-pixel behaves
- * (`K / 2^zoom`) — and each stop carries the per-feature data expression. The
- * legibility floor is folded into the stops for the same reason.
- */
-function physicalWidth(extraPx = 0): number {
-  const at = (zoom: number) => {
-    const pixels: unknown[] = [
-      "/",
-      ["*", ["get", "widthM"], 2 ** zoom],
-      METRES_PER_PIXEL_AT_Z0,
-    ];
-    const withExtra = extraPx > 0 ? ["+", pixels, extraPx] : pixels;
-    return ["max", FLOOR_PX[zoom], withExtra];
-  };
-  return [
-    "interpolate",
-    ["exponential", 2],
-    ["zoom"],
-    9,
-    at(9),
-    11,
-    at(11),
-    13,
-    at(13),
-    15,
-    at(15),
-    17,
-    at(17),
-  ] as unknown as number;
-}
-
-/** Legibility floor per zoom stop: minor streets stay visible when zoomed out. */
-const FLOOR_PX: Record<number, number> = { 9: 0.7, 11: 1.0, 13: 1.3, 15: 1.6, 17: 1.8 };
-
 function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
-  const labelLayers = buildLabelLayers();
-
-  const sources: StyleSpecification["sources"] = {
-    land: { type: "geojson", data: geo.land as never },
-    districts: { type: "geojson", data: geo.districts as never },
-    water: { type: "geojson", data: geo.water as never },
-    parks: { type: "geojson", data: geo.parks as never },
-    "park-canopy": { type: "geojson", data: geo.parkCanopy as never },
-    buildings: { type: "geojson", data: geo.buildings as never },
-    labels: { type: "geojson", data: geo.labels as never },
-    "street-labels": { type: "geojson", data: geo.streetLabels as never },
-    "roads-local": { type: "geojson", data: geo.roadsLocal as never },
-    "roads-arterial": { type: "geojson", data: geo.roadsArterial as never },
-    "roads-highway": { type: "geojson", data: geo.roadsHighway as never },
-    bridges: { type: "geojson", data: geo.bridges as never },
-    landmarks: { type: "geojson", data: geo.landmarks as never },
-  };
-  const layers: LayerSpecification[] = [
-    { id: "land", type: "fill", source: "land", paint: { "fill-color": "#f5f2eb" } },
-    {
-      id: "district-tint",
-      type: "fill",
-      source: "districts",
-      paint: {
-        "fill-color": [
-          "match",
-          ["get", "kind"],
-          "downtown",
-          "#ece1cb",
-          "civic",
-          "#f0ebdb",
-          "residential",
-          "#e4ecda",
-          "market",
-          "#f4e4c6",
-          "riverside",
-          "#e0ecec",
-          "industrial",
-          "#e6e3d8",
-          "arena",
-          "#f2e3e1",
-          "outer",
-          "#f0ece2",
-          "#f0ece2",
-        ],
-        "fill-opacity": 0.75,
-      },
-    },
-    {
-      id: "water",
-      type: "fill",
-      source: "water",
-      paint: { "fill-color": "#b4d0de" },
-    },
-    {
-      id: "water-shore",
-      type: "line",
-      source: "water",
-      paint: { "line-color": "#e2eef4", "line-width": zoomWidth(2, 3.6, 6) },
-    },
-    {
-      id: "water-bank",
-      type: "line",
-      source: "water",
-      paint: { "line-color": "#93b7c9", "line-width": zoomWidth(0.5, 1, 1.6) },
-    },
-    {
-      id: "parks",
-      type: "fill",
-      source: "parks",
-      paint: {
-        "fill-color": "#cfe0c0",
-        // Meaningful green space reads stronger than a grass sliver, and the
-        // gap widens as the camera comes down.
-        "fill-opacity": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          11,
-          ["match", ["get", "kind"], "major", 0.85, 0.25],
-          14,
-          ["match", ["get", "kind"], "major", 1, 0.6],
-        ],
-      },
-    },
-    {
-      id: "parks-edge",
-      type: "line",
-      source: "parks",
-      minzoom: 13,
-      paint: { "line-color": "#b0c998", "line-width": zoomWidth(0.5, 1.1, 1.8) },
-    },
-    {
-      id: "park-canopy",
-      type: "circle",
-      source: "park-canopy",
-      minzoom: 13.4,
-      paint: {
-        "circle-color": "#b4cf9c",
-        "circle-opacity": ["interpolate", ["linear"], ["zoom"], 13.4, 0, 14.4, 0.85],
-        "circle-radius": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          14,
-          ["*", 0.55, ["get", "r"]],
-          17.5,
-          ["get", "r"],
-        ],
-      },
-    },
-    // Buildings: three tones by footprint area, plus a long shadow at street zoom.
-    {
-      id: "buildings",
-      type: "fill",
-      source: "buildings",
-      // Far out, buildings are mass and fade hard; at neighborhood zoom the real
-      // footprints read, and street zoom keeps them subordinate to the roads.
-      minzoom: 12.4,
-      paint: {
-        // Tone steps are calibrated to the compiled footprints (median 5 100 m²,
-        // warehouses 30 000 m²): small blocks stay pale, big masses read dark.
-        "fill-color": [
-          "case",
-          ["get", "prominent"],
-          "#cfc7b4",
-          [
-            "step",
-            ["get", "area"],
-            "#e8e3d8",
-            3500,
-            "#ddd6c7",
-            9000,
-            "#d2cab7",
-          ],
-        ],
-        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 13.2, 0, 13.8, 0.9, 15.5, 1],
-      },
-    },
-    {
-      id: "buildings-shadow",
-      type: "fill",
-      source: "buildings",
-      minzoom: 16.4,
-      paint: {
-        "fill-color": "#5c5242",
-        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 16.4, 0, 17, 0.19],
-        // Arrays inside an expression must be literal, or MapLibre reads
-        // [0, 0] as an expression and rejects the whole style.
-        "fill-translate": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          16.4,
-          ["literal", [0, 0]],
-          18,
-          ["literal", [4, 5]],
-          19.5,
-          ["literal", [6, 7]],
-        ] as unknown as [number, number],
-      },
-    },
-    {
-      id: "buildings-outline",
-      type: "line",
-      source: "buildings",
-      minzoom: 15.4,
-      paint: {
-        "line-color": "#c3baa7",
-        "line-width": zoomWidth(0.3, 0.6, 0.9),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], 15.4, 0, 16, 1],
-      },
-    },
-    {
-      id: "landmarks",
-      type: "fill",
-      source: "landmarks",
-      paint: { "fill-color": "#ddd5c5", "fill-opacity": 0.95 },
-    },
-    {
-      id: "landmarks-outline",
-      type: "line",
-      source: "landmarks",
-      paint: { "line-color": "#c0b6a1", "line-width": zoomWidth(0.7, 1.3, 2) },
-    },
-    // Roads: casing + fill, local < arterial < highway (the highway must read
-    // at city zoom — it is the city's spine).
-    {
-      id: "roads-local-casing",
-      type: "line",
-      source: "roads-local",
-      paint: {
-        "line-color": "#dcd6c8",
-        "line-width": physicalWidth(1.6),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], 12.6, 0, 13.4, 1],
-      },
-    },
-    {
-      id: "roads-local",
-      type: "line",
-      source: "roads-local",
-      paint: {
-        "line-color": "#ffffff",
-        "line-width": physicalWidth(),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], 12.6, 0, 13.4, 1],
-      },
-    },
-    {
-      id: "roads-arterial-casing",
-      type: "line",
-      source: "roads-arterial",
-      paint: { "line-color": "#d3cbb8", "line-width": physicalWidth(2.0) },
-    },
-    {
-      id: "roads-arterial",
-      type: "line",
-      source: "roads-arterial",
-      paint: { "line-color": "#fffdf7", "line-width": physicalWidth() },
-    },
-    {
-      id: "roads-highway-shadow",
-      type: "line",
-      source: "roads-highway",
-      paint: {
-        "line-color": "#5c5242",
-        "line-opacity": 0.1,
-        "line-width": physicalWidth(2.6),
-        "line-translate": [1.5, 2],
-      },
-    },
-    {
-      id: "roads-highway-casing",
-      type: "line",
-      source: "roads-highway",
-      paint: { "line-color": "#d9a85c", "line-width": physicalWidth(2.6) },
-    },
-    {
-      id: "roads-highway",
-      type: "line",
-      source: "roads-highway",
-      paint: { "line-color": "#f8ce8b", "line-width": physicalWidth() },
-    },
-    {
-      id: "roads-highway-guardrail",
-      type: "line",
-      source: "roads-highway",
-      minzoom: 15,
-      paint: {
-        "line-color": "#9a7e4a",
-        "line-width": zoomWidth(0.4, 0.8, 1.2),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], 15, 0, 15.6, 0.7],
-      },
-    },
-    // Bridges: their own material (decks over water), with a water shadow.
-    {
-      id: "bridges-shadow",
-      type: "line",
-      source: "bridges",
-      minzoom: 14.6,
-      paint: {
-        "line-color": "#28404f",
-        "line-opacity": 0.1,
-        "line-width": zoomWidth(4.2, 9.4, 15),
-        "line-translate": [2, 3],
-      },
-    },
-    {
-      id: "bridges-casing",
-      type: "line",
-      source: "bridges",
-      paint: { "line-color": "#c6bca5", "line-width": zoomWidth(4.4, 9.8, 15.6) },
-    },
-    {
-      id: "bridges",
-      type: "line",
-      source: "bridges",
-      paint: { "line-color": "#fbf7ee", "line-width": zoomWidth(3.4, 7.8, 12.6) },
-    },
-    {
-      id: "road-markings",
-      type: "line",
-      source: "roads-arterial",
-      minzoom: 16.2,
-      paint: {
-        "line-color": "#f0ead9",
-        "line-width": zoomWidth(0.4, 0.8, 1.2),
-        "line-dasharray": [3, 3],
-      },
-    },
-    {
-      id: "road-markings-highway",
-      type: "line",
-      source: "roads-highway",
-      minzoom: 15.4,
-      paint: {
-        "line-color": "#ffffff",
-        "line-width": zoomWidth(0.5, 1, 1.6),
-        "line-dasharray": [4, 3],
-        "line-opacity": 0.85,
-      },
-    },
-  ];
-  return {
-    version: 8,
-    name: "jev-showcase",
-    // Local glyphs: no external font CDN, works offline like the rest of the map.
-    glyphs: "/fonts/{fontstack}/{range}.pbf",
-    sources,
-    // Labels draw last, above roads and buildings.
-    layers: [...layers, ...labelLayers],
-  };
+  return buildChicagoStyle(geo);
 }
-
 
 export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -508,6 +111,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   const liveRef = useRef(live);
+  /** `?notraffic=1`: hide every traffic primitive for a basemap review. */
+  const trafficHiddenRef = useRef(
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).has("notraffic"),
+  );
   useEffect(() => {
     liveRef.current = live;
   }, [live]);
@@ -645,18 +252,21 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
 
     const handle: MapHandle = {
       flyToCentral: (options) => {
-        map.fitBounds(boundsLngLat(projection, initialModel.centralCamera), {
-          padding: 40,
+        map.fitBounds(cameraBoundsLngLat(initialModel, centralBounds(initialModel)), {
+          padding: PRESET_PADDING,
           duration: options?.immediate ? 0 : 1500,
-          maxZoom: 18.6,
+          maxZoom: 17.4,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
       fitCity: (options) => {
-        map.fitBounds(boundsLngLat(projection, presentationBounds(initialModel)), {
-          padding: 72,
+        // The active road network, not every polygon and label anchor: the old
+        // bounds reached east across the empty lake and left Chicago small in
+        // the frame.
+        map.fitBounds(cameraBoundsLngLat(initialModel, networkBounds(initialModel)), {
+          padding: FIT_PADDING,
           duration: options?.immediate ? 0 : 1400,
-          maxZoom: 18,
+          maxZoom: 17.4,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
@@ -670,17 +280,17 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     };
 
     map.on("load", () => {
-      // Landing shows the whole city; Enter City flies into Central.
-      map.fitBounds(boundsLngLat(projection, presentationBounds(initialModel)), {
-        padding: 72,
-        duration: 0,
-        maxZoom: 18,
-      });
+      // The landing is a composed view — the river meeting the Loop — not a
+      // generic fitBounds over everything the city happens to contain.
+      const hero = presetPose("hero");
+      map.jumpTo({ center: [hero.center[0], hero.center[1]], zoom: hero.zoom });
       if (window.location.search.includes("debug")) {
         // Dev-only camera inspection hook (never rendered, URL-gated).
         (window as unknown as { __jevMap?: unknown }).__jevMap = {
           getZoom: () => map.getZoom(),
           getCenter: () => map.getCenter(),
+          fitCity: () => handle.fitCity({ immediate: true }),
+          flyToCentral: () => handle.flyToCentral({ immediate: true }),
         };
       }
       onHandle?.(handle);
@@ -700,7 +310,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
         const congestion =
-          zoomRef.current < CLOSE_TIER_MINZOOM && buffer.current
+          !trafficHiddenRef.current && zoomRef.current < CLOSE_TIER_MINZOOM && buffer.current
             ? buildCongestionLayers(
                 congestionRoadsRef.current ?? [],
                 roadPressure(buffer.current),
@@ -726,24 +336,28 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             )
           : [];
         const incidents = buildIncidentLayers(buffer.current, buffer.model, now);
-        const layers: Layer[] = [
-          ...buildVehicleLayers(
-            projection,
-            vehicles,
-            iconsRef.current ?? createVehicleIcons() ?? EMPTY_ICONS,
-            zoomRef.current,
-          ),
-          ...buildSignalLayers(
-            projection,
-            buffer.model,
-            buffer.current,
-            plansRef.current ?? new Map(),
-            buffer.paths,
-            zoomRef.current,
-          ),
-          ...incidents.layers,
-          ...congestion,
-        ];
+        // `?notraffic=1` hides every traffic primitive so the basemap can be
+        // reviewed on its own. Dev-only, never rendered, like the camera hook.
+        const layers: Layer[] = trafficHiddenRef.current
+          ? []
+          : [
+              ...buildVehicleLayers(
+                projection,
+                vehicles,
+                iconsRef.current ?? createVehicleIcons() ?? EMPTY_ICONS,
+                zoomRef.current,
+              ),
+              ...buildSignalLayers(
+                projection,
+                buffer.model,
+                buffer.current,
+                plansRef.current ?? new Map(),
+                buffer.paths,
+                zoomRef.current,
+              ),
+              ...incidents.layers,
+              ...congestion,
+            ];
         overlayRef.current?.setProps({ layers });
         syncPlates(incidents.extras.plates);
         if (window.location.search.includes("debug")) {
@@ -806,10 +420,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         source?.setData(data as never);
       };
       setData("land", current.land);
-      setData("districts", current.districts);
       setData("water", current.water);
       setData("parks", current.parks);
-      setData("park-canopy", current.parkCanopy);
       setData("buildings", current.buildings);
       setData("roads-local", current.roadsLocal);
       setData("roads-arterial", current.roadsArterial);

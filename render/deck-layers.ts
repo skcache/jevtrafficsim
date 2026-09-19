@@ -16,7 +16,12 @@ import { applyLaneOffset } from "./map-geometry";
 import { LANE_WIDTH_M, type MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
 import { widthPxAt } from "./road-presentation";
-import { CLOSE_TIER_MINZOOM, CROSSWALK_MINZOOM, WAIT_HEAT_MINZOOM } from "./zoom-grammar";
+import {
+  CLOSE_TIER_MINZOOM,
+  CROSSWALK_MINZOOM,
+  VEHICLE_MINZOOM,
+  WAIT_HEAT_MINZOOM,
+} from "./zoom-grammar";
 import { samplePathIndex } from "@/cities/paths";
 import { deriveApproachGroups } from "@/sim/signals";
 import type { RoadId } from "@/sim/types";
@@ -159,7 +164,9 @@ export function buildVehicleLayers(
   icons: VehicleIconSet,
   zoom: number,
 ): Layer[] {
-  if (vehicles.length === 0) {
+  if (vehicles.length === 0 || zoom < VEHICLE_MINZOOM) {
+    // Far zoom is the congestion overlay's job: individual glyphs there were
+    // visual noise rather than information.
     return [];
   }
   // Wait heat is a close-zoom instrument. Further out, individual heat rings

@@ -8,7 +8,6 @@
  * Framework-free and deterministic.
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
-import { pointInPolygon } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
 
 export type LngLat = readonly [number, number];
@@ -109,28 +108,48 @@ export interface ShowcaseLabels {
 
 /** Ray-cast point-in-polygon (deterministic, no dependencies). */
 
+/* ------------------------------------------------------------------ */
+/* Polygon debris rules                                                */
+/* ------------------------------------------------------------------ */
+
 /**
- * Crude inward offset: scales the polygon about its centroid so canopy blobs
- * keep clear of the park edge. Parks are convex enough for this to hold.
+ * Geometry that is measurably debris — a clipping fragment or a simplification
+ * artifact — is dropped before it reaches the style. The rules are deliberately
+ * about SIZE and THINNESS, never about shape: Chicago has plenty of legitimate
+ * triangular buildings where a diagonal avenue cuts a block, and those stay.
  */
-function insetRing(polygon: readonly Point[], metres: number): Point[] {
-  const cx = polygon.reduce((sum, [x]) => sum + x, 0) / polygon.length;
-  const cy = polygon.reduce((sum, [, y]) => sum + y, 0) / polygon.length;
-  return polygon.map(([x, y]) => {
-    const dx = x - cx;
-    const dy = y - cy;
-    const length = Math.hypot(dx, dy) || 1;
-    const scale = Math.max(0, (length - metres) / length);
-    return [cx + dx * scale, cy + dy * scale];
-  });
+const BUILDING_MIN_AREA_M2 = 25;
+const SLIVER_COMPACTNESS = 0.05;
+
+/** Shoelace area of a metric ring, in m². */
+function ringArea(ring: readonly (readonly number[])[]): number {
+  let sum = 0;
+  for (let index = 0, prev = ring.length - 1; index < ring.length; prev = index, index += 1) {
+    sum += ring[prev][0] * ring[index][1] - ring[index][0] * ring[prev][1];
+  }
+  return sum / 2;
+}
+
+/** Perimeter of a metric ring, in metres. */
+function ringPerimeter(ring: readonly (readonly number[])[]): number {
+  let sum = 0;
+  for (let index = 1; index < ring.length; index += 1) {
+    sum += Math.hypot(ring[index][0] - ring[index - 1][0], ring[index][1] - ring[index - 1][1]);
+  }
+  return sum;
+}
+
+/** Polsby-Popper compactness: 1 is a circle, near 0 is a hair-thin sliver. */
+function compactnessOf(ring: readonly (readonly number[])[]): number {
+  const area = Math.abs(ringArea(ring));
+  const perimeter = ringPerimeter(ring);
+  return perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 1;
 }
 
 export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
-  readonly districts: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
   readonly parks: FeatureCollection<PolygonGeometry>;
-  readonly parkCanopy: FeatureCollection<PointGeometry>;
   readonly buildings: FeatureCollection<PolygonGeometry>;
   readonly roadsLocal: FeatureCollection<LineGeometry>;
   readonly roadsArterial: FeatureCollection<LineGeometry>;
@@ -163,12 +182,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       ),
     ],
   };
-  const districts: FeatureCollection<PolygonGeometry> = {
-    type: "FeatureCollection",
-    features: model.districts.map((district) =>
-      polygonFeature(projection, district.rings, { id: district.id, name: district.name, kind: district.kind }),
-    ),
-  };
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.water.map((entry, index) =>
@@ -181,57 +194,41 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   };
   const parks: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.parks.map((entry, index) =>
-      polygonFeature(projection, entry.rings, {
-        id: `park-${index}`,
-        kind: entry.kind,
-        areaM2: Math.round(entry.areaM2),
-      }),
-    ),
-  };
-  // Canopy: deterministic groves inside park polygons (a grid with a fixed
-  // pattern), so parks read as planted ground rather than flat green squares.
-  const canopyFeatures: Feature<PointGeometry>[] = [];
-  for (const polygon of model.parks.map((entry) => entry.rings[0])) {
-    const xs = polygon.map(([x]) => x);
-    const ys = polygon.map(([, y]) => y);
-    const step = 26;
-    for (let x = Math.min(...xs) + step / 2; x < Math.max(...xs); x += step) {
-      for (let y = Math.min(...ys) + step / 2; y < Math.max(...ys); y += step) {
-        const ix = Math.round((x - Math.min(...xs)) / step);
-        const iy = Math.round((y - Math.min(...ys)) / step);
-        if ((ix * 7 + iy * 13) % 5 >= 3) {
-          continue;
-        }
-        if (!pointInPolygon([x, y], polygon) || !pointInPolygon([x, y], insetRing(polygon, 9))) {
-          continue;
-        }
-        canopyFeatures.push(pointFeature(projection, [x, y], { r: 6 + (((ix * 3 + iy * 5) % 3) * 2) }));
-      }
-    }
-  }
-  const parkCanopy: FeatureCollection<PointGeometry> = {
-    type: "FeatureCollection",
-    features: canopyFeatures,
+    features: model.parks
+      // Hair-thin fragments are debris; small gardens are real green space and
+      // stay (the style decides when they are worth drawing).
+      .filter((entry) => compactnessOf(entry.rings[0]) >= SLIVER_COMPACTNESS)
+      .map((entry, index) =>
+        polygonFeature(projection, entry.rings, {
+          id: `park-${index}`,
+          kind: entry.kind,
+          areaM2: Math.round(entry.areaM2),
+        }),
+      ),
   };
 
   const buildings: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.buildings.map((building) => {
-      // Shoelace area (m²) drives the three building tones in the map style.
-      const outerRing = building.rings[0];
-      let area = 0;
-      for (let i = 0, j = outerRing.length - 1; i < outerRing.length; j = i, i += 1) {
-        const [xi, yi] = outerRing[i];
-        const [xj, yj] = outerRing[j];
-        area += xj * yi - xi * yj;
-      }
-      return polygonFeature(projection, building.rings, {
-        district: building.district,
-        prominent: building.prominent,
-        area: Math.round(Math.abs(area) / 2),
-      });
-    }),
+    features: model.buildings
+      .map((building) => {
+        const outerRing = building.rings[0];
+        const area = Math.abs(ringArea(outerRing));
+        const perimeter = ringPerimeter(outerRing);
+        // Compactness (Polsby-Popper): a sliver left by clipping or by a bad
+        // simplification is debris; a triangular block is a real Chicago
+        // building and is kept.
+        const compactness =
+          perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 1;
+        return { building, area, compactness };
+      })
+      .filter((entry) => entry.area >= BUILDING_MIN_AREA_M2 && entry.compactness >= SLIVER_COMPACTNESS)
+      .map(({ building, area }) =>
+        polygonFeature(projection, building.rings, {
+          district: building.district,
+          prominent: building.prominent,
+          area: Math.round(area),
+        }),
+      ),
   };
   const roadsLocal: FeatureCollection<LineGeometry> = { type: "FeatureCollection", features: [] };
   const roadsArterial: FeatureCollection<LineGeometry> = { type: "FeatureCollection", features: [] };
@@ -277,10 +274,8 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   }
   return {
     land,
-    districts,
     water,
     parks,
-    parkCanopy,
     buildings,
     roadsLocal: { ...roadsLocal, features: local },
     roadsArterial: { ...roadsArterial, features: arterial },
@@ -307,29 +302,82 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     },
     // Real Chicago street and highway names, line-placed and limited to the
     // roads that carry a name worth reading at neighborhood zoom.
+    // Real Chicago street and highway names, one label per NAME rather than per
+    // piece: a long avenue is many OSM pieces, and labelling each of them put
+    // the same name through every block. The longest piece wins, because it has
+    // room to be read.
     streetLabels: {
       type: "FeatureCollection",
-      features: model.streets
-        .filter(
-          (piece) =>
-            piece.name !== undefined &&
-            (piece.osmClass === "motorway" ||
-              piece.osmClass === "trunk" ||
-              piece.osmClass === "primary" ||
-              piece.osmClass === "secondary"),
-        )
-        .map((piece) =>
+      features: (() => {
+        const best = new Map<string, { piece: (typeof model.streets)[number]; length: number }>();
+        for (const piece of model.streets) {
+          if (piece.name === undefined) {
+            continue;
+          }
+          if (
+            piece.osmClass !== "motorway" &&
+            piece.osmClass !== "trunk" &&
+            piece.osmClass !== "primary" &&
+            piece.osmClass !== "secondary"
+          ) {
+            continue;
+          }
+          const key = `name:${piece.name}`;
+          let length = 0;
+          for (let index = 1; index < piece.points.length; index += 1) {
+            length += Math.hypot(
+              piece.points[index][0] - piece.points[index - 1][0],
+              piece.points[index][1] - piece.points[index - 1][1],
+            );
+          }
+          const current = best.get(key);
+          if (!current || length > current.length) {
+            best.set(key, { piece, length });
+          }
+        }
+        const byName = [...best.values()].map(({ piece }) =>
           lineFeature(projection, piece.points, {
             name: piece.name ?? "",
             ref: piece.ref ?? "",
             osmClass: piece.osmClass,
             rank: piece.osmClass === "motorway" || piece.osmClass === "trunk" ? 3 : 4,
           }),
-        ),
+        );
+        // Expressway refs additionally get one ref-only label each: I-90 and
+        // I-94 can share a street name, and each still deserves its own shield.
+        // The name is blanked so the street-name layer cannot double-label.
+        const refBest = new Map<string, { piece: (typeof model.streets)[number]; length: number }>();
+        for (const piece of model.streets) {
+          if (!piece.ref || piece.osmClass !== "motorway") {
+            continue;
+          }
+          let length = 0;
+          for (let index = 1; index < piece.points.length; index += 1) {
+            length += Math.hypot(
+              piece.points[index][0] - piece.points[index - 1][0],
+              piece.points[index][1] - piece.points[index - 1][1],
+            );
+          }
+          const current = refBest.get(piece.ref);
+          if (!current || length > current.length) {
+            refBest.set(piece.ref, { piece, length });
+          }
+        }
+        return [
+          ...byName,
+          ...[...refBest.values()].map(({ piece }) =>
+            lineFeature(projection, piece.points, {
+              name: "",
+              ref: piece.ref ?? "",
+              osmClass: piece.osmClass,
+              rank: 3,
+            }),
+          ),
+        ];
+      })(),
     },
     layerOrder: [
       "land",
-      "district-tint",
       "water",
       "parks",
       "buildings",

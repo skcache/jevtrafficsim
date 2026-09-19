@@ -1,0 +1,107 @@
+[
+  {
+    "slug": "hero-camera",
+    "view": "HERO landing composition \u2014 the river meeting the Loop, z14.1",
+    "shows": "The composed landing view: the river, its bridges and the downtown grid in frame, minimal labels, no traffic primitives.",
+    "center": [
+      -87.6308,
+      41.8874
+    ],
+    "zoom": 14.1,
+    "settleMs": 3200,
+    "steps": [
+      {
+        "clickText": "Start",
+        "waitMs": 1200
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 1800
+      }
+    ]
+  },
+  {
+    "slug": "city-fit",
+    "view": "Fit city \u2014 the active road network filling the viewport",
+    "shows": "Fit is derived from the street network, so Chicago fills the frame instead of floating as a postage stamp beside the empty lake.",
+    "eval": "window.__jevMap.fitCity()",
+    "settleMs": 3600
+  },
+  {
+    "slug": "far",
+    "view": "Far zoom (whole city), z11.6",
+    "shows": "City zoom carries land, water, major parks, highway and arterial structure and a handful of labels \u2014 no buildings, no street names, no signals, no vehicles.",
+    "center": [
+      -87.6375,
+      41.881
+    ],
+    "zoom": 11.6,
+    "settleMs": 3200
+  },
+  {
+    "slug": "neighborhood",
+    "view": "Neighborhood \u2014 the Loop and River North, z14.6",
+    "shows": "Neighborhood zoom adds the local street network and simplified building mass; labels stay to districts and landmarks.",
+    "center": [
+      -87.6338,
+      41.8855
+    ],
+    "zoom": 14.6,
+    "settleMs": 3200
+  },
+  {
+    "slug": "street-close",
+    "view": "Street zoom in the Loop, z16.6",
+    "shows": "Street zoom: real building footprints with their own boundary, one label per street, road hierarchy by width rather than colour.",
+    "center": [
+      -87.6294,
+      41.8825
+    ],
+    "zoom": 16.6,
+    "settleMs": 3200
+  },
+  {
+    "slug": "river",
+    "view": "Chicago River and its bridges, z15.0",
+    "shows": "The river reads as the strongest geography on the map; bridge decks keep their own material and the banks are clean of sliver fragments.",
+    "center": [
+      -87.6278,
+      41.8887
+    ],
+    "zoom": 15.0,
+    "settleMs": 3200
+  },
+  {
+    "slug": "highway-interchange",
+    "view": "I-90/94 / I-290 interchange, z15.0",
+    "shows": "The interchange stays legible through carriageway structure, ramps and casing width \u2014 and the highways no longer scream orange.",
+    "center": [
+      -87.6405,
+      41.8757
+    ],
+    "zoom": 15.0,
+    "settleMs": 3200
+  },
+  {
+    "slug": "Grant-Park",
+    "view": "Grant Park and the lakefront, z14.6",
+    "shows": "Park green is quiet and desaturated, with no generated canopy dot field and no tiny grass fragments competing with the lake.",
+    "center": [
+      -87.6205,
+      41.876
+    ],
+    "zoom": 14.6,
+    "settleMs": 3200
+  },
+  {
+    "slug": "buildings-close",
+    "view": "Buildings at close zoom, z17.2",
+    "shows": "Real footprints at two restrained tones with a light boundary \u2014 a map, not a faceted low-poly mesh.",
+    "center": [
+      -87.6294,
+      41.8825
+    ],
+    "zoom": 17.2,
+    "settleMs": 3200
+  }
+]

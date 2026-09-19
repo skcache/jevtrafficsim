@@ -28,6 +28,12 @@ export const MID_TIER_MINZOOM = 11.8;
 export const CROSSWALK_MINZOOM = 16.6;
 /** Wait-heat halos are a close-zoom instrument; further out they are confetti. */
 export const WAIT_HEAT_MINZOOM = 14.2;
+/**
+ * Individual vehicles start here. At city zoom they are noise: the road-level
+ * congestion overlay carries the same information without the confetti, which
+ * is the whole point of the far band.
+ */
+export const VEHICLE_MINZOOM = 13.2;
 
 export function detailTier(zoom: number): DetailTier {
   if (zoom >= CLOSE_TIER_MINZOOM) {

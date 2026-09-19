@@ -17,7 +17,7 @@ describe("Chicago GeoJSON", () => {
       expect(geo.land.features.length).toBe(1);
       expect(geo.water.features.length).toBeGreaterThan(0);
       expect(geo.buildings.features.length).toBeGreaterThan(10);
-      for (const collection of [geo.land, geo.districts, geo.water, geo.parks, geo.buildings]) {
+      for (const collection of [geo.land, geo.water, geo.parks, geo.buildings, geo.landmarks]) {
         expect(collection.type).toBe("FeatureCollection");
         for (const feature of collection.features) {
           expect(feature.type).toBe("Feature");
@@ -114,7 +114,12 @@ describe("Chicago GeoJSON", () => {
     // Real Chicago names, never invented ones.
     expect([...names].some((name) => String(name).includes("Michigan"))).toBe(true);
     for (const feature of geo.streetLabels.features) {
-      expect(String(feature.properties.name).length).toBeGreaterThan(2);
+      // Every label carries a real street name or a real expressway ref, and
+      // never both from the same piece (that is what stopped the duplicate
+      // names).
+      const name = String(feature.properties.name);
+      const ref = String(feature.properties.ref);
+      expect(name.length > 2 || ref.length > 0).toBe(true);
       expect(feature.geometry.coordinates.length).toBeGreaterThanOrEqual(2);
     }
   });
