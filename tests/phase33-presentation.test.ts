@@ -225,6 +225,7 @@ describe("product shell contracts", () => {
 
   it("keeps onboarding traffic-free even while the worker is prewarmed", () => {
     expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
+    expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
   });
 
   it("swaps every presentation source when the city scale changes", () => {
