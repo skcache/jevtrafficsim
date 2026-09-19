@@ -31,35 +31,29 @@ describe("road presentation hierarchy", () => {
     expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("hidden");
     expect(isExpresswayClass("secondary_link")).toBe(false);
     expect(isExpresswayClass("motorway_link")).toBe(true);
-    // Ordinary streets are secondary; short unnamed stubs are detail.
+    // Ordinary streets are secondary; short unnamed stubs are hidden visual topology.
     expect(roadPresentationClass({ osmClass: "residential", name: "West Polk Street", length: 80 })).toBe("secondary");
     expect(roadPresentationClass({ osmClass: "tertiary", length: 200 })).toBe("secondary");
-    expect(roadPresentationClass({ osmClass: "tertiary", length: DETAIL_MAX_LENGTH_M - 5 })).toBe("detail");
+    expect(roadPresentationClass({ osmClass: "tertiary", length: DETAIL_MAX_LENGTH_M - 5 })).toBe("hidden");
     // A named short piece is a real street: it stays.
     expect(roadPresentationClass({ osmClass: "tertiary", name: "Honoré Street", length: 20 })).toBe("secondary");
   });
 
-  it("hides detail roads below close zoom and never hides ramps", () => {
+  it("never renders micro-connectors, while real expressway ramps stay visible", () => {
     const geo = buildShowcaseGeoJson(model);
     const style = buildChicagoStyle(geo);
     const byId = new Map(style.layers.map((layer) => [layer.id, layer]));
 
-    const detail = byId.get("roads-detail")!;
-    expect(detail).toBeTruthy();
-    expect((detail as { minzoom?: number }).minzoom ?? 0).toBeGreaterThanOrEqual(16);
-    // The ordinary local network appears earlier than the stubs do.
-    const local = byId.get("roads-local")! as { minzoom?: number };
-    expect(local.minzoom ?? 0).toBeLessThan((detail as { minzoom?: number }).minzoom ?? 99);
+    expect(byId.has("roads-detail")).toBe(false);
 
-    // Ramps and expressways carry no minzoom: they are visible at every zoom.
     for (const id of ["roads-highway", "roads-highway-casing"] as const) {
       const layer = byId.get(id)! as { minzoom?: number };
       expect(layer.minzoom ?? 0).toBeLessThanOrEqual(1);
     }
-    // And a ramp actually reaches the highway source rather than the stubs.
-    const ramp = geo.roadsHighway.features.find((feature) => String(feature.properties.osmClass).endsWith("_link"));
+    const ramp = geo.roadsHighway.features.find((feature) =>
+      ["motorway_link", "trunk_link"].includes(String(feature.properties.osmClass)),
+    );
     expect(ramp).toBeTruthy();
-    expect(geo.roadsDetail.features).not.toContain(ramp);
   });
 
   it("keeps routing intact while hiding a piece from the map", () => {
@@ -71,7 +65,7 @@ describe("road presentation hierarchy", () => {
     for (let scale = 0; scale < 5; scale += 1) {
       for (const piece of chicagoModel(scale).streets) {
         const presentation = roadPresentationClass(piece);
-        if (presentation === "detail" || presentation === "hidden") {
+        if (presentation === "hidden") {
           hidden.push({ scale, piece });
         }
       }
@@ -85,16 +79,6 @@ describe("road presentation hierarchy", () => {
       }
     }
     const geo = buildShowcaseGeoJson(model);
-    // Whatever is in the detail collection must obey the rule that put it there.
-    for (const feature of geo.roadsDetail.features) {
-      expect(
-        roadPresentationClass({
-          osmClass: String(feature.properties.osmClass),
-          name: String(feature.properties.name) || undefined,
-          length: 0,
-        }),
-      ).toBe("detail");
-    }
     // Surface-street links do not leak into any static road source. Pin this
     // against Metro, where the imported Chicago asset actually contains them,
     // so the assertion cannot pass vacuously on a smaller crop.
@@ -105,7 +89,6 @@ describe("road presentation hierarchy", () => {
       ...metroGeo.roadsLocal.features,
       ...metroGeo.roadsArterial.features,
       ...metroGeo.roadsHighway.features,
-      ...metroGeo.roadsDetail.features,
     ];
     expect(
       visible.some((feature) => String(feature.properties.osmClass) === "secondary_link"),
@@ -256,7 +239,6 @@ describe("product shell contracts", () => {
       "water",
       "parks",
       "roads-local",
-      "roads-detail",
       "roads-arterial",
       "roads-highway",
       "bridges",
