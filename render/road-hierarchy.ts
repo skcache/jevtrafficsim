@@ -35,7 +35,7 @@ export interface RoadPresentationInput {
 }
 
 /** Pieces shorter than this with no name are map texture, not streets. */
-export const DETAIL_MAX_LENGTH_M = 60;
+export const DETAIL_MAX_LENGTH_M = 30;
 
 /**
  * PRIMARY   the network's structure: expressways, ramps, and Chicago's grid
@@ -48,6 +48,12 @@ export const DETAIL_MAX_LENGTH_M = 60;
  */
 export function roadPresentationClass(piece: RoadPresentationInput): RoadPresentationClass {
   const osmClass = piece.osmClass;
+
+  // Never hide physical structure. A short bridge/tunnel/stack segment may be
+  // visually small, but if traffic can occupy it the map must provide a road
+  // underneath that traffic. This is the invariant that prevents "truck in the
+  // river" frames when a short grade-separated OSM piece is traversed.
+  const structural = piece.bridgeStructure || piece.tunnel || (piece.layer ?? 0) !== 0;
 
   // Only links attached to the expressway hierarchy are visually ramps.
   // Surface-street link classes are turn/slip channels; they stay routable but
@@ -63,19 +69,14 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
   ) {
     return "primary";
   }
+  if (structural) {
+    return "secondary";
+  }
   if (osmClass.endsWith("_link")) {
-    // A short at-grade surface link is intersection plumbing. A long,
-    // grade-separated, tunnel or bridge link is a real piece of roadway that a
-    // vehicle must visibly remain attached to.
-    if (
-      piece.length >= 120 ||
-      piece.bridgeStructure ||
-      piece.tunnel ||
-      (piece.layer ?? 0) !== 0
-    ) {
-      return "secondary";
-    }
-    return "hidden";
+    // Only genuinely junction-scale at-grade plumbing disappears. Anything
+    // longer must remain visible, otherwise a perfectly valid vehicle can look
+    // detached from the road while traversing it.
+    return piece.length < 45 ? "hidden" : "secondary";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
     return "hidden";
