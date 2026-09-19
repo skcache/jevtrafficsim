@@ -269,28 +269,18 @@ function transitionPosition(
     previousOffset,
   );
   const end = applyLaneOffset(samplePathIndex(currentIndex, window), currentOffset);
-  // Control point: where the two lane-centre lines meet. That is what makes the
-  // curve leave and arrive tangent to the roads; when the lines are parallel
-  // (a straight-through movement) the junction midpoint is the honest control.
-  const control = laneLineIntersection(start, end);
+  // The control point is the ACTUAL shared junction. The previous line-line
+  // intersection could explode hundreds of metres away for nearly parallel or
+  // skew OSM approaches, which is how vehicles ended up visually driving into
+  // the river. A turn is allowed to curve only inside its own junction window.
+  const junction = options.city.intersections[previousRoad.to];
+  const control: WorldPosition = junction
+    ? { x: junction.x, y: junction.y, heading: start.heading }
+    : {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+        heading: start.heading,
+      };
   const point = quadAt(start, control, end, u);
   return { ...point, fromHeading: point.heading, toHeading: point.heading };
-}
-
-/**
- * Intersection of the line through `start` along its heading with the line
- * through `end` along its heading. Parallel or degenerate inputs fall back to
- * the midpoint, which keeps a straight movement straight.
- */
-function laneLineIntersection(start: WorldPosition, end: WorldPosition): WorldPosition {
-  const ax = Math.cos(start.heading);
-  const ay = Math.sin(start.heading);
-  const bx = Math.cos(end.heading);
-  const by = Math.sin(end.heading);
-  const denominator = ax * by - ay * bx;
-  if (Math.abs(denominator) < 1e-6) {
-    return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2, heading: start.heading };
-  }
-  const t = ((end.x - start.x) * by - (end.y - start.y) * bx) / denominator;
-  return { x: start.x + ax * t, y: start.y + ay * t, heading: start.heading };
 }
