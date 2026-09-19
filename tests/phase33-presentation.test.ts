@@ -222,4 +222,25 @@ describe("product shell contracts", () => {
     expect(chrome).toContain("Segmented");
     expect(map.toLowerCase()).toContain("attribution");
   });
+
+  it("keeps onboarding traffic-free even while the worker is prewarmed", () => {
+    expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
+  });
+
+  it("swaps every presentation source when the city scale changes", () => {
+    for (const source of [
+      "blocks",
+      "water",
+      "parks",
+      "roads-local",
+      "roads-detail",
+      "roads-arterial",
+      "roads-highway",
+      "bridges",
+      "labels",
+      "street-labels",
+    ]) {
+      expect(map).toContain(`setData("${source}"`);
+    }
+  });
 });
