@@ -30,7 +30,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import { metricToLngLat, type MapModel } from "@/cities/map-model";
 import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
-import { packQueues, settlePlacements, type DisplayedPlacement } from "@/render/queue-packing";
+import { packQueues } from "@/render/queue-packing";
 import {
   carriagewayPairs,
   laneCentreOffsetMetres,
@@ -114,9 +114,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
   /** Metric anchor of the active crash, for the dev camera hook. */
   const crashRef = useRef<{ x: number; y: number } | null>(null);
-  /** What was drawn last frame, so queue re-placements can settle instead of jumping. */
-  const displayedRef = useRef<Map<number, DisplayedPlacement>>(new Map());
-  const lastFrameMsRef = useRef(0);
   /** Last rendered frame, for the dev motion-QA hook. */
   const frameRef = useRef<
     { id: number; roadId: number | null; x: number; y: number; headingRadians: number; blockedWaitMs: number }[]
@@ -398,12 +395,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               (id) => progress.get(id) ?? 0,
             )
           : [];
-        // Settle re-placements: queue packing moves a vehicle from where it
-        // stopped to its packed position, which raw is a teleport.
-        const dtSeconds =
-          lastFrameMsRef.current === 0 ? 0.016 : (now - lastFrameMsRef.current) / 1000;
-        lastFrameMsRef.current = now;
-        const settled = settlePlacements(vehicles, displayedRef.current, dtSeconds);
+        // Every rendered position now comes directly from a road path, a bounded
+        // junction turn, or queue packing on that same road. Do not "settle"
+        // positions with a free-space x/y lerp: that smoothing can leave the
+        // carriageway on curves and was the source of drifting vehicles.
+        const settled = vehicles;
         if (window.location.search.includes("debug")) {
           frameRef.current = settled.map((vehicle) => ({
             id: vehicle.id,
