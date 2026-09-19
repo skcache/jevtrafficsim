@@ -108,6 +108,18 @@ export function signalGateBackingWidthPx(zoom: number): number {
   return signalGateWidthPx(zoom) + 2;
 }
 
+/**
+ * Traffic-light housing height in screen pixels. Unlike vehicles, the housing
+ * is interaction chrome: it must remain recognizable and grow assertively as
+ * the user zooms into an intersection.
+ */
+export function signalHeadHeightPx(zoom: number): number {
+  const t = zoomProgress(zoom, SIGNAL_HEAD_MINZOOM, 19.5);
+  const minPx = 22;
+  const maxPx = 56;
+  return minPx * Math.pow(maxPx / minPx, t);
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Incidents                                                           */
