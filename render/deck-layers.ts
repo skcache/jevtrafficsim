@@ -38,11 +38,13 @@ import {
   hatchSegments,
   signalGateBackingWidthPx,
   signalGateWidthPx,
+  signalHeadHeightPx,
   signalTierOpacity,
 } from "./visuals";
 import { iconSizeForLengthUnits } from "./vehicle-sprites";
 import { roadPresentationClass } from "./road-hierarchy";
 import {
+  signalIconSizeForHousingPx,
   signalSpriteForStage,
   type SignalSpriteId,
   type SignalSpriteSet,
@@ -443,14 +445,13 @@ export function buildSignalLayers(
         // step. The head grows naturally as the camera descends, while the
         // legibility caps keep it readable at entry zoom and prevent it from
         // becoming a billboard at maximum inspection.
-        getSize: 3.0,
+        getSize: signalIconSizeForHousingPx(signalHeadHeightPx(zoom)),
         getAngle: 0,
         opacity,
-        sizeUnits: "meters",
-        sizeMinPixels: 24,
-        sizeMaxPixels: 56,
+        sizeUnits: "pixels",
         billboard: true,
         pickable: false,
+        updateTriggers: { getSize: zoom },
       }),
     );
   }
