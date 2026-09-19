@@ -127,7 +127,6 @@ const SLIVER_COMPACTNESS = 0.05;
  * triangles: wedges left where a polygon meets a diagonal street. A building
  * sliver is at least architecture; a grass or water sliver is debris.
  */
-const AREA_SLIVER_COMPACTNESS = 0.12;
 /**
  * The simulator is not a general-purpose basemap. Tiny extracted land-use
  * fragments are valid OSM data but visual noise here, so only geography large
