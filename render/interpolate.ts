@@ -166,39 +166,13 @@ export function interpolateVehicles(
   return rendered;
 }
 
-/** Half-width of the turn window on each road, in metres. */
-const TURN_WINDOW_M = 9;
-
-/** Quadratic Bézier point. */
-function quadAt(
-  p0: WorldPosition,
-  p1: WorldPosition,
-  p2: WorldPosition,
-  u: number,
-): { x: number; y: number; heading: number } {
-  const w = 1 - u;
-  const x = w * w * p0.x + 2 * w * u * p1.x + u * u * p2.x;
-  const y = w * w * p0.y + 2 * w * u * p1.y + u * u * p2.y;
-  // Tangent of a quadratic Bézier: B'(u) = 2(1-u)(P1-P0) + 2u(P2-P1).
-  const dx = 2 * w * (p1.x - p0.x) + 2 * u * (p2.x - p1.x);
-  const dy = 2 * w * (p1.y - p0.y) + 2 * u * (p2.y - p1.y);
-  return { x, y, heading: Math.atan2(dy, dx) };
-}
-
 /**
  * Position and heading while crossing from one road to the next.
  *
- * The turn is a quadratic curve: it leaves the old lane centre, bends through
- * the junction and arrives on the new lane centre, with heading taken from the
- * curve tangent. Walking the two roads and blending headings (what this did
- * before) kept position continuous but made the heading read as a snap, and it
- * cut the corner whenever the two lane centres were offset differently — which
- * is every real turn.
- *
- * The curve spans a bounded window either side of the junction, so a short
- * segment simply shrinks the window instead of producing nonsense. Returns null
- * when the two roads are not joined: the caller then keeps the current position,
- * which beats drawing a line through a block.
+ * Position is constrained to one of the two authoritative road paths at every
+ * frame. This deliberately gives up free-space Bézier smoothing: a renderer may
+ * not invent drivable geometry that the basemap does not contain. Returns null
+ * when the two roads are not joined; the caller then keeps the current position.
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
@@ -207,6 +181,51 @@ function transitionPosition(
   t: number,
   options: InterpolateOptions,
 ): (WorldPosition & { fromHeading: number; toHeading: number }) | null {
+  if (before.roadId === null || current.roadId === null) {
+    return null;
+  }
+  const previousIndex = indexes[before.roadId];
+  const currentIndex = indexes[current.roadId];
+  if (!previousIndex || !currentIndex) {
+    return null;
+  }
+  const previousRoad = options.city.roads[before.roadId];
+  const currentRoad = options.city.roads[current.roadId];
+  if (!previousRoad || !currentRoad || previousRoad.to !== currentRoad.from) {
+    return null;
+  }
+
+  const remaining = Math.max(0, previousIndex.total - before.progress);
+  const travelled = Math.max(0, current.progress);
+  const total = remaining + travelled;
+  if (total <= 0) {
+    return null;
+  }
+
+  // Position is never interpolated through free space. It walks the old road
+  // to its actual endpoint, then walks the new road from its actual start.
+  // The former quadratic turn looked smooth on toy geometry but could place a
+  // truck dozens of metres from any rendered carriageway at skewed Chicago
+  // interchanges and river crossings. Road lock is a stronger invariant than
+  // cosmetic curve smoothing.
+  const distance = clamp01(t) * total;
+  const previousOffset = options.laneOffsets[before.roadId] ?? 0;
+  const currentOffset = options.laneOffsets[current.roadId] ?? 0;
+
+  if (distance <= remaining) {
+    const position = applyLaneOffset(
+      samplePathIndex(previousIndex, before.progress + distance),
+      previousOffset,
+    );
+    return { ...position, fromHeading: position.heading, toHeading: position.heading };
+  }
+
+  const position = applyLaneOffset(
+    samplePathIndex(currentIndex, Math.min(currentIndex.total, distance - remaining)),
+    currentOffset,
+  );
+  return { ...position, fromHeading: position.heading, toHeading: position.heading };
+}) | null {
   if (before.roadId === null || current.roadId === null) {
     return null;
   }
