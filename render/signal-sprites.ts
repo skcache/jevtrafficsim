@@ -19,7 +19,7 @@
  * Approach direction is carried by the colored state gate across the road; the
  * head's only job is to read instantly as a familiar red/yellow/green light.
  *
- * Convention: sprites are centred in their cell; `getAngle` rotates them.
+ * Convention: sprites are centred in their cell and remain screen-aligned.
  */
 import type { SignalStage } from "@/sim/signals";
 
