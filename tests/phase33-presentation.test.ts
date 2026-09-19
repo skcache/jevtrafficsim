@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
-import { buildChicagoStyle, AREA_MIN, MAP_ZOOM } from "@/render/chicago-style";
+import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
 import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
