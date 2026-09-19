@@ -10,13 +10,13 @@
  *   NO signals, NO stop bars, NO crosswalks, NO per-lane detail.
  *
  * MID (neighborhood)
- *   vehicles in flow, road congestion, bridges and ramps, district and street
- *   labels. Signals stay off: a field of dots is not information.
+ *   sampled vehicles, road congestion, bridges/ramps and district labels.
+ *   The basemap stays muted; simulation state earns the contrast.
  *
  * CLOSE (street)
- *   full vehicle glyphs at lane centres, queues, approach signal heads with
- *   stop lines, restrained crosswalks at the closest zoom, buildings, street
- *   names, incident detail.
+ *   full vehicle glyphs at lane centres, queue order, one signal-state gate per
+ *   physical approach arm, optional traffic-light housings, street names and
+ *   incident detail. Raw GIS decoration never becomes the product.
  */
 export type DetailTier = "far" | "mid" | "close";
 
@@ -25,15 +25,17 @@ export const CLOSE_TIER_MINZOOM = 14.6;
 /** Below this it is the whole city. */
 export const MID_TIER_MINZOOM = 11.8;
 /** Crosswalk hints only appear at the closest zoom. */
-export const CROSSWALK_MINZOOM = 16.6;
 /** Wait-heat halos are a close-zoom instrument; further out they are confetti. */
-export const WAIT_HEAT_MINZOOM = 14.2;
 /**
  * Individual vehicles start here. At city zoom they are noise: the road-level
  * congestion overlay carries the same information without the confetti, which
  * is the whole point of the far band.
  */
-export const VEHICLE_MINZOOM = 13.2;
+export const VEHICLE_MINZOOM = 14.4;
+/** Signal state bars become useful at true neighborhood/street zoom. */
+export const SIGNAL_STATE_MINZOOM = 15.8;
+/** Physical three-lamp housings are detail, not the primary state channel. */
+export const SIGNAL_HEAD_MINZOOM = 17.0;
 
 export function detailTier(zoom: number): DetailTier {
   if (zoom >= CLOSE_TIER_MINZOOM) {
