@@ -22,23 +22,20 @@ import {
 import { waitHeatBucket, WAIT_HEAT_COLORS } from "@/render/map-geometry";
 
 describe("vehicle sizing", () => {
-  it("uses three bands: chip at city zoom, full size mid, larger at street zoom", () => {
-    expect(vehicleSizeScale(13)).toBeCloseTo(0.58, 5);
-    expect(vehicleSizeScale(15.2)).toBeCloseTo(0.58, 5);
-    expect(vehicleSizeScale(16.2)).toBeCloseTo(1, 5);
-    expect(vehicleSizeScale(19.5)).toBeCloseTo(1.06, 5);
-    expect(vehicleSizeScale(21)).toBeCloseTo(1.06, 5);
-    // Close-zoom glyph sizes land inside the product targets: car 10-13 px,
-    // truck 16-20 px, bicycle 6-8 px.
+  it("keeps vehicle classes legible once the camera enters simulation detail", () => {
+    expect(vehicleSizeScale(14.4)).toBeCloseTo(0.72, 5);
+    expect(vehicleSizeScale(16)).toBeCloseTo(1, 5);
+    expect(vehicleSizeScale(18.2)).toBeCloseTo(1.12, 5);
+    expect(vehicleSizeScale(21)).toBeCloseTo(1.12, 5);
     const car = vehicleLengthPx("car", 19.5);
     const truck = vehicleLengthPx("truck", 19.5);
     const bicycle = vehicleLengthPx("bicycle", 19.5);
-    expect(car).toBeGreaterThanOrEqual(10);
-    expect(car).toBeLessThanOrEqual(13);
-    expect(truck).toBeGreaterThanOrEqual(16);
-    expect(truck).toBeLessThanOrEqual(20);
-    expect(bicycle).toBeGreaterThanOrEqual(6);
-    expect(bicycle).toBeLessThanOrEqual(8);
+    expect(car).toBeGreaterThanOrEqual(15);
+    expect(car).toBeLessThanOrEqual(16);
+    expect(truck).toBeGreaterThanOrEqual(23);
+    expect(truck).toBeLessThanOrEqual(24);
+    expect(bicycle).toBeGreaterThanOrEqual(10);
+    expect(bicycle).toBeLessThanOrEqual(11);
   });
 
   it("never shrinks as zoom increases", () => {
@@ -50,14 +47,13 @@ describe("vehicle sizing", () => {
     }
   });
 
-  it("keeps class lengths ordered car < truck and readable at city zoom", () => {
+  it("keeps class lengths ordered car < truck and clearly separated", () => {
     expect(VEHICLE_BASE_LENGTHS.truck).toBeGreaterThan(VEHICLE_BASE_LENGTHS.car);
     expect(VEHICLE_BASE_LENGTHS.car).toBeGreaterThan(VEHICLE_BASE_LENGTHS.bicycle);
-    // A chip, not sub-pixel noise: 7 px car at whole-city zoom.
-    expect(vehicleLengthPx("car", 14)).toBeCloseTo(6.96, 2);
-    expect(vehicleLengthPx("car", 16.2)).toBe(12);
-    expect(vehicleLengthPx("truck", 16.2)).toBe(18);
-    expect(vehicleLengthPx("bicycle", 16.2)).toBe(7);
+    expect(vehicleLengthPx("car", 14.4)).toBeCloseTo(10.08, 2);
+    expect(vehicleLengthPx("car", 16)).toBe(14);
+    expect(vehicleLengthPx("truck", 16)).toBe(21);
+    expect(vehicleLengthPx("bicycle", 16)).toBe(9);
   });
 });
 
@@ -79,15 +75,13 @@ describe("wait heat", () => {
 });
 
 describe("signal tiers", () => {
-  it("fades in with zoom instead of cutting hard", () => {
-    expect(signalTier(12.9)).toBe("hidden");
-    expect(signalTier(13.0)).toBe("far");
-    expect(signalTier(14.6)).toBe("mid");
-    expect(signalTier(16.4)).toBe("close");
-    expect(signalTierOpacity(12.9)).toBe(0);
-    expect(signalTierOpacity(13.0)).toBe(0);
-    expect(signalTierOpacity(13.6)).toBeCloseTo(1, 5);
-    expect(signalTierOpacity(15.2)).toBeCloseTo(1, 5);
+  it("stays absent at map zoom, then fades state in before physical housings", () => {
+    expect(signalTier(15.7)).toBe("hidden");
+    expect(signalTier(15.8)).toBe("mid");
+    expect(signalTier(17)).toBe("close");
+    expect(signalTierOpacity(15.7)).toBe(0);
+    expect(signalTierOpacity(15.8)).toBe(0);
+    expect(signalTierOpacity(16.2)).toBeCloseTo(1, 5);
   });
 });
 
