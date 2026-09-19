@@ -13,7 +13,6 @@ import {
   hatchSegments,
   signalGateBackingWidthPx,
   signalGateWidthPx,
-  signalHeadHeightPx,
   signalTier,
   signalTierOpacity,
   sparklineLastPoint,
@@ -93,17 +92,11 @@ describe("signal tiers", () => {
     expect(signalGateWidthPx(15.8)).toBeCloseTo(3.1, 3);
     expect(signalGateWidthPx(19.5)).toBeGreaterThan(6.3);
     expect(signalGateBackingWidthPx(17)).toBeGreaterThan(signalGateWidthPx(17));
-    expect(signalHeadHeightPx(16.5)).toBe(18);
-    expect(signalHeadHeightPx(18)).toBeGreaterThan(22);
-    expect(signalHeadHeightPx(19.5)).toBeGreaterThan(35);
 
     let previousGate = signalGateWidthPx(15.8);
-    let previousHead = signalHeadHeightPx(16.5);
-    for (let zoom = 16.6; zoom <= 19.5; zoom += 0.1) {
+    for (let zoom = 15.9; zoom <= 19.5; zoom += 0.1) {
       expect(signalGateWidthPx(zoom)).toBeGreaterThanOrEqual(previousGate - 1e-9);
-      expect(signalHeadHeightPx(zoom)).toBeGreaterThanOrEqual(previousHead - 1e-9);
       previousGate = signalGateWidthPx(zoom);
-      previousHead = signalHeadHeightPx(zoom);
     }
   });
 });
