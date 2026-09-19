@@ -173,6 +173,14 @@ async function capture(options) {
   let index = 1;
   for (const shot of list) {
     await runSteps(page, shot.steps);
+    // Responsive review: a shot may ask for its own viewport.
+    if (shot.viewport) {
+      await page.setViewport({
+        width: shot.viewport.width,
+        height: shot.viewport.height,
+      });
+      await sleep(900);
+    }
     if (shot.center) {
       await page.evaluate(
         ({ center, zoom }) => {

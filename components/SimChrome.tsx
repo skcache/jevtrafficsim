@@ -214,16 +214,19 @@ export function SimChrome(props: SimChromeProps) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.34, ease: EASE }}
           >
-            <div className="group flex flex-col items-start gap-[3px]">
-              <span className="label-micro on-map-soft">Jev Traffic</span>
-              <span className="text-ui font-medium leading-none text-ink on-map">Chicago</span>
-              <span className="value-num text-meta text-ink-52 on-map-soft">
-                {scaleLabel} · {trafficLabel(trafficLevel)} · seed {seed}
+            <div className="surface pointer-events-auto flex flex-col items-start gap-1 px-3 py-2.5">
+              <span className="label-micro">Jev Traffic</span>
+              <span className="text-ui font-semibold leading-none tracking-tight text-ink">
+                Chicago
               </span>
+              <span className="text-meta leading-none text-ink-52">
+                {scaleLabel} · {trafficLabel(trafficLevel)}
+              </span>
+              <span className="value-num text-micro leading-none text-ink-38">Seed {seed}</span>
               <button
                 type="button"
                 onClick={props.onChangeSetup}
-                className="pointer-events-auto mt-1 text-meta text-ink-52 underline-offset-2 opacity-0 transition-opacity duration-150 hover:text-ink hover:underline focus-visible:opacity-100 group-hover:opacity-100"
+                className="mt-1.5 text-micro font-medium text-ink-38 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
               >
                 Change setup…
               </button>

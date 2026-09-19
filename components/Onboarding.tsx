@@ -78,7 +78,7 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
               Jev Traffic Simulator
             </h1>
             <p className="on-map-display mt-3.5 max-w-sm text-ui leading-relaxed text-ink-70">
-              Control a living city. Break it if you can.
+              Can you gridlock Chicago?
             </p>
             <button
               type="button"

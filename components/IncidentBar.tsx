@@ -144,47 +144,52 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
       animate={{ opacity: live ? 1 : 0, y: live ? 0 : 8 }}
       transition={{ duration: 0.32, delay: live ? 0.12 : 0, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="h-4 text-meta text-ink-52 on-map-soft" aria-live="polite">
-        <AnimatePresence mode="wait">
-          {line && !runComplete && (
-            <motion.span
-              key={line}
-              initial={{ opacity: 0, y: 3 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -3 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
-              className="block"
-            >
-              {line}
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </div>
-      <div className="surface pointer-events-auto flex items-center gap-[2px] p-[3px]">
-        {INCIDENTS.map((option) => {
-          const isArmed = armed === option.kind;
-          const Icon = option.icon;
-          return (
-            <button
-              key={option.kind}
-              type="button"
-              disabled={!live}
-              onClick={() => fire(option)}
-              onMouseEnter={() => setHint(option.hint)}
-              onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
-              onFocus={() => setHint(option.hint)}
-              onBlur={() => setHint((current) => (current === option.hint ? null : current))}
-              className={`flex h-8 items-center gap-[6px] rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
-                isArmed
-                  ? "bg-ink text-surface"
-                  : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
-              }`}
-            >
-              <Icon />
-              {option.label}
-            </button>
-          );
-        })}
+      <div className="surface pointer-events-auto flex flex-col p-[3px]">
+        <div
+          className="grid h-5 items-center px-2 text-micro font-medium text-ink-52"
+          aria-live="polite"
+        >
+          <AnimatePresence mode="wait">
+            {line && !runComplete && (
+              <motion.span
+                key={line}
+                initial={{ opacity: 0, y: 2 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -2 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="block truncate"
+              >
+                {line}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className="flex items-center gap-[2px]">
+          {INCIDENTS.map((option) => {
+            const isArmed = armed === option.kind;
+            const Icon = option.icon;
+            return (
+              <button
+                key={option.kind}
+                type="button"
+                disabled={!live}
+                onClick={() => fire(option)}
+                onMouseEnter={() => setHint(option.hint)}
+                onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
+                onFocus={() => setHint(option.hint)}
+                onBlur={() => setHint((current) => (current === option.hint ? null : current))}
+                className={`flex h-8 items-center gap-[6px] whitespace-nowrap rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
+                  isArmed
+                    ? "bg-ink text-surface"
+                    : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
+                }`}
+              >
+                <Icon />
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </motion.div>
   );

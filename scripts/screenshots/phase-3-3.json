@@ -1,0 +1,148 @@
+[
+ {
+  "slug": "landing",
+  "view": "Landing hero over the river and Loop edge",
+  "shows": "Authored landing: calm map, no traffic, no signals, one statement and one action.",
+  "settleMs": 4600
+ },
+ {
+  "slug": "setup",
+  "view": "Scenario composer",
+  "shows": "City / traffic / controller / seed as discrete controls with Enter City.",
+  "steps": [{ "clickText": "Start", "waitMs": 1600 }],
+  "settleMs": 2800
+ },
+ {
+  "slug": "enter-city",
+  "view": "Entering the Metro at rush hour",
+  "shows": "The moment the city comes alive: congestion on roads, no vehicle confetti at far zoom.",
+  "steps": [
+   { "slider": 0, "arrowRight": 6, "waitMs": 800 },
+   { "slider": 1, "arrowRight": 4, "waitMs": 800 },
+   { "clickText": "Enter City", "waitMs": 3200 }
+  ],
+  "settleMs": 4200
+ },
+ {
+  "slug": "normal-live",
+  "view": "Live city, street zoom",
+  "shows": "Normal live state: all five chrome surfaces, block fabric, traffic at lane centres.",
+  "center": [-87.6294, 41.8825],
+  "zoom": 16.4,
+  "settleMs": 4800
+ },
+ {
+  "slug": "metro",
+  "view": "Whole Metro extent, z11.4",
+  "shows": "City state: water, major roads, parks, blocks and congestion only.",
+  "center": [-87.6375, 41.881],
+  "zoom": 11.4,
+  "settleMs": 4600
+ },
+ {
+  "slug": "neighborhood",
+  "view": "The Loop and River North, z14.6",
+  "shows": "Flow: sampled vehicles, congestion on roads, blocks as the urban mass.",
+  "center": [-87.6338, 41.8855],
+  "zoom": 14.6,
+  "settleMs": 4400
+ },
+ {
+  "slug": "close-street",
+  "view": "Close street, z16.8",
+  "shows": "Close zoom: class glyphs, queues, signal housings, selective footprints.",
+  "center": [-87.6294, 41.8825],
+  "zoom": 16.8,
+  "settleMs": 4400
+ },
+ {
+  "slug": "signal-close",
+  "view": "Controlled intersection, z17.6",
+  "shows": "One signal head per approach at the kerbside, one stop line, no synthetic crosswalk.",
+  "center": [-87.6298, 41.8833],
+  "zoom": 17.6,
+  "settleMs": 4600
+ },
+ {
+  "slug": "queue",
+  "view": "Queued approach, z17.2",
+  "shows": "A queue stacked in authoritative order, no overlaps, inside the roadway.",
+  "center": [-87.6321, 41.8846],
+  "zoom": 17.2,
+  "settleMs": 5200
+ },
+ {
+  "slug": "rush-congestion",
+  "view": "Loop at rush, z13.2",
+  "shows": "Congestion read through roads: warm through amber to red, thin and on geometry.",
+  "center": [-87.6338, 41.884],
+  "zoom": 13.2,
+  "settleMs": 5200
+ },
+ {
+  "slug": "metrics",
+  "view": "Live instrumentation surface",
+  "shows": "One floating metrics panel: quiet caps labels, tabular values, aligned columns.",
+  "center": [-87.6308, 41.8874],
+  "zoom": 15.4,
+  "settleMs": 5200
+ },
+ {
+  "slug": "intervention-dock",
+  "view": "Intervention dock with inline acknowledgement",
+  "shows": "One compact dock, one-line labels, and a small inline confirmation after a press.",
+  "steps": [{ "clickText": "+5× Traffic", "waitMs": 900 }],
+  "settleMs": 1400
+ },
+ {
+  "slug": "scenario-panel",
+  "view": "Scenario panel",
+  "shows": "Compact scenario sheet: city size, traffic, seed with dice, restart and new seed.",
+  "steps": [{ "clickText": "Scenario", "waitMs": 1200 }],
+  "settleMs": 1600
+ },
+ {
+  "slug": "bridge-closure",
+  "view": "Bridge closure on a real crossing",
+  "shows": "Closure band on real crossing geometry with one small label, no ring or pulse.",
+  "steps": [
+   { "clickText": "Bridge Closed", "waitMs": 2600 },
+   { "eval": "window.__jevMap.focusIncident(16.2, -1)", "waitMs": 1600 }
+  ],
+  "settleMs": 3200
+ },
+ {
+  "slug": "event-release",
+  "view": "Event release at a real venue",
+  "shows": "A small venue badge on the map, no pulse circle, no violet effect.",
+  "steps": [
+   { "clickText": "Event Lets Out", "waitMs": 2600 },
+   { "eval": "window.__jevMap.focusIncident(15.2, -1)", "waitMs": 1600 }
+  ],
+  "settleMs": 3200
+ },
+ {
+  "slug": "viewport-1440",
+  "view": "1440x900",
+  "shows": "Responsive check at the primary review size: no clipping, no overlaps.",
+  "viewport": { "width": 1440, "height": 900 },
+  "center": [-87.6308, 41.885],
+  "zoom": 15.8,
+  "settleMs": 3600
+ },
+ {
+  "slug": "viewport-1280",
+  "view": "1280x800",
+  "shows": "Responsive check at the smallest supported size: metrics, dock, controls and attribution all clear.",
+  "viewport": { "width": 1280, "height": 800 },
+  "settleMs": 3600
+ },
+ {
+  "slug": "urban-block-close",
+  "view": "Urban blocks and selective buildings, z16.2",
+  "shows": "Block fabric with selective footprints and no sliver debris.",
+  "center": [-87.6345, 41.8846],
+  "zoom": 16.2,
+  "settleMs": 4600
+ }
+]
