@@ -9,7 +9,7 @@
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
-import { pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
+import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
 
 export type LngLat = readonly [number, number];
 
@@ -303,9 +303,10 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       detail.push(feature);
       continue;
     }
-    // Hierarchy follows the OSM class, never "it is a bridge": a motorway
-    // bridge stays a motorway on screen.
-    if (piece.osmClass === "motorway" || piece.osmClass === "trunk" || piece.osmClass.endsWith("_link")) {
+    // Hierarchy follows the actual road family. In particular, a generic
+    // OSM "*_link" is not automatically a highway: secondary_link is usually a
+    // downtown turn channel, and those were the fake tan "ramps" in the old UI.
+    if (isExpresswayClass(piece.osmClass)) {
       highway.push(feature);
     } else if (
       piece.osmClass === "primary" ||
