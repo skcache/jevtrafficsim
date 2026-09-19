@@ -13,7 +13,16 @@ import type { DirectedPathIndexes } from "./map-geometry";
 import { applyLaneOffset } from "./map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
-import { carriagewayPairs, directionalLanes, laneCentreOffsetMetres, LANE_WIDTH_M, widthMetresForRoad, widthPxAt } from "./road-presentation";
+import {
+  VEHICLE_LENGTH_M,
+  carriagewayPairs,
+  directionalLanes,
+  laneCentreOffsetMetres,
+  LANE_WIDTH_M,
+  stopLineSetbackMetres,
+  widthMetresForRoad,
+  widthPxAt,
+} from "./road-presentation";
 import {
   SIGNAL_HEAD_MINZOOM,
   SIGNAL_STATE_MINZOOM,
@@ -30,9 +39,9 @@ import {
   signalGateBackingWidthPx,
   signalGateWidthPx,
   signalTierOpacity,
-  vehicleLengthPx,
 } from "./visuals";
-import { iconSizeForLengthPx } from "./vehicle-sprites";
+import { iconSizeForLengthUnits } from "./vehicle-sprites";
+import { roadPresentationClass } from "./road-hierarchy";
 import {
   signalSpriteForStage,
   type SignalSpriteId,
@@ -109,7 +118,14 @@ function presentationArms(
   pairs: ReturnType<typeof carriagewayPairs>,
 ): SignalArm[] {
   const candidates = roads
-    .filter((roadId) => !!model.city.roads[roadId])
+    .filter((roadId) => {
+      if (!model.city.roads[roadId]) {
+        return false;
+      }
+      const pieceIndex = pairs.pieceOf[roadId] ?? -1;
+      const piece = pieceIndex >= 0 ? model.streets[pieceIndex] : undefined;
+      return !piece || roadPresentationClass(piece) !== "hidden";
+    })
     .map((roadId) => {
       const lanes = directionalLanes(model, roadId);
       return {
@@ -173,15 +189,6 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
   return plans;
 }
 
-/**
- * Stop-line setback grows with the incoming lane group. A fixed 3.2 m setback
- * looked fine on a one-lane street but landed visually inside wide downtown
- * intersections. This keeps the state gate unmistakably on the approach.
- */
-function signalStopSetbackM(arm: SignalArm): number {
-  return Math.min(9, Math.max(5, arm.halfWidthM + 3.6));
-}
-
 const SIGNAL_GATE_COLORS: Record<SignalSpriteId, [number, number, number, number]> = {
   "signal-red": [188, 63, 52, 235],
   "signal-yellow": [207, 146, 45, 235],
@@ -237,49 +244,11 @@ export function buildCongestionLayers(
 /* ------------------------------------------------------------------ */
 
 /**
- * Deterministic sampling: how much of the fleet is worth drawing at a zoom.
- * Below close zoom a thousand equally prominent cars is confetti, so the
- * population thins with distance — but a queued or badly blocked vehicle is
- * never sampled out, because that is the information the frame is carrying.
+ * Vehicle visibility is binary by zoom: once the camera is close enough to
+ * render individual traffic, every active vehicle is drawn. Deterministic
+ * sub-sampling made cars appear/disappear while zooming and destroyed the sense
+ * of one coherent traffic system.
  */
-export function vehicleSampleRatio(zoom: number): number {
-  if (zoom >= 16.8) {
-    return 1;
-  }
-  if (zoom >= 16) {
-    return 0.72;
-  }
-  if (zoom >= 15.2) {
-    return 0.42;
-  }
-  if (zoom >= VEHICLE_MINZOOM) {
-    return 0.18;
-  }
-  return 0;
-}
-
-/** Stable hash, so the same vehicle is drawn or hidden frame after frame. */
-function vehicleHash(id: number): number {
-  let value = (id * 2654435761) >>> 0;
-  value ^= value >>> 13;
-  value = (value * 1274126177) >>> 0;
-  return (value ^ (value >>> 16)) >>> 0;
-}
-
-export function sampleVehicles(
-  vehicles: readonly RenderedVehicle[],
-  zoom: number,
-): RenderedVehicle[] {
-  const ratio = vehicleSampleRatio(zoom);
-  if (ratio >= 1) {
-    return [...vehicles];
-  }
-  const threshold = Math.round(ratio * 0xffffffff);
-  return vehicles.filter(
-    (vehicle) => vehicle.blockedWaitMs > 0 || vehicleHash(vehicle.id) < threshold,
-  );
-}
-
 export function buildVehicleLayers(
   projection: Projection,
   vehicles: readonly RenderedVehicle[],
@@ -291,10 +260,7 @@ export function buildVehicleLayers(
     // visual noise rather than information.
     return [];
   }
-  const visible = sampleVehicles(vehicles, zoom);
-  // Glyph length in pixels per class, at this zoom: a car stays a car and a
-  // truck stays a truck instead of every class shrinking together.
-  const lengthPx = (type: RenderedVehicle["type"]) => vehicleLengthPx(type, zoom);
+  const visible = vehicles;
   const layers: Layer[] = [];
   // One layer per class (three at most, not the seven wait-heat buckets this
   // used to split into): the sprite already carries the class silhouette and
@@ -312,12 +278,16 @@ export function buildVehicleLayers(
         iconMapping: icons.mapping,
         getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        getSize: iconSizeForLengthPx(type, lengthPx(type)),
+        // Physical vehicle size in map metres. This is the missing zoom
+        // contract: a 4.6 m car grows on screen as the camera descends instead
+        // of staying a ~14 px annotation forever.
+        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type]),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
-        sizeUnits: "pixels",
+        sizeUnits: "meters",
+        sizeMinPixels: type === "bicycle" ? 7 : type === "truck" ? 12 : 10,
+        sizeMaxPixels: type === "bicycle" ? 22 : type === "truck" ? 58 : 42,
         billboard: false,
         pickable: false,
-        updateTriggers: { getSize: zoom },
       }),
     );
   }
@@ -377,7 +347,7 @@ export function buildSignalLayers(
       const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
       for (const arm of arms) {
         const index = indexes[arm.roadId];
-        const setbackM = signalStopSetbackM(arm);
+        const setbackM = stopLineSetbackMetres(directionalLanes(model, arm.roadId));
         if (!index || index.total < setbackM + 1) {
           continue;
         }
@@ -473,12 +443,12 @@ export function buildSignalLayers(
         // step. The head grows naturally as the camera descends, while the
         // legibility caps keep it readable at entry zoom and prevent it from
         // becoming a billboard at maximum inspection.
-        getSize: 2.2,
+        getSize: 3.0,
         getAngle: 0,
         opacity,
         sizeUnits: "meters",
-        sizeMinPixels: 18,
-        sizeMaxPixels: 38,
+        sizeMinPixels: 24,
+        sizeMaxPixels: 56,
         billboard: true,
         pickable: false,
       }),
