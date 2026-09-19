@@ -26,7 +26,12 @@ import { applyLaneOffset } from "@/render/map-geometry";
 import { samplePathIndex } from "@/cities/paths";
 import type { RenderedVehicle } from "@/render/interpolate";
 import { lerpAngle } from "@/render/interpolate";
-import { QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
+import {
+  QUEUE_GAP_M,
+  STOP_LINE_CLEARANCE_M,
+  VEHICLE_LENGTH_M,
+  stopLineSetbackMetres,
+} from "@/render/road-presentation";
 import type { City } from "@/sim/types";
 
 /**
@@ -70,13 +75,37 @@ export function packQueues(
     // Ascending rank: 0 is the front. The tie-break on id only makes an
     // impossible input (two vehicles sharing a rank) deterministic.
     queue.sort((a, b) => a.queueRank - b.queueRank || a.id - b.id);
-    const frontProgress = Math.min(road.length, Math.max(0, progressOf(queue[0].id)));
-    let distance = 0;
-    queue.forEach((vehicle) => {
-      const progress = Math.max(0, Math.min(road.length, frontProgress - distance));
-      placed.set(vehicle.id, { progress });
+    const frontVehicle = queue[0];
+    const frontLength = VEHICLE_LENGTH_M[frontVehicle.type] ?? VEHICLE_LENGTH_M.car;
+    const physicalStopProgress = Math.max(
+      0,
+      Math.min(
+        road.length,
+        index.total -
+          stopLineSetbackMetres(road.lanes) -
+          frontLength / 2 -
+          STOP_LINE_CLEARANCE_M,
+      ),
+    );
+    // Never move a vehicle forward just for presentation. If simulation truth
+    // is already farther back, preserve it. If it has reached the junction
+    // centre, clamp its rendered centre behind the same stop line the signal
+    // layer uses.
+    const frontProgress = Math.min(
+      Math.max(0, progressOf(frontVehicle.id)),
+      physicalStopProgress,
+    );
+
+    let centreProgress = frontProgress;
+    let previousLength = frontLength;
+    queue.forEach((vehicle, indexInQueue) => {
       const length = VEHICLE_LENGTH_M[vehicle.type] ?? VEHICLE_LENGTH_M.car;
-      distance += length + QUEUE_GAP_M;
+      if (indexInQueue > 0) {
+        centreProgress -= previousLength / 2 + QUEUE_GAP_M + length / 2;
+      }
+      const progress = Math.max(0, Math.min(road.length, centreProgress));
+      placed.set(vehicle.id, { progress });
+      previousLength = length;
     });
   }
 
