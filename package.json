@@ -13,7 +13,8 @@
     "test": "vitest run",
     "sync:maplibre-worker": "node scripts/sync-maplibre-worker.mjs",
     "test:watch": "vitest",
-    "sync:chicago-data": "node scripts/sync-chicago-data.mjs"
+    "sync:chicago-data": "node scripts/sync-chicago-data.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.0",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "puppeteer-core": "^25.11.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.0.1"

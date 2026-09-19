@@ -1,0 +1,75 @@
+[
+  {
+    "slug": "landing",
+    "view": "Landing, first load",
+    "shows": "One line on what this shot proves.",
+    "center": [
+      -87.6375,
+      41.881
+    ],
+    "zoom": 13.5,
+    "settleMs": 3000,
+    "steps": [
+      {
+        "clickText": "Start",
+        "waitMs": 1500
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 1800
+      }
+    ]
+  },
+  {
+    "slug": "metro-far",
+    "view": "Full Metro, rush demand, z12.0",
+    "shows": "Congestion overlay lights only roads under real pressure.",
+    "center": [
+      -87.6375,
+      41.881
+    ],
+    "zoom": 12.0,
+    "settleMs": 4200,
+    "steps": [
+      {
+        "clickText": "Start",
+        "waitMs": 1200
+      },
+      {
+        "slider": 0,
+        "arrowRight": 6,
+        "waitMs": 800
+      },
+      {
+        "slider": 1,
+        "arrowRight": 4,
+        "waitMs": 800
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 1800
+      }
+    ]
+  },
+  {
+    "slug": "street-detail",
+    "view": "Loop, street zoom, z17.0",
+    "shows": "What the reviewer should check at street level.",
+    "center": [
+      -87.6294,
+      41.8825
+    ],
+    "zoom": 17.0,
+    "settleMs": 3600,
+    "steps": [
+      {
+        "clickText": "Start",
+        "waitMs": 1200
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 1800
+      }
+    ]
+  }
+]

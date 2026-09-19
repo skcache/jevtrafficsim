@@ -1,7 +1,10 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # local-only product docs and notes — never committed
-docs/
+docs/*
+# exception: the screenshot history IS committed so a reviewer can pull it from
+# GitHub. Remove this pair at the final cleanup pass (see docs/screenshots/README.md).
+!docs/screenshots/
 /engineering-notebook.html
 
 # dependencies
