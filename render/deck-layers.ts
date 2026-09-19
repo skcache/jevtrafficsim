@@ -38,13 +38,11 @@ import {
   hatchSegments,
   signalGateBackingWidthPx,
   signalGateWidthPx,
-  signalHeadHeightPx,
   signalTierOpacity,
 } from "./visuals";
 import { iconSizeForLengthUnits } from "./vehicle-sprites";
 import { roadPresentationClass } from "./road-hierarchy";
 import {
-  signalIconSizeForHousingPx,
   signalSpriteForStage,
   type SignalSpriteId,
   type SignalSpriteSet,
@@ -313,10 +311,6 @@ export function buildSignalLayers(
   zoom: number,
   sprites: SignalSpriteSet | null = null,
 ): Layer[] {
-  // Signals are a street-zoom instrument. At far and mid zoom this returns
-  // nothing at all: a city-wide field of coloured dots is debug state, and
-  // congestion is carried by the road overlay instead. There is never a glyph
-  // in the middle of a junction — heads sit on the real approaches.
   if (!snapshot || zoom < SIGNAL_STATE_MINZOOM) {
     return [];
   }
@@ -324,16 +318,21 @@ export function buildSignalLayers(
 
   interface Head {
     position: LngLat;
-    /** Which signal sprite this approach shows: its state, or red if not active. */
     sprite: SignalSpriteId;
   }
   interface Bar {
     path: LngLat[];
     sprite: SignalSpriteId;
   }
-  const heads: Head[] = [];
-  const bars: Bar[] = [];
+  interface Glyph {
+    cx: number;
+    cy: number;
+    bearing: number;
+    bar: Bar;
+    head: Head | null;
+  }
 
+  const raw: Glyph[] = [];
   for (const signal of snapshot.signals) {
     const plan = plans.get(signal.intersectionId);
     if (!plan || plan.groupIncoming.length === 0) {
@@ -342,10 +341,8 @@ export function buildSignalLayers(
     const groupCount = plan.groupIncoming.length;
     const activeGroup =
       signal.stage === "all-red" ? -1 : ((signal.phaseIndex % groupCount) + groupCount) % groupCount;
+
     plan.groupArms.forEach((arms, groupIndex) => {
-      // The coloured gate is the primary signal language: state is painted
-      // directly at the stop line, so the user does not have to decode a tiny
-      // roadside object. Physical housings are progressive close-zoom detail.
       const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
       for (const arm of arms) {
         const index = indexes[arm.roadId];
@@ -353,12 +350,13 @@ export function buildSignalLayers(
         if (!index || index.total < setbackM + 1) {
           continue;
         }
+
         const stopProgress = index.total - setbackM;
         const sample = samplePathIndex(index, stopProgress);
         const laneCenter = applyLaneOffset(sample, arm.laneOffsetM);
         const nx = -Math.sin(sample.heading);
         const ny = Math.cos(sample.heading);
-        bars.push({
+        const bar: Bar = {
           sprite,
           path: [
             toLngLat(
@@ -372,27 +370,62 @@ export function buildSignalLayers(
               laneCenter.y + ny * arm.halfWidthM,
             ),
           ],
-        });
+        };
+
+        let head: Head | null = null;
         if (zoom >= SIGNAL_HEAD_MINZOOM) {
           const headSample = applyLaneOffset(
             samplePathIndex(index, Math.min(index.total, stopProgress + 0.35)),
-            arm.laneOffsetM + arm.halfWidthM + 1.45,
+            arm.laneOffsetM + arm.halfWidthM + 1.65,
           );
-          heads.push({
+          head = {
             position: toLngLat(projection, headSample.x, headSample.y),
             sprite,
-          });
+          };
         }
+        raw.push({ cx: laneCenter.x, cy: laneCenter.y, bearing: sample.heading, bar, head });
       }
     });
   }
 
+  // Chicago OSM can encode one physical signalized approach as several nearby
+  // logical nodes. Rendering every node produces the stacked red/green ladders
+  // visible in the screenshots. Collapse only near-identical DIRECTIONAL
+  // approaches; opposite directions remain distinct.
+  const deduped: Glyph[] = [];
+  const directionGap = (a: number, b: number) => {
+    const full = Math.PI * 2;
+    const d = Math.abs(a - b) % full;
+    return Math.min(d, full - d);
+  };
+  const stateRank: Record<SignalSpriteId, number> = {
+    "signal-red": 3,
+    "signal-yellow": 2,
+    "signal-green": 1,
+  };
+  for (const glyph of raw) {
+    const match = deduped.find(
+      (candidate) =>
+        Math.hypot(candidate.cx - glyph.cx, candidate.cy - glyph.cy) <= 12 &&
+        directionGap(candidate.bearing, glyph.bearing) <= (18 * Math.PI) / 180,
+    );
+    if (!match) {
+      deduped.push(glyph);
+      continue;
+    }
+    // When duplicate logical nodes disagree for a frame, use the restrictive
+    // state. One physical stop line must never simultaneously look red+green.
+    if (stateRank[glyph.bar.sprite] > stateRank[match.bar.sprite]) {
+      match.bar = glyph.bar;
+      match.head = glyph.head;
+    }
+  }
+
+  const bars = deduped.map((glyph) => glyph.bar);
+  const heads = deduped.flatMap((glyph) => (glyph.head ? [glyph.head] : []));
   const layers: Layer[] = [];
+
   if (bars.length > 0) {
-    // One geometry, two strokes: a dark physical stop-line keyline beneath the
-    // semantic state color. The user sees one deliberate control gate exactly
-    // where traffic stops, rather than detached red/green whiskers around a
-    // junction.
     layers.push(
       new PathLayer<Bar>({
         id: "signals-state-gate-backing",
@@ -421,14 +454,8 @@ export function buildSignalLayers(
       }),
     );
   }
+
   if (heads.length > 0 && sprites) {
-    // One sprite per approach: a graphite housing with the active lamp lit and
-    // its companions dim. The sprite carries the state, so there is no coloured
-    // dot anywhere in this layer.
-    //
-    // When the atlas is missing (no DOM) the heads are hidden rather than
-    // substituted: a coloured circle is the debug language this replaced. The
-    // map component reports the missing atlas in its debug tooling.
     layers.push(
       new IconLayer<Head>({
         id: "signals-heads",
@@ -437,24 +464,21 @@ export function buildSignalLayers(
         iconMapping: sprites.mapping,
         getIcon: (head) => head.sprite,
         getPosition: (head) => head.position,
-        // The state gate already communicates approach direction. The housing
-        // is therefore screen-aligned like a map annotation, which keeps the
-        // familiar red/yellow/green stack instantly recognizable at any street
-        // angle instead of turning into a tiny rotated black dash.
-        // Use physical/common map scaling rather than a hand-tuned pixel
-        // step. The head grows naturally as the camera descends, while the
-        // legibility caps keep it readable at entry zoom and prevent it from
-        // becoming a billboard at maximum inspection.
-        getSize: signalIconSizeForHousingPx(signalHeadHeightPx(zoom)),
+        // Signal heads are semantic instrumentation, not literal street
+        // furniture. Size them in map space so they grow as the camera descends,
+        // with generous pixel bounds so the state remains obvious.
+        getSize: 7.5,
         getAngle: 0,
         opacity,
-        sizeUnits: "pixels",
+        sizeUnits: "meters",
+        sizeMinPixels: 30,
+        sizeMaxPixels: 72,
         billboard: true,
         pickable: false,
-        updateTriggers: { getSize: zoom },
       }),
     );
   }
+
   return layers;
 }
 
