@@ -54,6 +54,13 @@ export const CHICAGO_PALETTE = {
   buildingLine: "#d6cebd",
   landmark: "#e2dccd",
   landmarkLine: "#c8bfa9",
+  /**
+   * Urban blocks: the city fabric between meaningful streets. One calm warm
+   * neutral surface per block replaces thousands of individual footprints, so
+   * the map reads as roads carving a coherent city instead of unrelated shapes.
+   */
+  block: "#e9e4d8",
+  blockEdge: "#ddd6c6",
   localSurface: "#ffffff",
   localCasing: "#ded8cc",
   arterialSurface: "#fffefb",
@@ -86,9 +93,18 @@ export const MAP_ZOOM = {
   waterDetail: 15,
   waterShore: 12,
   waterBank: 13.6,
-  /** Building mass reads from here; individual footprints get real at close. */
+  /** City blocks are the urban mass; they arrive before any footprint does. */
+  blocks: 11.6,
+  blocksEdge: 14.4,
+  /**
+   * Buildings: at neighborhood zoom only the prominent masses read as aggregate
+   * city weight; every footprint waits for street zoom.
+   */
   buildings: 14.2,
+  buildingsAll: 15.8,
   buildingsOutline: 16.6,
+  /** Short unnamed stubs earn ink only when the camera is close. */
+  roadsDetail: 16,
   /** Park edges, like building outlines, are a close-zoom instrument. */
   parksEdge: 14.6,
   landmarks: 13.4,
@@ -111,8 +127,16 @@ export const MAP_ZOOM = {
 export const AREA_MIN = {
   waterFar: 2500,
   waterMid: 700,
+  /**
+   * Even at close zoom, water has to be a real body: compactness catches thin
+   * wedges, but a small triangle is compact and still reads as a scrap beside
+   * calm blocks.
+   */
+  waterClose: 500,
   parkFar: 12000,
   parkMid: 2500,
+  /** The same floor for green: below this it is a garden scrap, not a park. */
+  parkClose: 900,
 } as const;
 
 /** Zoom at which the mid-band area thresholds take over. */
@@ -167,9 +191,11 @@ const zoomWidth = (zFar: number, zMid: number, zClose: number) =>
 
 /**
  * Opacity that keeps a polygon hidden until its area passes the band's
- * threshold: 0 at far zoom, threshold relaxed at mid, everything at close.
+ * threshold: 0 at far zoom, threshold relaxed at mid, and at close zoom either
+ * everything (areaClose 0) or everything above a final floor — because a
+ * 40 m² grass scrap beside calm blocks is debris at any zoom.
  */
-function areaGate(areaFar: number, areaMid: number, closeZoom: number): number {
+function areaGate(areaFar: number, areaMid: number, closeZoom: number, areaClose = 0): number {
   return [
     "interpolate",
     ["linear"],
@@ -179,7 +205,7 @@ function areaGate(areaFar: number, areaMid: number, closeZoom: number): number {
     AREA_MID_ZOOM,
     ["case", [">=", ["get", "areaM2"], areaMid], 1, 0],
     closeZoom,
-    1,
+    areaClose > 0 ? ["case", [">=", ["get", "areaM2"], areaClose], 1, 0] : 1,
   ] as unknown as number;
 }
 
@@ -191,6 +217,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
   const palette = CHICAGO_PALETTE;
   const sources: StyleSpecification["sources"] = {
     land: { type: "geojson", data: geo.land as never },
+    blocks: { type: "geojson", data: geo.blocks as never },
     water: { type: "geojson", data: geo.water as never },
     parks: { type: "geojson", data: geo.parks as never },
     buildings: { type: "geojson", data: geo.buildings as never },
@@ -198,6 +225,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
+    "roads-detail": { type: "geojson", data: geo.roadsDetail as never },
     "roads-arterial": { type: "geojson", data: geo.roadsArterial as never },
     "roads-highway": { type: "geojson", data: geo.roadsHighway as never },
     bridges: { type: "geojson", data: geo.bridges as never },
@@ -205,6 +233,40 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
 
   const layers: LayerSpecification[] = [
     { id: "land", type: "fill", source: "land", paint: { "fill-color": palette.land } },
+    // Urban blocks: the city fabric between meaningful streets. One calm warm
+    // surface per block is the mid-zoom urban mass, so the map never depends on
+    // thousands of individual footprints to look like a city.
+    {
+      id: "blocks",
+      type: "fill",
+      source: "blocks",
+      minzoom: MAP_ZOOM.blocks,
+      paint: {
+        "fill-color": palette.block,
+        "fill-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          MAP_ZOOM.blocks,
+          0.35,
+          13.5,
+          0.75,
+          15.5,
+          0.95,
+        ],
+      },
+    },
+    {
+      id: "blocks-edge",
+      type: "line",
+      source: "blocks",
+      minzoom: MAP_ZOOM.blocksEdge,
+      paint: {
+        "line-color": palette.blockEdge,
+        "line-width": zoomWidth(0.4, 0.7, 1),
+        "line-opacity": 0.7,
+      },
+    },
     {
       id: "water",
       type: "fill",
@@ -212,7 +274,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: {
         "fill-color": palette.water,
         // Chicago River and Lake Michigan dominate; a fountain waits.
-        "fill-opacity": areaGate(AREA_MIN.waterFar, AREA_MIN.waterMid, MAP_ZOOM.waterDetail),
+        "fill-opacity": areaGate(AREA_MIN.waterFar, AREA_MIN.waterMid, MAP_ZOOM.waterDetail, AREA_MIN.waterClose),
       },
     },
     {
@@ -240,7 +302,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: {
         "fill-color": palette.park,
         // A 150 m² grass fragment is not geography at city zoom.
-        "fill-opacity": areaGate(AREA_MIN.parkFar, AREA_MIN.parkMid, 15.5),
+        "fill-opacity": areaGate(AREA_MIN.parkFar, AREA_MIN.parkMid, 15.5, AREA_MIN.parkClose),
       },
     },
     {
@@ -257,28 +319,42 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       minzoom: MAP_ZOOM.landmarks,
       paint: { "fill-color": palette.landmark, "fill-opacity": 0.9 },
     },
-    // Buildings: mass at neighborhood zoom, real footprints at street zoom.
-    // No canopy dots, no shadow, no third tone — the faceted mesh those created
-    // was the single biggest source of visual noise.
+    // Buildings: at neighborhood zoom only the prominent masses read as
+    // aggregate city weight; every ordinary footprint waits for street zoom, so
+    // blocks stay the main urban mass and nothing screams at equal importance.
+    {
+      id: "buildings-prominent",
+      type: "fill",
+      source: "buildings",
+      minzoom: MAP_ZOOM.buildings,
+      filter: ["==", ["get", "prominent"], true],
+      paint: {
+        "fill-color": palette.buildingLarge,
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.buildings, 0.4, 15.5, 0.75],
+      },
+    },
     {
       id: "buildings",
       type: "fill",
       source: "buildings",
-      minzoom: MAP_ZOOM.buildings,
+      minzoom: MAP_ZOOM.buildingsAll,
+      // Meaningful footprints only: below this a building is texture, and a
+      // field of tiny shapes beside calm blocks reads as debris.
+      filter: ["all", ["!=", ["get", "prominent"], true], [">=", ["get", "area"], 250]],
       paint: {
-        "fill-color": ["case", ["get", "prominent"], palette.buildingLarge, palette.buildingSmall],
-        "fill-opacity": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          MAP_ZOOM.buildings,
-          0.55,
-          15.5,
-          0.85,
-          16.6,
-          1,
-        ],
+        "fill-color": palette.buildingSmall,
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.buildingsAll, 0.55, 16.6, 0.95],
       },
+    },
+    {
+      id: "buildings-small",
+      type: "fill",
+      source: "buildings",
+      // The rest of the footprints earn ink only at the closest zooms, and
+      // quietly, so nothing competes with the block fabric.
+      minzoom: 17.2,
+      filter: ["all", ["!=", ["get", "prominent"], true], ["<", ["get", "area"], 250]],
+      paint: { "fill-color": palette.buildingSmall, "fill-opacity": 0.55 },
     },
     {
       id: "buildings-outline",
@@ -313,6 +389,20 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         "line-color": palette.localSurface,
         "line-width": roadWidthPx(),
         "line-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.localRoads, 0, 13.6, 1],
+      },
+    },
+    // Short unnamed stubs: real roads that keep routing, but they only earn ink
+    // once the camera is close. Drawing them at neighborhood zoom is what made
+    // ordinary street pieces read as fake ramps.
+    {
+      id: "roads-detail",
+      type: "line",
+      source: "roads-detail",
+      minzoom: MAP_ZOOM.roadsDetail,
+      paint: {
+        "line-color": palette.localSurface,
+        "line-width": roadWidthPx(0.4),
+        "line-opacity": 0.9,
       },
     },
     {

@@ -18,7 +18,6 @@ import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
 import { widthPxAt } from "./road-presentation";
 import {
   CLOSE_TIER_MINZOOM,
-  CROSSWALK_MINZOOM,
   VEHICLE_MINZOOM,
   WAIT_HEAT_MINZOOM,
 } from "./zoom-grammar";
@@ -294,7 +293,6 @@ export function buildSignalLayers(
     return [];
   }
   const opacity = signalTierOpacity(zoom);
-  const crosswalks = zoom >= CROSSWALK_MINZOOM;
 
   interface Head {
     position: LngLat;
@@ -338,21 +336,13 @@ export function buildSignalLayers(
             toLngLat(projection, sample.x + nx * halfWidth, sample.y + ny * halfWidth),
           ],
         });
-        if (crosswalks) {
-          const offset = SIGNAL_STOP_BAR_OFFSET_M + 1.4;
-          const walkProgress = Math.max(0, index.total - offset);
-          const walk = samplePathIndex(index, walkProgress);
-          bars.push({
-            path: [
-              toLngLat(projection, walk.x - nx * halfWidth, walk.y - ny * halfWidth),
-              toLngLat(projection, walk.x + nx * halfWidth, walk.y + ny * halfWidth),
-            ],
-          });
-        }
-        // The head itself: kerbside of the approach, just before the stop line.
+        // The head itself: kerbside of the approach, just before the stop line,
+        // so it reads as roadside infrastructure beside the approach rather than
+        // floating in the junction. (The synthetic crosswalk line that used to
+        // draw here is gone: we do not know where the crossings actually are.)
         const headSample = applyLaneOffset(
-          samplePathIndex(index, Math.max(0, stopProgress - 1.5)),
-          halfWidth + 1.2,
+          samplePathIndex(index, Math.max(0, stopProgress - 2.2)),
+          halfWidth + 0.9,
         );
         heads.push({
           position: toLngLat(projection, headSample.x, headSample.y),
@@ -373,7 +363,7 @@ export function buildSignalLayers(
         // Stop bars sit on a near-white road surface, so they read as a dark
         // neutral line rather than a white one that disappears into the casing.
         getColor: [120, 112, 98, Math.round(190 * opacity)],
-        getWidth: crosswalks ? 2 : 3,
+        getWidth: 3,
         widthUnits: "pixels",
         pickable: false,
       }),

@@ -151,6 +151,8 @@ export interface MapModel {
   /** Water and park polygons, each carrying its own rings (holes included). */
   readonly water: readonly PolygonFeature[];
   readonly parks: readonly PolygonFeature[];
+  /** Urban blocks: presentation fabric derived from the street network. */
+  readonly blocks: readonly PolygonFeature[];
   /**
    * Bridge groups whose geometry genuinely crosses extracted water — the only
    * ones a "bridge closed" incident may target on the Chicago showcase. A

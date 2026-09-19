@@ -1,0 +1,226 @@
+/**
+ * Phase 3.3 presentation guards: road hierarchy, block fabric, polygon debris
+ * rules, and the product shell's structural contracts.
+ *
+ * These are the rules that keep the map coherent: a stub stays out of mid zoom,
+ * a ramp never does, a sliver never becomes "geography", and the chrome keeps
+ * its one-surface discipline.
+ */
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
+import { buildShowcaseGeoJson } from "@/render/map-geojson";
+import { buildChicagoStyle, AREA_MIN, MAP_ZOOM } from "@/render/chicago-style";
+import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
+import { chicagoModel } from "./chicago-support";
+
+const model = chicagoModel(2);
+
+describe("road presentation hierarchy", () => {
+  it("classifies the network the way the map draws it", () => {
+    expect(roadPresentationClass({ osmClass: "motorway", length: 400 })).toBe("primary");
+    expect(roadPresentationClass({ osmClass: "trunk", length: 400 })).toBe("primary");
+    expect(roadPresentationClass({ osmClass: "secondary", name: "West Madison Street", length: 90 })).toBe("primary");
+    // Ramps are structure, however short: they stay visible.
+    expect(roadPresentationClass({ osmClass: "motorway_link", length: 40 })).toBe("primary");
+    expect(roadPresentationClass({ osmClass: "trunk_link", length: 30 })).toBe("primary");
+    // Ordinary streets are secondary; short unnamed stubs are detail.
+    expect(roadPresentationClass({ osmClass: "residential", name: "West Polk Street", length: 80 })).toBe("secondary");
+    expect(roadPresentationClass({ osmClass: "tertiary", length: 200 })).toBe("secondary");
+    expect(roadPresentationClass({ osmClass: "tertiary", length: DETAIL_MAX_LENGTH_M - 5 })).toBe("detail");
+    // A named short piece is a real street: it stays.
+    expect(roadPresentationClass({ osmClass: "tertiary", name: "Honoré Street", length: 20 })).toBe("secondary");
+  });
+
+  it("hides detail roads below close zoom and never hides ramps", () => {
+    const geo = buildShowcaseGeoJson(model);
+    const style = buildChicagoStyle(geo);
+    const byId = new Map(style.layers.map((layer) => [layer.id, layer]));
+
+    const detail = byId.get("roads-detail")!;
+    expect(detail).toBeTruthy();
+    expect((detail as { minzoom?: number }).minzoom ?? 0).toBeGreaterThanOrEqual(16);
+    // The ordinary local network appears earlier than the stubs do.
+    const local = byId.get("roads-local")! as { minzoom?: number };
+    expect(local.minzoom ?? 0).toBeLessThan((detail as { minzoom?: number }).minzoom ?? 99);
+
+    // Ramps and expressways carry no minzoom: they are visible at every zoom.
+    for (const id of ["roads-highway", "roads-highway-casing"] as const) {
+      const layer = byId.get(id)! as { minzoom?: number };
+      expect(layer.minzoom ?? 0).toBeLessThanOrEqual(1);
+    }
+    // And a ramp actually reaches the highway source rather than the stubs.
+    const ramp = geo.roadsHighway.features.find((feature) => String(feature.properties.osmClass).endsWith("_link"));
+    expect(ramp).toBeTruthy();
+    expect(geo.roadsDetail.features).not.toContain(ramp);
+  });
+
+  it("keeps routing intact while hiding a piece from the map", () => {
+    // Presentation and simulation stay separate: a detail piece still exists as
+    // routed roads with capacity, it simply draws later. The audit found the
+    // medium-scale network is clean enough that detail is nearly empty, so this
+    // walks every scale rather than assuming one.
+    const hidden = [];
+    for (let scale = 0; scale < 5; scale += 1) {
+      for (const piece of chicagoModel(scale).streets) {
+        if (roadPresentationClass(piece) === "detail") {
+          hidden.push({ scale, piece });
+        }
+      }
+    }
+    for (const { scale, piece } of hidden.slice(0, 25)) {
+      const city = chicagoModel(scale).city;
+      expect(piece.roadIds.length).toBeGreaterThan(0);
+      for (const roadId of piece.roadIds) {
+        expect(city.roads[roadId]).toBeTruthy();
+        expect(city.roads[roadId].capacity).toBeGreaterThan(0);
+      }
+    }
+    // Whatever is in the detail collection must obey the rule that put it there.
+    for (const feature of buildShowcaseGeoJson(model).roadsDetail.features) {
+      expect(
+        roadPresentationClass({
+          osmClass: String(feature.properties.osmClass),
+          name: String(feature.properties.name) || undefined,
+          length: 0,
+        }),
+      ).toBe("detail");
+    }
+  });
+
+  it("gives bridge material only to pieces that cross water", () => {
+    const geo = buildShowcaseGeoJson(model);
+    const bridgePieces = model.streets.filter((piece) => piece.bridgeStructure);
+    expect(bridgePieces.length).toBeGreaterThan(50);
+    // Fewer bridges than bridge-tagged pieces: the viaducts and overpasses are
+    // drawn as their own road class instead of as thick scraps.
+    expect(geo.bridges.features.length).toBeGreaterThan(0);
+    expect(geo.bridges.features.length).toBeLessThan(bridgePieces.length);
+    for (const feature of geo.bridges.features) {
+      const piece = model.streets.find((entry) => entry.streetId === feature.properties.streetId)!;
+      expect(pieceCrossesWater(piece.points, model.water)).toBe(true);
+    }
+  });
+});
+
+describe("synthetic markings are gone", () => {
+  const indexes = buildDirectedPathIndexes(model);
+  const plans = buildSignalPlans(model);
+
+  it("draws one stop bar per approach and nothing else", () => {
+    const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2)!;
+    const signals: PresentationSignal[] = [
+      { intersectionId: entry[0], phaseIndex: 0, stage: "green" },
+    ];
+    const snapshot = { sequence: 1, timeMs: 1000, vehicles: [], signals } as unknown as PresentationSnapshot;
+    const sprites = {
+      atlas: "data:image/png;base64,",
+      mapping: Object.fromEntries(
+        ["signal-red", "signal-yellow", "signal-green"].map((id) => [
+          id,
+          { x: 0, y: 0, width: 10, height: 10, anchorX: 5, anchorY: 5, mask: false },
+        ]),
+      ),
+    } as never;
+    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17.5, sprites);
+    const ids = layers.map((layer) => layer.id).sort();
+    expect(ids).toEqual(["signals-heads", "signals-stopbars"]);
+    const bars = (layers.find((layer) => layer.id === "signals-stopbars") as unknown as {
+      props: { data: unknown[] };
+    }).props.data;
+    const heads = (layers.find((layer) => layer.id === "signals-heads") as unknown as {
+      props: { data: unknown[] };
+    }).props.data;
+    // Exactly one bar per head: no second parallel line pretending to be a
+    // crosswalk we do not actually know about.
+    expect(bars.length).toBe(heads.length);
+  });
+});
+
+describe("block fabric", () => {
+  const geo = buildShowcaseGeoJson(model);
+
+  it("derives valid, substantial blocks", () => {
+    expect(geo.blocks.features.length).toBeGreaterThan(50);
+    for (const feature of geo.blocks.features) {
+      const ring = feature.geometry.coordinates[0];
+      expect(ring.length).toBeGreaterThanOrEqual(4);
+      // Closed ring: MapLibre needs first === last.
+      expect(ring[0]).toEqual(ring[ring.length - 1]);
+      expect(Number(feature.properties.areaM2)).toBeGreaterThanOrEqual(600);
+    }
+  });
+
+  it("draws blocks before water, parks and roads so the fabric reads as carved", () => {
+    const style = buildChicagoStyle(geo);
+    const ids = style.layers.map((layer) => layer.id);
+    const at = (id: string) => ids.indexOf(id);
+    expect(at("blocks")).toBeGreaterThan(at("land"));
+    expect(at("blocks")).toBeLessThan(at("water"));
+    expect(at("blocks")).toBeLessThan(at("parks"));
+    expect(at("blocks")).toBeLessThan(at("roads-local"));
+    expect(at("blocks-edge")).toBeGreaterThan(at("blocks"));
+  });
+});
+
+describe("detail hierarchy by zoom", () => {
+  const style = buildChicagoStyle(buildShowcaseGeoJson(model));
+  const byId = new Map(style.layers.map((layer) => [layer.id, layer]));
+  const minzoom = (id: string) => (byId.get(id) as { minzoom?: number } | undefined)?.minzoom ?? 0;
+
+  it("shows blocks before any footprint, and prominent mass before clutter", () => {
+    expect(minzoom("blocks")).toBeLessThan(minzoom("buildings-prominent"));
+    expect(minzoom("buildings-prominent")).toBeLessThan(minzoom("buildings"));
+    expect(minzoom("buildings")).toBeLessThan(minzoom("buildings-small"));
+    expect(MAP_ZOOM.buildingsAll).toBeGreaterThan(MAP_ZOOM.buildings);
+  });
+
+  it("keeps green and blue out until they are meaningful", () => {
+    expect(AREA_MIN.parkFar).toBeGreaterThan(AREA_MIN.parkMid);
+    expect(AREA_MIN.parkMid).toBeGreaterThan(AREA_MIN.parkClose);
+    expect(AREA_MIN.waterFar).toBeGreaterThan(AREA_MIN.waterMid);
+    expect(AREA_MIN.waterMid).toBeGreaterThan(AREA_MIN.waterClose);
+    // Even at close zoom a scrap has a floor: no zero-area confetti.
+    expect(AREA_MIN.parkClose).toBeGreaterThanOrEqual(500);
+    expect(AREA_MIN.waterClose).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe("product shell contracts", () => {
+  const chrome = readFileSync(new URL("../components/SimChrome.tsx", import.meta.url), "utf8");
+  const metrics = readFileSync(new URL("../components/MetricsHUD.tsx", import.meta.url), "utf8");
+  const dock = readFileSync(new URL("../components/IncidentBar.tsx", import.meta.url), "utf8");
+  const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
+
+  it("names the real city in the run identity, never the rejected one", () => {
+    expect(chrome).toContain("Chicago");
+    expect(chrome).not.toContain("Central");
+  });
+
+  it("groups the metrics into one surface and has no sparkline", () => {
+    expect(metrics).toContain("surface");
+    expect(metrics).not.toContain("sparkline");
+    expect(metrics).toContain("tabular");
+    // One panel, not a stack of loose rows: a single wrapper carries the surface.
+    expect(metrics.match(/className="surface/g)?.length).toBe(1);
+  });
+
+  it("keeps the dock to one line per action", () => {
+    expect(dock).toContain("whitespace-nowrap");
+    // The acknowledgement lives inside the same surface as the buttons.
+    const surface = dock.indexOf('className="surface');
+    const ack = dock.indexOf("aria-live");
+    const buttons = dock.indexOf("INCIDENTS.map");
+    expect(surface).toBeGreaterThan(-1);
+    expect(ack).toBeGreaterThan(surface);
+    expect(buttons).toBeGreaterThan(ack);
+  });
+
+  it("keeps the controller switchable and the OSM attribution visible", () => {
+    expect(chrome).toContain("CONTROLLER_OPTIONS");
+    expect(chrome).toContain("Segmented");
+    expect(map.toLowerCase()).toContain("attribution");
+  });
+});

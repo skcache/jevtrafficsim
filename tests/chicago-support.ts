@@ -37,6 +37,7 @@ export function chicagoFeatures(): ChicagoFeatures {
       water: readJson<ChicagoFeatureCollection>("water.geojson"),
       parks: readJson<ChicagoFeatureCollection>("parks.geojson"),
       landmarks: readJson<ChicagoFeatureCollection>("landmarks.geojson"),
+      blocks: readJson<ChicagoFeatureCollection>("blocks.geojson"),
     };
   }
   return featuresCache;

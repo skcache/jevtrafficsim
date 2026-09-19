@@ -9,6 +9,7 @@
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
+import { pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
 
 export type LngLat = readonly [number, number];
 
@@ -120,6 +121,13 @@ export interface ShowcaseLabels {
  */
 const BUILDING_MIN_AREA_M2 = 25;
 const SLIVER_COMPACTNESS = 0.05;
+/**
+ * Parks and water need a stricter thinness floor than buildings do. A close
+ * zoom review found the remaining "floating scraps" were green and blue
+ * triangles: wedges left where a polygon meets a diagonal street. A building
+ * sliver is at least architecture; a grass or water sliver is debris.
+ */
+const AREA_SLIVER_COMPACTNESS = 0.12;
 
 /** Shoelace area of a metric ring, in m². */
 function ringArea(ring: readonly (readonly number[])[]): number {
@@ -150,10 +158,14 @@ export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
   readonly parks: FeatureCollection<PolygonGeometry>;
+  /** Urban blocks: the city fabric between meaningful streets. */
+  readonly blocks: FeatureCollection<PolygonGeometry>;
   readonly buildings: FeatureCollection<PolygonGeometry>;
   readonly roadsLocal: FeatureCollection<LineGeometry>;
   readonly roadsArterial: FeatureCollection<LineGeometry>;
   readonly roadsHighway: FeatureCollection<LineGeometry>;
+  /** Short unnamed stubs: real roads, shown only when the camera is close. */
+  readonly roadsDetail: FeatureCollection<LineGeometry>;
   readonly bridges: FeatureCollection<LineGeometry>;
   readonly landmarks: FeatureCollection<PolygonGeometry>;
   readonly labels: FeatureCollection<PointGeometry>;
@@ -184,7 +196,9 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   };
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.water.map((entry, index) =>
+    features: model.water
+      .filter((entry) => compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS)
+      .map((entry, index) =>
       polygonFeature(projection, entry.rings, {
         id: `water-${index}`,
         kind: entry.kind,
@@ -197,7 +211,7 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     features: model.parks
       // Hair-thin fragments are debris; small gardens are real green space and
       // stay (the style decides when they are worth drawing).
-      .filter((entry) => compactnessOf(entry.rings[0]) >= SLIVER_COMPACTNESS)
+      .filter((entry) => compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS)
       .map((entry, index) =>
         polygonFeature(projection, entry.rings, {
           id: `park-${index}`,
@@ -207,6 +221,16 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       ),
   };
 
+  const blocks: FeatureCollection<PolygonGeometry> = {
+    type: "FeatureCollection",
+    features: model.blocks.map((entry, index) =>
+      polygonFeature(projection, entry.rings, {
+        id: `block-${index}`,
+        kind: entry.kind,
+        areaM2: Math.round(entry.areaM2),
+      }),
+    ),
+  };
   const buildings: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.buildings
@@ -237,10 +261,12 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const local: Feature<LineGeometry>[] = [];
   const arterial: Feature<LineGeometry>[] = [];
   const highway: Feature<LineGeometry>[] = [];
+  const detail: Feature<LineGeometry>[] = [];
   const bridge: Feature<LineGeometry>[] = [];
   for (const piece of model.streets) {
     // One line per PHYSICAL street piece: the two directed roads are the same
     // geometry and must not be drawn twice.
+    const presentation = roadPresentationClass(piece);
     const feature = lineFeature(projection, piece.points, {
       streetId: piece.streetId,
       kind: piece.kind,
@@ -250,11 +276,16 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       widthM: piece.widthM,
       lanesTotal: piece.lanesTotal,
       osmClass: piece.osmClass,
+      presentation,
       bridge: piece.bridgeStructure,
       tunnel: piece.tunnel,
       layer: piece.layer,
       oneway: piece.oneway,
     });
+    if (presentation === "detail") {
+      detail.push(feature);
+      continue;
+    }
     // Hierarchy follows the OSM class, never "it is a bridge": a motorway
     // bridge stays a motorway on screen.
     if (piece.osmClass === "motorway" || piece.osmClass === "trunk" || piece.osmClass.endsWith("_link")) {
@@ -268,7 +299,11 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     } else {
       local.push(feature);
     }
-    if (piece.bridgeStructure) {
+    // Bridge material is for crossings, not for every bridge-tagged piece: the
+    // audit found 230 bridge pieces at medium scale, nearly all of them short
+    // viaduct or overpass segments that read as thick scraps beside thin
+    // streets. A piece earns it by actually crossing water.
+    if (piece.bridgeStructure && pieceCrossesWater(piece.points, model.water)) {
       bridge.push(feature);
     }
   }
@@ -276,10 +311,12 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     land,
     water,
     parks,
+    blocks,
     buildings,
     roadsLocal: { ...roadsLocal, features: local },
     roadsArterial: { ...roadsArterial, features: arterial },
     roadsHighway: { ...roadsHighway, features: highway },
+    roadsDetail: { type: "FeatureCollection", features: detail },
     bridges: { ...bridges, features: bridge },
     landmarks: {
       type: "FeatureCollection",
@@ -378,11 +415,13 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     },
     layerOrder: [
       "land",
+      "blocks",
       "water",
       "parks",
       "buildings",
       "roads-local-casing",
       "roads-local",
+      "roads-detail",
       "roads-arterial-casing",
       "roads-arterial",
       "roads-highway-casing",

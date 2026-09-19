@@ -42,15 +42,16 @@ export function loadChicagoBundle(scaleIndex: number): Promise<ChicagoBundle> {
   }
   const scale = CHICAGO_SCALES[scaleIndex] ?? CHICAGO_SCALES[2];
   const promise = (async () => {
-    const [metadata, asset, buildings, water, parks, landmarks] = await Promise.all([
+    const [metadata, asset, buildings, water, parks, landmarks, blocks] = await Promise.all([
       fetchJson<ChicagoMetadata>(`${CHICAGO_DATA_BASE}/metadata.json`),
       fetchJson<ChicagoAsset>(`${CHICAGO_DATA_BASE}/${scale}.json`),
       fetchJson<ChicagoFeatureCollection>(`${CHICAGO_DATA_BASE}/buildings.geojson`),
       fetchJson<ChicagoFeatureCollection>(`${CHICAGO_DATA_BASE}/water.geojson`),
       fetchJson<ChicagoFeatureCollection>(`${CHICAGO_DATA_BASE}/parks.geojson`),
       fetchJson<ChicagoFeatureCollection>(`${CHICAGO_DATA_BASE}/landmarks.geojson`),
+      fetchJson<ChicagoFeatureCollection>(`${CHICAGO_DATA_BASE}/blocks.geojson`),
     ]);
-    return { asset, metadata, features: { buildings, water, parks, landmarks } };
+    return { asset, metadata, features: { buildings, water, parks, landmarks, blocks } };
   })();
   bundleCache.set(scaleIndex, promise);
   return promise;

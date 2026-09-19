@@ -384,6 +384,8 @@ export interface ChicagoFeatures {
   readonly water: ChicagoFeatureCollection;
   readonly parks: ChicagoFeatureCollection;
   readonly landmarks: ChicagoFeatureCollection;
+  /** Urban blocks derived from the street network (presentation only). */
+  readonly blocks: ChicagoFeatureCollection;
 }
 
 /* ------------------------------------------------------------------ */
@@ -635,6 +637,19 @@ export function compileChicagoCity(
     }
   }
 
+  // Urban blocks: the city fabric between meaningful streets, derived offline
+  // from the street network. They are the mid-zoom urban mass, so the map does
+  // not depend on thousands of individual footprints to look like a city.
+  const blocks: PolygonFeature[] = [];
+  for (const feature of features.blocks.features) {
+    for (const rings of polygonsOf(projection, feature)) {
+      if (rings[0].length < 4 || !withinBounds(bounds, rings[0])) {
+        continue;
+      }
+      blocks.push({ rings, areaM2: ringArea(rings[0]), kind: "block" });
+    }
+  }
+
   const landmarks: MapLandmark[] = [];
   for (const feature of features.landmarks.features) {
     const name = typeof feature.properties.name === "string" ? feature.properties.name : "Venue";
@@ -795,6 +810,7 @@ export function compileChicagoCity(
     buildings,
     water,
     parks,
+    blocks,
     waterCrossingBridges,
     districts,
     landmarks,

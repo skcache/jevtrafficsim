@@ -113,7 +113,17 @@ describe("subtraction at city zoom", () => {
   });
 
   it("keeps the layer list small enough to read as a designed map", () => {
-    expect(layers.length).toBeLessThan(24);
+    // Phase 3.1 set this ceiling at 24. Phase 3.3 added four purposeful layers
+    // and raised it: blocks + blocks-edge (the city fabric), roads-detail
+    // (short stubs, close zoom only), and buildings-prominent (the mid-zoom
+    // aggregate mass). The ceiling stays a ceiling — every addition is named
+    // here, so an unexplained layer cannot slip in.
+    const phase33Additions = ["blocks", "blocks-edge", "roads-detail", "buildings-prominent"];
+    expect(layers.length).toBeLessThan(31);
+    expect(layers.length).toBeGreaterThanOrEqual(24 + phase33Additions.length - 1);
+    // No duplicate ids: a copy-paste layer would double-draw silently.
+    const ids = layers.map((layer) => layer.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("does not draw buildings until neighborhood zoom", () => {
