@@ -623,14 +623,16 @@ export function buildIncidentLayers(
         id: "event-badges",
         data: eventCenters,
         getPosition: (center) => center.position,
-        getRadius: 4,
+        // Sized to read at neighborhood zoom: a 4 px dot vanished into the
+        // basemap, and an incident marker nobody can see is not a marker.
+        getRadius: 6.5,
         radiusUnits: "pixels",
         filled: true,
-        getFillColor: [176, 126, 68, 235],
+        getFillColor: [176, 126, 68, 240],
         stroked: true,
-        getLineColor: [255, 253, 249, 240],
+        getLineColor: [255, 253, 249, 245],
         lineWidthUnits: "pixels",
-        getLineWidth: 1.4,
+        getLineWidth: 2,
         pickable: false,
       }),
     );

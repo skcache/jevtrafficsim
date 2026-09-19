@@ -136,12 +136,20 @@
     "settleMs": 4200,
     "steps": [
       {
+        "clickText": "Start",
+        "waitMs": 1400
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 2600
+      },
+      {
         "clickText": "Crash",
-        "waitMs": 3000
+        "waitMs": 3600
       },
       {
         "eval": "window.__jevMap.focusIncident(16.6, -1)",
-        "waitMs": 1600
+        "waitMs": 1800
       }
     ]
   },
@@ -152,12 +160,20 @@
     "settleMs": 4200,
     "steps": [
       {
+        "clickText": "Start",
+        "waitMs": 1400
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 2600
+      },
+      {
         "clickText": "Close Road",
-        "waitMs": 3000
+        "waitMs": 3600
       },
       {
         "eval": "window.__jevMap.focusIncident(16.6, -1)",
-        "waitMs": 1600
+        "waitMs": 1800
       }
     ]
   },
@@ -167,6 +183,14 @@
     "shows": "The whole logical crossing reads as closed, with one small label naming it and traffic rerouting off the approach.",
     "settleMs": 4600,
     "steps": [
+      {
+        "clickText": "Start",
+        "waitMs": 1400
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 2600
+      },
       {
         "clickText": "Bridge Closed",
         "waitMs": 3600
@@ -184,8 +208,16 @@
     "settleMs": 5200,
     "steps": [
       {
+        "clickText": "Start",
+        "waitMs": 1400
+      },
+      {
+        "clickText": "Enter City",
+        "waitMs": 2600
+      },
+      {
         "clickText": "Event Lets Out",
-        "waitMs": 4200
+        "waitMs": 3600
       },
       {
         "eval": "window.__jevMap.focusIncident(15.2, -1)",
