@@ -89,7 +89,6 @@ describe("road presentation hierarchy", () => {
         expect(city.roads[roadId].capacity).toBeGreaterThan(0);
       }
     }
-    const geo = buildShowcaseGeoJson(model);
     // Surface-street links do not leak into any static road source. Pin this
     // against Metro, where the imported Chicago asset actually contains them,
     // so the assertion cannot pass vacuously on a smaller crop.
