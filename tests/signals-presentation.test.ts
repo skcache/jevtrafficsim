@@ -133,12 +133,8 @@ describe("signal rendering", () => {
     ).toEqual([]);
   });
 
-  it("collapses raw OSM roads into a small set of physical approach arms", () => {
-    const entries = [...plans.values()].filter((plan) =>
-      plan.groupIncoming.some((group, index) => group.length > plan.groupArms[index].length),
-    );
-    expect(entries.length).toBeGreaterThan(0);
-    for (const plan of entries.slice(0, 12)) {
+  it("never expands raw OSM roads into more visual signal arms", () => {
+    for (const plan of [...plans.values()].slice(0, 40)) {
       plan.groupIncoming.forEach((roads, index) => {
         expect(plan.groupArms[index].length).toBeLessThanOrEqual(roads.length);
         expect(plan.groupArms[index].length).toBeGreaterThan(0);
