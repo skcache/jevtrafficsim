@@ -51,6 +51,8 @@ type HeadLayer = {
     getSize: number;
     getAngle: number;
     sizeUnits: string;
+    sizeMinPixels: number;
+    sizeMaxPixels: number;
     billboard: boolean;
     opacity: number;
   };
@@ -184,9 +186,12 @@ describe("signal rendering", () => {
 
     const head17 = at17.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
     const head19 = at19.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
-    expect(head17.props.sizeUnits).toBe("pixels");
-    expect(head19.props.sizeUnits).toBe("pixels");
-    expect(head19.props.getSize).toBeGreaterThan(head17.props.getSize);
+    for (const head of [head17, head19]) {
+      expect(head.props.sizeUnits).toBe("meters");
+      expect(head.props.getSize).toBe(7.5);
+      expect(head.props.sizeMinPixels).toBe(30);
+      expect(head.props.sizeMaxPixels).toBe(72);
+    }
   });
 
   it("draws heads from the signal atlas and never from a vehicle icon", () => {
