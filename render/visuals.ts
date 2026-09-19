@@ -10,6 +10,7 @@
  */
 import type { Point } from "@/cities/paths";
 import type { VehicleType } from "@/sim/types";
+import { SIGNAL_HEAD_MINZOOM, SIGNAL_STATE_MINZOOM } from "./zoom-grammar";
 
 /* ------------------------------------------------------------------ */
 /* Vehicles                                                            */
@@ -69,10 +70,10 @@ export type SignalTier = "hidden" | "mid" | "close";
  * close zoom may add the physical three-lamp head.
  */
 export function signalTier(zoom: number): SignalTier {
-  if (!Number.isFinite(zoom) || zoom < 15.8) {
+  if (!Number.isFinite(zoom) || zoom < SIGNAL_STATE_MINZOOM) {
     return "hidden";
   }
-  return zoom < 16.5 ? "mid" : "close";
+  return zoom < SIGNAL_HEAD_MINZOOM ? "mid" : "close";
 }
 
 /** 0..1 opacity for signal state. Once visible it never fades back out. */
@@ -80,7 +81,38 @@ export function signalTierOpacity(zoom: number): number {
   if (signalTier(zoom) === "hidden") {
     return 0;
   }
-  return Math.min(1, Math.max(0, (zoom - 15.8) / 0.4));
+  return Math.min(1, Math.max(0, (zoom - SIGNAL_STATE_MINZOOM) / 0.35));
+}
+
+/**
+ * The stop/go gate scales continuously with zoom instead of jumping between
+ * arbitrary pixel sizes. It stays subordinate to the road at neighborhood
+ * zoom and becomes explicit at street zoom.
+ */
+export function signalGateWidthPx(zoom: number): number {
+  if (!Number.isFinite(zoom)) {
+    return 3.5;
+  }
+  const t = Math.min(1, Math.max(0, (zoom - SIGNAL_STATE_MINZOOM) / 3.2));
+  return 3.25 + t * 2.25;
+}
+
+/** A same-path neutral keyline behind the coloured gate, never a second bar. */
+export function signalGateBackingWidthPx(zoom: number): number {
+  return signalGateWidthPx(zoom) + 2.25;
+}
+
+/**
+ * Physical traffic-light housing height. The old 13/15 px step function made
+ * the head look like a black dash at every zoom. This grows smoothly from a
+ * recognizable 16 px head to 28 px at maximum street inspection.
+ */
+export function signalHeadHeightPx(zoom: number): number {
+  if (!Number.isFinite(zoom)) {
+    return 18;
+  }
+  const t = Math.min(1, Math.max(0, (zoom - SIGNAL_HEAD_MINZOOM) / 3));
+  return 16 + t * 12;
 }
 
 /* ------------------------------------------------------------------ */
