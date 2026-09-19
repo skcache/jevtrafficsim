@@ -443,9 +443,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               ...incidents.layers,
             ];
         overlayRef.current?.setProps({ layers });
-        platesRef.current = incidents.extras.plates;
-        crashRef.current = incidents.extras.crash;
-        syncPlates(incidents.extras.plates);
+        const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
+        const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
+        platesRef.current = visiblePlates;
+        crashRef.current = showDynamicMapState ? incidents.extras.crash : null;
+        syncPlates(visiblePlates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];
           for (const vehicle of settled) {
