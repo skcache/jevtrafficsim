@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { angleDelta, interpolateVehicles, lerpAngle, positionForRoad } from "@/render/interpolate";
-import { packQueues } from "@/render/queue-packing";
+import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   LANE_WIDTH_M,
   QUEUE_GAP_M,
@@ -252,6 +252,55 @@ describe("spawn fade", () => {
     const current = snapshot(100, [{ id: 5, roadId: 0, progress: 10 }]);
     const vehicle = interpolateVehicles(indexes, previous, current, 1, options(city, [0, 0, 0]))[0];
     expect(vehicle.fade).toBe(1);
+  });
+});
+
+describe("physical stop-line clamping", () => {
+  const model = straightModel();
+  const city = model.city;
+  const indexes = buildDirectedPathIndexes(model);
+  const laneOffsets = [0, 0, 0];
+
+  it("never lets a red-light vehicle render inside the intersection", () => {
+    const rendered = [{
+      id: 1,
+      roadId: 0,
+      type: "car",
+      state: "moving",
+      x: 99,
+      y: 0,
+      headingRadians: 0,
+      blockedWaitMs: 0,
+      fade: 1,
+      queueRank: -1,
+    }] as never;
+    const progress = new Map([[1, 99]]);
+
+    const stopped = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "all-red" }],
+    );
+    const expected =
+      100 -
+      stopLineSetbackMetres(city.roads[0].lanes) -
+      VEHICLE_LENGTH_M.car / 2 -
+      STOP_LINE_CLEARANCE_M;
+    expect(stopped[0].x).toBeCloseTo(expected, 6);
+    expect(stopped[0].x).toBeLessThan(100 - stopLineSetbackMetres(city.roads[0].lanes));
+
+    const green = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "green" }],
+    );
+    expect(green[0].x).toBe(99);
   });
 });
 
