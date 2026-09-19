@@ -399,11 +399,31 @@ export function buildIncidentLayers(
     const converted = path.map(([x, y]) => toLngLat(projection, x, y));
     const isBridge = model.city.roads[roadId]?.kind === "bridge";
     if (isBridge) {
-      closedBridgePaths.push(converted);
-      const mid = path[Math.floor(path.length / 2)];
-      closedRoundels.push(toLngLat(projection, mid[0], mid[1]));
+      // A closed bridge closes the whole LOGICAL crossing, not one OSM piece:
+      // every directed road carrying the same bridge name is part of the same
+      // structure, and the band must cover all of it or the closure looks like
+      // a random 14 m fragment.
       const piece = model.streets.find((candidate) => candidate.roadIds.includes(roadId));
       const name = piece?.bridge?.name ?? "Bridge";
+      for (const candidate of model.streets) {
+        if ((candidate.bridge?.name ?? null) !== name || name === "Bridge") {
+          continue;
+        }
+        for (const memberId of candidate.roadIds) {
+          const memberPath = model.directedPaths[memberId];
+          if (!memberPath || memberPath.length < 2) {
+            continue;
+          }
+          const memberKey = `${memberPath[0][0]}|${memberPath[0][1]}|${memberPath[memberPath.length - 1][0]}|${memberPath[memberPath.length - 1][1]}`;
+          if (seen.has(memberKey)) {
+            continue;
+          }
+          seen.add(memberKey);
+          closedBridgePaths.push(memberPath.map(([x, y]) => toLngLat(projection, x, y)));
+        }
+      }
+      const mid = path[Math.floor(path.length / 2)];
+      closedRoundels.push(toLngLat(projection, mid[0], mid[1]));
       const already = plates.some((plate) => plate.label.startsWith(name));
       if (!already) {
         plates.push({ id: `bridge-${name}`, kind: "bridge-closed", x: mid[0], y: mid[1], label: `${name} closed` });

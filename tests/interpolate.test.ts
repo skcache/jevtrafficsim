@@ -168,6 +168,47 @@ describe("turn interpolation", () => {
     expect(mid.y).toBeCloseTo(0, 6);
   });
 
+  it("handles a left turn as well as a right turn", () => {
+    // A left turn off intersection 1 (heading north), mirroring the right turn
+    // onto road 2 (heading south). One model, so the renderer and the road
+    // lookup agree about road 3.
+    const base = straightModel();
+    const leftCity: City = {
+      ...base.city,
+      roads: [
+        ...base.city.roads,
+        { id: 3, from: 1, to: 4, length: 60, lanes: 1, speedLimit: 8, capacity: 12, kind: "local", closed: false },
+      ],
+      intersections: [
+        ...base.city.intersections,
+        { id: 4, x: 100, y: -60, incoming: [3], outgoing: [], control: "uncontrolled", regionId: 0 },
+      ],
+    };
+    const leftModel = {
+      ...base,
+      city: leftCity,
+      directedPaths: [
+        ...base.directedPaths,
+        [
+          [100, 0],
+          [100, -60],
+        ],
+      ],
+    } as unknown as MapModel;
+    const leftIndexes = buildDirectedPathIndexes(leftModel);
+    const previous = snapshot(0, [{ id: 11, roadId: 0, progress: 92 }]);
+    const current = snapshot(100, [{ id: 11, roadId: 3, progress: 4 }]);
+    const offsets = [0, 0, 0, 0];
+    const mid = interpolateVehicles(leftIndexes, previous, current, 0.6, options(leftCity, offsets))[0];
+    // 8 m remaining, 4 m on the new road: at t=0.6 -> 7.2 m, still on road 0.
+    expect(mid.x).toBeCloseTo(99.2, 6);
+    expect(mid.y).toBeCloseTo(0, 6);
+    const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
+    // t=0.9 -> 10.8 m: 2.8 m past the junction, heading north (negative y).
+    expect(after.x).toBeCloseTo(100, 6);
+    expect(after.y).toBeCloseTo(-2.8, 6);
+  });
+
   it("falls back to the current position when the roads are not joined", () => {
     // Road 2 -> road 0 is not a legal successor pair.
     const previous = snapshot(0, [{ id: 9, roadId: 2, progress: 10 }]);
