@@ -13,6 +13,7 @@ import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
 import { buildSignalLayers, buildSignalPlans, buildVehicleLayers } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import { carriagewayPairs } from "@/render/road-presentation";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
 import { chicagoModel } from "./chicago-support";
 
@@ -155,6 +156,21 @@ describe("vehicle presentation stays coherent", () => {
 describe("signal presentation stays simulation-first", () => {
   const indexes = buildDirectedPathIndexes(model);
   const plans = buildSignalPlans(model);
+
+  it("never draws signal furniture on a hidden micro-connector", () => {
+    const pairs = carriagewayPairs(model);
+    for (const plan of plans.values()) {
+      for (const arms of plan.groupArms) {
+        for (const arm of arms) {
+          const pieceIndex = pairs.pieceOf[arm.roadId] ?? -1;
+          if (pieceIndex < 0) {
+            continue;
+          }
+          expect(roadPresentationClass(model.streets[pieceIndex])).not.toBe("hidden");
+        }
+      }
+    }
+  });
 
   it("draws one colored state gate per physical approach arm", () => {
     const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2)!;
