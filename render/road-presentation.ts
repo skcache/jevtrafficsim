@@ -31,9 +31,40 @@ export function metresPerPixel(zoom: number): number {
   return (EARTH_CIRCUMFERENCE_PX * Math.cos((CHICAGO_LATITUDE * Math.PI) / 180)) / 2 ** zoom;
 }
 
+/**
+ * Presentation scale for roads. Physical map scaling already makes a road grow
+ * with zoom; this adds a deliberate close-inspection exaggeration so streets do
+ * not remain hairlines while cars and traffic lights become legible.
+ */
+export function roadVisualScaleAt(zoom: number): number {
+  if (!Number.isFinite(zoom)) {
+    return 1;
+  }
+  const stops: readonly [number, number][] = [
+    [9, 0.95],
+    [11, 1],
+    [13, 1.06],
+    [15, 1.16],
+    [17, 1.32],
+    [19.5, 1.55],
+  ];
+  if (zoom <= stops[0][0]) {
+    return stops[0][1];
+  }
+  for (let i = 1; i < stops.length; i += 1) {
+    const [z1, s1] = stops[i];
+    const [z0, s0] = stops[i - 1];
+    if (zoom <= z1) {
+      const t = (zoom - z0) / (z1 - z0);
+      return s0 + (s1 - s0) * t;
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
 /** Pixel width for a physical width at a zoom (never below `minPx`). */
 export function widthPxAt(zoom: number, widthMetres: number, minPx = 0.6): number {
-  return Math.max(minPx, widthMetres / metresPerPixel(zoom));
+  return Math.max(minPx, (widthMetres * roadVisualScaleAt(zoom)) / metresPerPixel(zoom));
 }
 
 /**
