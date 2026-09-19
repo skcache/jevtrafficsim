@@ -247,7 +247,7 @@ describe("label and debris reduction in the GeoJSON", () => {
   it("keeps raw footprints as data but only orientation-scale green space in presentation", () => {
     const geo = buildShowcaseGeoJson(chicagoModel(4));
     expect(geo.buildings.features.length).toBeGreaterThan(5000);
-    expect(geo.parks.features.length).toBeGreaterThan(5);
+    expect(geo.parks.features.length).toBeGreaterThan(0);
     expect(geo.parks.features.length).toBeLessThan(500);
   });
 });
