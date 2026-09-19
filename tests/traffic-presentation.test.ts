@@ -15,10 +15,14 @@ import { interpolateVehicles, type RenderedVehicle } from "@/render/interpolate"
 import { availableChicagoEventVenues } from "@/cities/chicago";
 import { carriagewayPairs, laneCentreOffsetMetres } from "@/render/road-presentation";
 import {
+  isQueued,
+  packQueues,
   SETTLE_THRESHOLD_M,
   settlePlacements,
   type DisplayedPlacement,
 } from "@/render/queue-packing";
+import { QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
+import { samplePathIndex } from "@/cities/paths";
 import { VEHICLE_MINZOOM } from "@/render/zoom-grammar";
 import * as mapGeometry from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
@@ -212,11 +216,243 @@ describe("settling re-placed vehicles", () => {
     expect(Math.abs(blended.headingRadians)).toBeGreaterThan(almost);
   });
 
+
+  it("settles a 180-degree flip in place without manufacturing movement", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 4, 2, 0)], memory, 0.016);
+    // Same position, heading reversed: the old code divided by a zero distance.
+    const flipped = settlePlacements([at(1, 4, 2, Math.PI)], memory, 0.016)[0];
+    expect(flipped.x).toBe(4);
+    expect(flipped.y).toBe(2);
+    expect(Number.isFinite(flipped.headingRadians)).toBe(true);
+    expect(flipped.headingRadians).toBeGreaterThan(0);
+    expect(flipped.headingRadians).toBeLessThan(Math.PI);
+  });
+
+  it("settles a 90-degree flip in place", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, -3, 8, 0)], memory, 0.016);
+    const turned = settlePlacements([at(1, -3, 8, Math.PI / 2)], memory, 0.016)[0];
+    expect(turned.x).toBe(-3);
+    expect(turned.y).toBe(8);
+    expect(turned.headingRadians).toBeGreaterThan(0);
+    expect(turned.headingRadians).toBeLessThan(Math.PI / 2);
+  });
+
+  it("stays finite over repeated in-place flips, memory included", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0, 0)], memory, 0.016);
+    let last = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      const settled = settlePlacements([at(1, 0, 0, frame % 2 === 0 ? Math.PI : 0)], memory, 0.016)[0];
+      for (const value of [settled.x, settled.y, settled.headingRadians]) {
+        expect(Number.isFinite(value)).toBe(true);
+      }
+      const stored = memory.get(1)!;
+      for (const value of [stored.x, stored.y, stored.headingRadians]) {
+        expect(Number.isFinite(value)).toBe(true);
+      }
+      last = settled.headingRadians;
+    }
+    expect(Number.isFinite(last)).toBe(true);
+  });
+
+  it("never emits a non-finite placement, whatever the input", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    const cases: RenderedVehicle[] = [
+      at(1, 0, 0, 0),
+      at(1, 0, 0, Math.PI),
+      at(1, 1e-9, 0, Math.PI / 2),
+      at(1, 25, -40, -Math.PI),
+      at(1, 0.2, 0.2, Math.PI * 1.99),
+    ];
+    for (const vehicle of cases) {
+      const settled = settlePlacements([vehicle], memory, 0.016)[0];
+      expect(Number.isFinite(settled.x)).toBe(true);
+      expect(Number.isFinite(settled.y)).toBe(true);
+      expect(Number.isFinite(settled.headingRadians)).toBe(true);
+    }
+  });
+
   it("treats a sub-threshold nudge as motion, not as a re-placement", () => {
     const memory = new Map<number, DisplayedPlacement>();
     settlePlacements([at(1, 0, 0)], memory, 0.016);
     const nudged = settlePlacements([at(1, SETTLE_THRESHOLD_M - 0.01, 0)], memory, 0.016)[0];
     expect(nudged.x).toBe(SETTLE_THRESHOLD_M - 0.01);
+  });
+});
+
+
+/* --------------- 1.2 authoritative queue packing (renderer) --------------- */
+
+describe("authoritative queue packing", () => {
+  const model = chicagoModel(2);
+  const indexes = buildDirectedPathIndexes(model);
+  const laneOffsets = model.city.roads.map(() => 0);
+  // A road long enough to hold a queue; its end is the stop line side.
+  const roadId = model.city.roads.findIndex((road) => road.length > 60);
+  expect(roadId).toBeGreaterThanOrEqual(0);
+  const index = indexes[roadId]!;
+  const roadEnd = samplePathIndex(index, index.total);
+
+  const queued = (
+    id: number,
+    rank: number,
+    progress: number,
+    type: "car" | "truck" | "bicycle" = "car",
+    road = roadId,
+  ): RenderedVehicle => ({
+    id,
+    roadId: road,
+    type,
+    state: "queued",
+    x: 0,
+    y: 0,
+    headingRadians: 0,
+    blockedWaitMs: 0,
+    fade: 1,
+    queueRank: rank,
+  });
+
+  /** Metres from the packed position to the road end: smaller is further forward. */
+  const distanceToStopLine = (vehicle: RenderedVehicle): number =>
+    Math.hypot(vehicle.x - roadEnd.x, vehicle.y - roadEnd.y);
+
+  const pack = (
+    vehicles: RenderedVehicle[],
+    progress: Map<number, number>,
+    roads: RenderedVehicle[] = vehicles,
+  ): RenderedVehicle[] =>
+    packQueues(
+      model.city,
+      indexes,
+      laneOffsets,
+      roads,
+      (id) => progress.get(id) ?? 0,
+    );
+
+  it("orders by authoritative rank — not by progress, not by id", () => {
+    // Identical progress; the lower id holds the WORSE rank. Ids and progress
+    // cannot produce the right answer here; only queueRank can.
+    const a = queued(2, 1, 50);
+    const b = queued(9, 0, 50);
+    const progress = new Map([
+      [2, 50],
+      [9, 50],
+    ]);
+    const packed = pack([a, b], progress);
+    const packedA = packed.find((vehicle) => vehicle.id === 2)!;
+    const packedB = packed.find((vehicle) => vehicle.id === 9)!;
+    // B is rank 0: it renders in front, closer to the stop line.
+    expect(distanceToStopLine(packedB)).toBeLessThan(distanceToStopLine(packedA));
+  });
+
+  it("keeps three ranks out of id order", () => {
+    const vehicles = [queued(9, 0, 60), queued(4, 1, 60), queued(6, 2, 60)];
+    const progress = new Map([
+      [9, 60],
+      [4, 60],
+      [6, 60],
+    ]);
+    const packed = pack(vehicles, progress);
+    const byId = new Map(packed.map((vehicle) => [vehicle.id, distanceToStopLine(vehicle)]));
+    expect(byId.get(9)!).toBeLessThan(byId.get(4)!);
+    expect(byId.get(4)!).toBeLessThan(byId.get(6)!);
+  });
+
+  it("packs mixed classes in rank order, spaced by the front vehicle's length", () => {
+    const vehicles = [queued(1, 1, 60, "car"), queued(2, 0, 60, "truck"), queued(3, 2, 60, "bicycle")];
+    const progress = new Map([
+      [1, 60],
+      [2, 60],
+      [3, 60],
+    ]);
+    const packed = pack(vehicles, progress);
+    const d = (id: number) => distanceToStopLine(packed.find((vehicle) => vehicle.id === id)!);
+    expect(d(2)).toBeLessThan(d(1));
+    expect(d(1)).toBeLessThan(d(3));
+    // The gap behind the truck is the truck's length plus the queue gap.
+    const expected = VEHICLE_LENGTH_M.truck + QUEUE_GAP_M;
+    expect(Math.abs(d(1) - d(2) - expected)).toBeLessThan(expected * 0.35);
+    // Nothing overlaps.
+    expect(d(1) - d(2)).toBeGreaterThan(0.5);
+    expect(d(3) - d(1)).toBeGreaterThan(0.5);
+  });
+
+  it("orders each road's queue independently", () => {
+    const other = model.city.roads.findIndex((road, id) => id !== roadId && road.length > 40);
+    expect(other).toBeGreaterThanOrEqual(0);
+    const vehicles = [
+      queued(11, 1, 30, "car", other),
+      queued(12, 0, 30, "car", roadId),
+      queued(13, 0, 30, "car", other),
+    ];
+    const progress = new Map([
+      [11, 30],
+      [12, 30],
+      [13, 30],
+    ]);
+    const packed = pack(vehicles, progress);
+    const byId = new Map(packed.map((vehicle) => [vehicle.id, vehicle]));
+    const endOther = samplePathIndex(indexes[other]!, indexes[other]!.total);
+    const dOther = (id: number) =>
+      Math.hypot(byId.get(id)!.x - endOther.x, byId.get(id)!.y - endOther.y);
+    // Road `other` has its own front: rank 0 there is id 13, not the input order.
+    expect(dOther(13)).toBeLessThan(dOther(11));
+    // And road `roadId` keeps its own front.
+    expect(distanceToStopLine(byId.get(12)!)).toBeLessThan(Infinity);
+  });
+
+  it("keeps the worker's rank: presentation never invents one", () => {
+    const vehicles = [queued(1, 9, 60), queued(2, 2, 60), queued(3, 5, 60)];
+    const progress = new Map([
+      [1, 60],
+      [2, 60],
+      [3, 60],
+    ]);
+    const packed = pack(vehicles, progress);
+    for (const vehicle of packed) {
+      expect(vehicle.queueRank).toBe(vehicles.find((input) => input.id === vehicle.id)!.queueRank);
+    }
+    // Non-contiguous ranks still order correctly.
+    const d = (id: number) => distanceToStopLine(packed.find((vehicle) => vehicle.id === id)!);
+    expect(d(2)).toBeLessThan(d(3));
+    expect(d(3)).toBeLessThan(d(1));
+  });
+
+  it("leaves unranked vehicles exactly where they are", () => {
+    const moving: RenderedVehicle = {
+      ...queued(7, -1, 20),
+      state: "moving",
+      x: 12.5,
+      y: -3.25,
+      headingRadians: 1.1,
+    };
+    const packed = pack([moving], new Map([[7, 20]]));
+    expect(packed[0].x).toBe(12.5);
+    expect(packed[0].y).toBe(-3.25);
+    expect(packed[0].headingRadians).toBe(1.1);
+  });
+
+  it("is deterministic for the same input", () => {
+    const vehicles = [queued(1, 1, 60), queued(2, 0, 60), queued(3, 2, 60)];
+    const progress = new Map([
+      [1, 60],
+      [2, 60],
+      [3, 60],
+    ]);
+    const first = pack(vehicles, progress).map((vehicle) => [vehicle.id, vehicle.x, vehicle.y]);
+    const second = pack(vehicles, progress).map((vehicle) => [vehicle.id, vehicle.x, vehicle.y]);
+    expect(first).toEqual(second);
+  });
+
+  it("treats the authoritative rank as the only queue test", () => {
+    // A vehicle that has just joined a queue has 0 ms of wait — and is queued.
+    expect(isQueued({ ...queued(1, 0, 10) })).toBe(true);
+    expect(isQueued({ ...queued(1, 4, 10) })).toBe(true);
+    // A blocked vehicle the worker did not rank is not in a queue.
+    const blocked = { ...queued(1, -1, 10), blockedWaitMs: 9_000 };
+    expect(isQueued(blocked)).toBe(false);
   });
 });
 
@@ -293,6 +529,32 @@ describe("turn continuity", () => {
 /* --------------------- 16-20. incident language, no pings ------------------ */
 
 describe("incident language", () => {
+  it("exposes a crash anchor for the dev camera, and null when there is no crash", () => {
+    const model = chicagoModel(2);
+    const empty = buildIncidentLayers(
+      { sequence: 0, timeMs: 0, vehicles: [], signals: [], roadConditions: [], incidents: [] } as unknown as PresentationSnapshot,
+      model,
+    );
+    expect(empty.extras.crash).toBeNull();
+    const crashRoad = model.city.roads[0];
+    const crashed = buildIncidentLayers(
+      {
+        sequence: 0,
+        timeMs: 0,
+        vehicles: [],
+        signals: [],
+        roadConditions: [],
+        incidents: [{ id: 1, kind: "crash", status: "active", roadIds: [crashRoad.id], eventCenterIntersectionId: null, expiresAtMs: null }],
+      } as unknown as PresentationSnapshot,
+      model,
+    );
+    // A crash draws as deck geometry with no DOM plate, so the anchor is the
+    // only way a screenshot can frame one.
+    expect(crashed.extras.crash).not.toBeNull();
+    expect(Number.isFinite(crashed.extras.crash!.x)).toBe(true);
+    expect(Number.isFinite(crashed.extras.crash!.y)).toBe(true);
+  });
+
   it("contains no pulse or ring animation", () => {
     const model = chicagoModel(2);
     const snapshot = {

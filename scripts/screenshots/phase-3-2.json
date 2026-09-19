@@ -1,228 +1,228 @@
 [
-  {
-    "slug": "city-far",
-    "view": "Full Metro, rush demand, z11.6",
-    "shows": "Far zoom carries traffic as city state: road-level congestion only, no vehicle glyphs, no signals, no stop bars.",
-    "center": [
-      -87.6375,
-      41.881
-    ],
-    "zoom": 11.6,
-    "settleMs": 5200,
-    "steps": [
-      {
-        "clickText": "Start",
-        "waitMs": 1400
-      },
-      {
-        "slider": 0,
-        "arrowRight": 6,
-        "waitMs": 900
-      },
-      {
-        "slider": 1,
-        "arrowRight": 4,
-        "waitMs": 900
-      },
-      {
-        "clickText": "Enter City",
-        "waitMs": 2600
-      }
-    ]
-  },
-  {
-    "slug": "neighborhood-flow",
-    "view": "The Loop and River North, z14.6",
-    "shows": "Mid zoom reads as flow: a sampled subset of vehicles, congestion on roads, no signal system yet.",
-    "center": [
-      -87.6338,
-      41.8855
-    ],
-    "zoom": 14.6,
-    "settleMs": 4200
-  },
-  {
-    "slug": "street-live",
-    "view": "Loop street zoom, z16.6",
-    "shows": "Close zoom: full class glyphs at lane centres, queues stacking from the stop line, approach signal heads.",
-    "center": [
-      -87.6294,
-      41.8825
-    ],
-    "zoom": 16.6,
-    "settleMs": 4200
-  },
-  {
-    "slug": "signal-close",
-    "view": "A controlled intersection, z17.4",
-    "shows": "Signal heads belong to their own approach: a small dark housing with one bright lamp at the kerbside, plus a transverse stop line \u2014 never a coloured blob in the junction.",
-    "center": [
-      -87.6298,
-      41.8833
-    ],
-    "zoom": 17.4,
-    "settleMs": 4600
-  },
-  {
-    "slug": "car-truck-bike",
-    "view": "Downtown, z17.8",
-    "shows": "Class silhouettes at close zoom: car with tapered nose and windshield, truck as cab plus box, bicycle as a thin frame with wire wheels.",
-    "center": [
-      -87.6321,
-      41.8846
-    ],
-    "zoom": 17.8,
-    "settleMs": 4200
-  },
-  {
-    "slug": "mixed-queue",
-    "view": "Approach queue at a signal, z17.2",
-    "shows": "Queue packing from the authoritative rank: front vehicle at the stop line, each next one stacked behind by its own class length with a small gap, no overlap.",
-    "center": [
-      -87.6278,
-      41.8852
-    ],
-    "zoom": 17.2,
-    "settleMs": 5200
-  },
-  {
-    "slug": "left-turn",
-    "view": "Turning intersection, z17.4",
-    "shows": "Vehicles curving through the junction on a quadratic path, leaving aligned with the new road instead of cutting the corner.",
-    "center": [
-      -87.6317,
-      41.8824
-    ],
-    "zoom": 17.4,
-    "settleMs": 5200
-  },
-  {
-    "slug": "right-turn",
-    "view": "Second turning intersection, z17.4",
-    "shows": "The same transition on the opposite turn sense, with heading taken from the curve tangent.",
-    "center": [
-      -87.6359,
-      41.8858
-    ],
-    "zoom": 17.4,
-    "settleMs": 5200
-  },
-  {
-    "slug": "highway-flow",
-    "view": "I-90/94 / I-290 interchange, z15.0",
-    "shows": "Expressway flow stays legible: no signals on mainline, ramps narrower than the main carriageways, traffic inside its own direction.",
-    "center": [
-      -87.6405,
-      41.8757
-    ],
-    "zoom": 15.0,
-    "settleMs": 4600
-  },
-  {
-    "slug": "rush-congestion",
-    "view": "Metro under rush demand, z12.4",
-    "shows": "Congestion as the primary far-zoom signal: only roads under pressure tint warm, amber, orange or red; free-flowing roads stay neutral.",
-    "center": [
-      -87.6375,
-      41.881
-    ],
-    "zoom": 12.4,
-    "settleMs": 5600
-  },
-  {
-    "slug": "crash",
-    "view": "Crash incident, z16.4",
-    "shows": "A crash is a small anchored hazard glyph with a slight road tint \u2014 map-native notation, no ring, no pulse.",
-    "settleMs": 4200,
-    "steps": [
-      {
-        "clickText": "Start",
-        "waitMs": 1400
-      },
-      {
-        "clickText": "Enter City",
-        "waitMs": 2600
-      },
-      {
-        "clickText": "Crash",
-        "waitMs": 3600
-      },
-      {
-        "eval": "window.__jevMap.focusIncident(16.6, -1)",
-        "waitMs": 1800
-      }
-    ]
-  },
-  {
-    "slug": "road-closure",
-    "view": "Close road incident, z16.4",
-    "shows": "A closure crosses the physical road with a short red band and a barrier marker; it does not cover half the intersection.",
-    "settleMs": 4200,
-    "steps": [
-      {
-        "clickText": "Start",
-        "waitMs": 1400
-      },
-      {
-        "clickText": "Enter City",
-        "waitMs": 2600
-      },
-      {
-        "clickText": "Close Road",
-        "waitMs": 3600
-      },
-      {
-        "eval": "window.__jevMap.focusIncident(16.6, -1)",
-        "waitMs": 1800
-      }
-    ]
-  },
-  {
-    "slug": "bridge-closure",
-    "view": "Bridge closed on the river, z15.6",
-    "shows": "The whole logical crossing reads as closed, with one small label naming it and traffic rerouting off the approach.",
-    "settleMs": 4600,
-    "steps": [
-      {
-        "clickText": "Start",
-        "waitMs": 1400
-      },
-      {
-        "clickText": "Enter City",
-        "waitMs": 2600
-      },
-      {
-        "clickText": "Bridge Closed",
-        "waitMs": 3600
-      },
-      {
-        "eval": "window.__jevMap.focusIncident(15.8, -1)",
-        "waitMs": 1800
-      }
-    ]
-  },
-  {
-    "slug": "event-release",
-    "view": "Event lets out at a real venue, z15.2",
-    "shows": "An event is a small static venue badge on real geography, with traffic emerging on the surrounding streets \u2014 no pulse ring, no purple effect.",
-    "settleMs": 5200,
-    "steps": [
-      {
-        "clickText": "Start",
-        "waitMs": 1400
-      },
-      {
-        "clickText": "Enter City",
-        "waitMs": 2600
-      },
-      {
-        "clickText": "Event Lets Out",
-        "waitMs": 3600
-      },
-      {
-        "eval": "window.__jevMap.focusIncident(15.2, -1)",
-        "waitMs": 1800
-      }
-    ]
-  }
+ {
+  "slug": "city-far",
+  "view": "Full Metro, rush demand, z11.6",
+  "shows": "Far zoom carries traffic as city state: road-level congestion only, no vehicle glyphs, no signals, no stop bars.",
+  "center": [
+   -87.6375,
+   41.881
+  ],
+  "zoom": 11.6,
+  "settleMs": 5200,
+  "steps": [
+   {
+    "clickText": "Start",
+    "waitMs": 1400
+   },
+   {
+    "slider": 0,
+    "arrowRight": 6,
+    "waitMs": 900
+   },
+   {
+    "slider": 1,
+    "arrowRight": 4,
+    "waitMs": 900
+   },
+   {
+    "clickText": "Enter City",
+    "waitMs": 2600
+   }
+  ]
+ },
+ {
+  "slug": "neighborhood-flow",
+  "view": "The Loop and River North, z14.6",
+  "shows": "Mid zoom reads as flow: a sampled subset of vehicles, congestion on roads, no signal system yet.",
+  "center": [
+   -87.6338,
+   41.8855
+  ],
+  "zoom": 14.6,
+  "settleMs": 4200
+ },
+ {
+  "slug": "street-live",
+  "view": "Loop street zoom, z16.6",
+  "shows": "Close zoom: full class glyphs at lane centres, queues stacking from the stop line, approach signal heads.",
+  "center": [
+   -87.6294,
+   41.8825
+  ],
+  "zoom": 16.6,
+  "settleMs": 4200
+ },
+ {
+  "slug": "signal-close",
+  "view": "A controlled intersection, z17.4",
+  "shows": "Signal heads belong to their own approach: a small dark housing with one bright lamp at the kerbside, plus a transverse stop line \u2014 never a coloured blob in the junction.",
+  "center": [
+   -87.6298,
+   41.8833
+  ],
+  "zoom": 17.4,
+  "settleMs": 4600
+ },
+ {
+  "slug": "car-truck-bike",
+  "view": "Downtown, z17.8",
+  "shows": "Class silhouettes at close zoom: car with tapered nose and windshield, truck as cab plus box, bicycle as a thin frame with wire wheels.",
+  "center": [
+   -87.6321,
+   41.8846
+  ],
+  "zoom": 17.8,
+  "settleMs": 4200
+ },
+ {
+  "slug": "mixed-queue",
+  "view": "Approach queue at a signal, z17.2",
+  "shows": "Queue packing from the authoritative rank: front vehicle at the stop line, each next one stacked behind by its own class length with a small gap, no overlap.",
+  "center": [
+   -87.6278,
+   41.8852
+  ],
+  "zoom": 17.2,
+  "settleMs": 5200
+ },
+ {
+  "slug": "left-turn",
+  "view": "Turning intersection, z17.4",
+  "shows": "Vehicles curving through the junction on a quadratic path, leaving aligned with the new road instead of cutting the corner.",
+  "center": [
+   -87.6317,
+   41.8824
+  ],
+  "zoom": 17.4,
+  "settleMs": 5200
+ },
+ {
+  "slug": "right-turn",
+  "view": "Second turning intersection, z17.4",
+  "shows": "The same transition on the opposite turn sense, with heading taken from the curve tangent.",
+  "center": [
+   -87.6359,
+   41.8858
+  ],
+  "zoom": 17.4,
+  "settleMs": 5200
+ },
+ {
+  "slug": "highway-flow",
+  "view": "I-90/94 / I-290 interchange, z15.0",
+  "shows": "Expressway flow stays legible: no signals on mainline, ramps narrower than the main carriageways, traffic inside its own direction.",
+  "center": [
+   -87.6405,
+   41.8757
+  ],
+  "zoom": 15.0,
+  "settleMs": 4600
+ },
+ {
+  "slug": "rush-congestion",
+  "view": "Metro under rush demand, z12.4",
+  "shows": "Congestion as the primary far-zoom signal: only roads under pressure tint warm, amber, orange or red; free-flowing roads stay neutral.",
+  "center": [
+   -87.6375,
+   41.881
+  ],
+  "zoom": 12.4,
+  "settleMs": 5600
+ },
+ {
+  "slug": "crash",
+  "view": "Crash incident, z16.4",
+  "shows": "A crash is a small anchored hazard glyph with a slight road tint \u2014 map-native notation, no ring, no pulse.",
+  "settleMs": 4200,
+  "steps": [
+   {
+    "clickText": "Start",
+    "waitMs": 1400
+   },
+   {
+    "clickText": "Enter City",
+    "waitMs": 2600
+   },
+   {
+    "clickText": "Crash",
+    "waitMs": 3600
+   },
+   {
+    "eval": "window.__jevMap.focusCrash(16.6)",
+    "waitMs": 1800
+   }
+  ]
+ },
+ {
+  "slug": "road-closure",
+  "view": "Close road incident, z16.4",
+  "shows": "A closure crosses the physical road with a short red band and a barrier marker; it does not cover half the intersection.",
+  "settleMs": 4200,
+  "steps": [
+   {
+    "clickText": "Start",
+    "waitMs": 1400
+   },
+   {
+    "clickText": "Enter City",
+    "waitMs": 2600
+   },
+   {
+    "clickText": "Close Road",
+    "waitMs": 3600
+   },
+   {
+    "eval": "window.__jevMap.focusIncident(16.6, -1)",
+    "waitMs": 1800
+   }
+  ]
+ },
+ {
+  "slug": "bridge-closure",
+  "view": "Bridge closed on the river, z15.6",
+  "shows": "The whole logical crossing reads as closed, with one small label naming it and traffic rerouting off the approach.",
+  "settleMs": 4600,
+  "steps": [
+   {
+    "clickText": "Start",
+    "waitMs": 1400
+   },
+   {
+    "clickText": "Enter City",
+    "waitMs": 2600
+   },
+   {
+    "clickText": "Bridge Closed",
+    "waitMs": 3600
+   },
+   {
+    "eval": "window.__jevMap.focusIncident(15.8, -1)",
+    "waitMs": 1800
+   }
+  ]
+ },
+ {
+  "slug": "event-release",
+  "view": "Event lets out at a real venue, z15.2",
+  "shows": "An event is a small static venue badge on real geography, with traffic emerging on the surrounding streets \u2014 no pulse ring, no purple effect.",
+  "settleMs": 5200,
+  "steps": [
+   {
+    "clickText": "Start",
+    "waitMs": 1400
+   },
+   {
+    "clickText": "Enter City",
+    "waitMs": 2600
+   },
+   {
+    "clickText": "Event Lets Out",
+    "waitMs": 3600
+   },
+   {
+    "eval": "window.__jevMap.focusIncident(15.2, -1)",
+    "waitMs": 1800
+   }
+  ]
+ }
 ]

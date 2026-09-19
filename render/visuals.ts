@@ -3,27 +3,17 @@
  * layers and chrome consume. Framework-free and unit-testable — no deck.gl,
  * no DOM, no React.
  *
- * The vehicle language has two channels:
- *   body  = vehicle class (light, always legible on roads)
- *   state = wait heat (a warm outline + halo, drawn on top of the body)
+ * What survives here is what production still uses: class sizing, the signal
+ * tier fade, closure hatching and the metrics sparkline. The Phase-2 wait-heat
+ * ring/halo language, the signal axis bars and the event egress arrows were
+ * deleted with the layers that drew them.
  */
 import type { Point } from "@/cities/paths";
 import type { VehicleType } from "@/sim/types";
-import { waitHeatBucket, WAIT_HEAT_COLORS, type WaitHeatBucket } from "./map-geometry";
 
 /* ------------------------------------------------------------------ */
 /* Vehicles                                                            */
 /* ------------------------------------------------------------------ */
-
-/** Class body colours: light chips with a dark outline read on any road. */
-export const VEHICLE_BODY_COLORS: Record<VehicleType, [number, number, number]> = {
-  car: [242, 243, 245],
-  truck: [228, 231, 236],
-  bicycle: [217, 230, 245],
-};
-
-/** The dark outline that makes light chips survive on light roads. */
-export const VEHICLE_OUTLINE_COLOR: [number, number, number, number] = [38, 32, 26, 150];
 
 /** Reference sprite length per class at the mid band (px). */
 /**
@@ -65,52 +55,6 @@ export function vehicleLengthPx(type: VehicleType, zoom: number): number {
   return VEHICLE_BASE_LENGTHS[type] * vehicleSizeScale(zoom);
 }
 
-/**
- * Ring growth (px) per heat bucket: the outline thickens as a vehicle waits,
- * so a queue reads as a warm band even at whole-city zoom.
- */
-export function vehicleRingExtraPx(bucket: WaitHeatBucket): number {
-  if (bucket === 0) {
-    return 2.5;
-  }
-  if (bucket === 1) {
-    return 6;
-  }
-  if (bucket === 2) {
-    return 7.5;
-  }
-  return 9;
-}
-
-/**
- * Ring growth is scaled down at whole-city zoom so a congested map shows warm
- * bands without the chips turning into blobs.
- */
-export function ringScaleForZoom(zoom: number): number {
-  return Number.isFinite(zoom) && zoom < 15.2 ? 0.65 : 1;
-}
-
-/** Soft warm glow (px) behind the most patient vehicles only (30 s+). */
-export function vehicleHaloExtraPx(bucket: WaitHeatBucket): number {
-  return bucket >= 3 ? 8 : 0;
-}
-
-export function vehicleHaloColor(bucket: WaitHeatBucket): [number, number, number, number] {
-  const [r, g, b] = WAIT_HEAT_COLORS[bucket];
-  return [r, g, b, bucket >= 4 ? 120 : 95];
-}
-
-/** Vehicles split by heat bucket so warm chips are drawn last (never buried). */
-export function groupByHeatBucket<T extends { readonly blockedWaitMs: number }>(
-  vehicles: readonly T[],
-): T[][] {
-  const groups: T[][] = [[], [], [], [], []];
-  for (const vehicle of vehicles) {
-    groups[waitHeatBucket(vehicle.blockedWaitMs)].push(vehicle);
-  }
-  return groups;
-}
-
 /* ------------------------------------------------------------------ */
 /* Signals                                                             */
 /* ------------------------------------------------------------------ */
@@ -142,11 +86,6 @@ export function signalTierOpacity(zoom: number): number {
   }
   const start = tier === "far" ? 13.0 : tier === "mid" ? 14.6 : 16.4;
   return Math.min(1, Math.max(0, (zoom - start) / 0.6));
-}
-
-/** Reach (metres) of the active-axis bar per tier. */
-export function signalAxisReachMetres(tier: SignalTier): number {
-  return tier === "close" ? 26 : 40;
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,62 +146,6 @@ export function hatchSegments(
   return segments;
 }
 
-export interface StopBarGeometry {
-  /** White stop bar across the approach at the intersection edge. */
-  readonly bar: readonly [Point, Point];
-  /** Three crosswalk ticks just before the bar. */
-  readonly crosswalk: readonly (readonly [Point, Point])[];
-}
-
-/**
- * Stop bar + crosswalk ticks for one approach: perpendicular to the approach
- * direction, placed just inside the intersection.
- */
-export function stopBarGeometry(
-  center: Point,
-  approachBearing: number,
-  roadHalfWidth = 3.5,
-): StopBarGeometry {
-  const dx = Math.cos(approachBearing);
-  const dy = Math.sin(approachBearing);
-  const px = -dy;
-  const py = dx;
-  const inset = 2.5;
-  const cx = center[0] - dx * inset;
-  const cy = center[1] - dy * inset;
-  const bar: [Point, Point] = [
-    [cx - px * roadHalfWidth, cy - py * roadHalfWidth],
-    [cx + px * roadHalfWidth, cy + py * roadHalfWidth],
-  ];
-  const crosswalk: [Point, Point][] = [];
-  for (const offset of [-2.2, -3.6, -5.0]) {
-    const bx = cx + dx * offset;
-    const by = cy + dy * offset;
-    crosswalk.push([
-      [bx - px * roadHalfWidth, by - py * roadHalfWidth],
-      [bx + px * roadHalfWidth, by + py * roadHalfWidth],
-    ]);
-  }
-  return { bar, crosswalk };
-}
-
-/** Short egress arrows for an event release, one per outgoing road. */
-export function egressArrows(
-  center: Point,
-  outgoingBearings: readonly number[],
-  innerMetres = 16,
-  outerMetres = 40,
-): { source: Point; target: Point }[] {
-  return outgoingBearings.map((bearing) => {
-    const dx = Math.cos(bearing);
-    const dy = Math.sin(bearing);
-    return {
-      source: [center[0] + dx * innerMetres, center[1] + dy * innerMetres] as Point,
-      target: [center[0] + dx * outerMetres, center[1] + dy * outerMetres] as Point,
-    };
-  });
-}
-
 /* ------------------------------------------------------------------ */
 /* Metrics                                                             */
 /* ------------------------------------------------------------------ */
@@ -309,7 +192,3 @@ export function sparklineLastPoint(
   };
 }
 
-/** Placeholder values shown before the first METRICS packet arrives. */
-export const METRIC_PLACEHOLDER = "0.0s";
-
-export type { WaitHeatBucket };

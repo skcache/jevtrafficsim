@@ -1,26 +1,21 @@
 /**
- * Presentation-logic tests (Task 11 polish pass): the vehicle language, signal
- * tiers, incident geometry and sparkline are pure functions — pinned here so
- * the map cannot quietly regress into unreadable chips or hard zoom cuts.
+ * Presentation-logic tests: the vehicle sizing language, the signal tier fade,
+ * incident hatching and the sparkline are pure functions — pinned here so the
+ * map cannot quietly regress into unreadable chips or hard zoom cuts.
+ *
+ * The Phase-2 ring/halo, signal-axis-bar and event-egress-arrow helpers were
+ * deleted with the layers that drew them, and their tests went with them: a
+ * test that preserves visual behaviour the product intentionally removed is
+ * not coverage, it is a trap for the next person.
  */
 import { describe, expect, it } from "vitest";
 import {
-  egressArrows,
-  ringScaleForZoom,
-  vehicleHaloColor,
-  vehicleHaloExtraPx,
-  vehicleRingExtraPx,
-  groupByHeatBucket,
   hatchSegments,
-  signalAxisReachMetres,
   signalTier,
   signalTierOpacity,
   sparklineLastPoint,
   sparklinePath,
-  stopBarGeometry,
   VEHICLE_BASE_LENGTHS,
-  VEHICLE_BODY_COLORS,
-  VEHICLE_OUTLINE_COLOR,
   vehicleLengthPx,
   vehicleSizeScale,
 } from "@/render/visuals";
@@ -64,48 +59,10 @@ describe("vehicle sizing", () => {
     expect(vehicleLengthPx("truck", 16.2)).toBe(18);
     expect(vehicleLengthPx("bicycle", 16.2)).toBe(7);
   });
-
-  it("thickens the ring and adds a halo as a vehicle waits", () => {
-    // The ring is the queue channel: it must grow monotonically with heat.
-    expect(vehicleRingExtraPx(0)).toBeLessThan(vehicleRingExtraPx(1));
-    expect(vehicleRingExtraPx(1)).toBeLessThan(vehicleRingExtraPx(3));
-    // Whole-city zoom keeps the ring proportionate to the smaller chip.
-    expect(ringScaleForZoom(14)).toBeLessThan(ringScaleForZoom(17));
-    expect(ringScaleForZoom(17)).toBe(1);
-    // Only genuinely stuck vehicles (30 s+) bloom.
-    expect(vehicleHaloExtraPx(0)).toBe(0);
-    expect(vehicleHaloExtraPx(2)).toBe(0);
-    expect(vehicleHaloExtraPx(3)).toBeGreaterThan(0);
-    expect(vehicleHaloExtraPx(4)).toBeGreaterThan(0);
-    const halo = vehicleHaloColor(4);
-    expect(halo[3]).toBeGreaterThan(0);
-    expect(halo[3]).toBeLessThan(200);
-  });
-
-  it("gives every class a light body and a dark outline", () => {
-    for (const type of ["car", "truck", "bicycle"] as const) {
-      const [r, g, b] = VEHICLE_BODY_COLORS[type];
-      // Light chips: the outline carries the contrast against pale roads.
-      expect(Math.min(r, g, b)).toBeGreaterThan(200);
-    }
-    expect(VEHICLE_OUTLINE_COLOR[3]).toBeGreaterThan(100);
-  });
 });
 
-describe("vehicle heat buckets", () => {
-  const vehicle = (blockedWaitMs: number) => ({ id: blockedWaitMs, blockedWaitMs });
-
-  it("splits vehicles into five buckets in heat order", () => {
-    const groups = groupByHeatBucket([
-      vehicle(0),
-      vehicle(6_000),
-      vehicle(20_000),
-      vehicle(45_000),
-      vehicle(90_000),
-    ]);
-    expect(groups).toHaveLength(5);
-    expect(groups.map((group) => group.length)).toEqual([1, 1, 1, 1, 1]);
-    // Buckets follow the frozen thresholds: 0-5 / 5-15 / 15-30 / 30-60 / 60+.
+describe("wait heat", () => {
+  it("follows the frozen thresholds: 0-5 / 5-15 / 15-30 / 30-60 / 60+", () => {
     expect(waitHeatBucket(4_999)).toBe(0);
     expect(waitHeatBucket(5_000)).toBe(1);
     expect(waitHeatBucket(15_000)).toBe(2);
@@ -119,15 +76,6 @@ describe("vehicle heat buckets", () => {
     const distance = Math.hypot(r - highway[0], g - highway[1], b - highway[2]);
     expect(distance).toBeGreaterThan(60);
   });
-
-  it("preserves every vehicle and never reorders within a bucket", () => {
-    const input = [vehicle(0), vehicle(1_000), vehicle(7_000), vehicle(2_000)];
-    const groups = groupByHeatBucket(input);
-    const flat = groups.flat();
-    expect(flat).toHaveLength(input.length);
-    expect(groups[0].map((entry) => entry.id)).toEqual([0, 1_000, 2_000]);
-    expect(groups[1].map((entry) => entry.id)).toEqual([7_000]);
-  });
 });
 
 describe("signal tiers", () => {
@@ -140,11 +88,6 @@ describe("signal tiers", () => {
     expect(signalTierOpacity(13.0)).toBe(0);
     expect(signalTierOpacity(13.6)).toBeCloseTo(1, 5);
     expect(signalTierOpacity(15.2)).toBeCloseTo(1, 5);
-  });
-
-  it("shortens the active-axis bar at street zoom", () => {
-    expect(signalAxisReachMetres("mid")).toBe(40);
-    expect(signalAxisReachMetres("close")).toBe(26);
   });
 });
 
@@ -174,30 +117,6 @@ describe("incident geometry", () => {
     expect(hatchSegments([])).toEqual([]);
     expect(hatchSegments([[0, 0]])).toEqual([]);
     expect(hatchSegments([[0, 0], [0, 0]])).toEqual([]);
-  });
-
-  it("places the stop bar across the approach, behind the intersection", () => {
-    const center: [number, number] = [100, 100];
-    // Approach heading east (bearing 0) => the bar is north-south, west of center.
-    const geometry = stopBarGeometry(center, 0, 3.5);
-    const [[ax, ay], [bx, by]] = geometry.bar;
-    expect(ax).toBeCloseTo(bx, 5);
-    expect(ax).toBeLessThan(center[0]);
-    expect(Math.abs(ay - by)).toBeCloseTo(7, 5);
-    expect(geometry.crosswalk).toHaveLength(3);
-    // Crosswalk ticks sit further back than the bar.
-    for (const [start] of geometry.crosswalk) {
-      expect(start[0]).toBeLessThan(ax);
-    }
-  });
-
-  it("spreads event egress arrows along the outgoing roads", () => {
-    const arrows = egressArrows([0, 0], [0, Math.PI / 2], 16, 40);
-    expect(arrows).toHaveLength(2);
-    expect(arrows[0].source[0]).toBeCloseTo(16, 5);
-    expect(arrows[0].target[0]).toBeCloseTo(40, 5);
-    expect(arrows[1].source[1]).toBeCloseTo(16, 5);
-    expect(arrows[1].target[1]).toBeCloseTo(40, 5);
   });
 });
 

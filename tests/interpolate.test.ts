@@ -264,10 +264,11 @@ describe("queue packing", () => {
 
   it("ranks a mixed queue front-first and never overlaps", () => {
     // All three share the same stop-line progress, as the simulation allows.
+    // The order comes from the worker's rank, not from progress or from id.
     const rendered = [
-      { id: 1, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 5000, fade: 1, queueRank: -1 },
-      { id: 2, roadId: 0, type: "truck", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 5000, fade: 1, queueRank: -1 },
-      { id: 3, roadId: 0, type: "bicycle", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 5000, fade: 1, queueRank: -1 },
+      { id: 1, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 0, fade: 1, queueRank: 0 },
+      { id: 2, roadId: 0, type: "truck", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 0, fade: 1, queueRank: 1 },
+      { id: 3, roadId: 0, type: "bicycle", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 0, fade: 1, queueRank: 2 },
     ] as never;
     const progress = new Map([
       [1, 95],
@@ -276,7 +277,6 @@ describe("queue packing", () => {
     ]);
     const packed = packQueues(city, indexes, laneOffsets, rendered, (id) => progress.get(id) ?? 0);
     const sorted = [...packed].sort((a, b) => a.queueRank - b.queueRank);
-    // Deterministic tie-break by id: 1 leads, then 2, then 3.
     expect(sorted.map((vehicle) => vehicle.id)).toEqual([1, 2, 3]);
     // Spacing uses real class lengths plus the gap.
     const gapAfterFront = (VEHICLE_LENGTH_M.car + QUEUE_GAP_M);
@@ -294,8 +294,8 @@ describe("queue packing", () => {
   it("is deterministic for identical state", () => {
     const make = () =>
       [
-        { id: 1, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 900, fade: 1, queueRank: -1 },
-        { id: 2, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 900, fade: 1, queueRank: -1 },
+        { id: 1, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 900, fade: 1, queueRank: 0 },
+        { id: 2, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 900, fade: 1, queueRank: 1 },
       ] as never;
     const progress = new Map([
       [1, 50],
@@ -317,7 +317,8 @@ describe("queue packing", () => {
       headingRadians: 0,
       blockedWaitMs: 1000,
       fade: 1,
-      queueRank: -1,
+      // Twenty ranks, front first: the queue is longer than the road.
+      queueRank: index,
     })) as never;
     const progress = new Map<number, number>(
       Array.from({ length: 20 }, (_, index) => [index + 1, 95] as [number, number]),

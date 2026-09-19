@@ -1,21 +1,58 @@
 /**
- * Signal rendering grammar and zoom detail tiers.
+ * Signal rendering grammar, zoom detail tiers, and the signal sprite contract.
  *
- * The product rejection list is explicit: no sea of green dots, no giant signal
- * dominating a road, no glyph in the middle of a junction, nothing on
- * expressways or roundabouts. These tests pin that grammar down.
+ * The product rejection list is explicit: no sea of coloured dots, no giant
+ * signal dominating a road, no glyph in the middle of a junction, nothing on
+ * expressways or roundabouts — and at close zoom a signal must read as a
+ * traffic-light housing with an active lamp, not as a coloured circle. These
+ * tests pin that grammar down, including the wiring that makes the sprite path
+ * the live one.
  */
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { metricToLngLat } from "@/cities/map-model";
 import { CLOSE_TIER_MINZOOM, detailTier } from "@/render/zoom-grammar";
+import {
+  createSignalSprites,
+  signalIconSizeForHousingPx,
+  signalSpriteForStage,
+  SIGNAL_SPRITE_IDS,
+  SIGNAL_SPRITE_LIT_LAMP,
+  SIGNAL_SPRITE_PATHS,
+  SIGNAL_SPRITE_UNITS,
+  type SignalSpriteId,
+  type SignalSpriteSet,
+} from "@/render/signal-sprites";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
 import { chicagoAsset, chicagoModel } from "./chicago-support";
 
 function snapshotWithSignals(signals: PresentationSignal[]): PresentationSnapshot {
   return { sequence: 1, timeMs: 1000, vehicles: [], signals } as unknown as PresentationSnapshot;
 }
+
+/** A sprite set without a DOM: the layer only needs an atlas and a mapping. */
+function stubSprites(): SignalSpriteSet {
+  const cell = { x: 0, y: 0, width: 10, height: 10, anchorX: 5, anchorY: 5, mask: false };
+  return {
+    atlas: "data:image/png;base64,",
+    mapping: Object.fromEntries(SIGNAL_SPRITE_IDS.map((id) => [id, cell])) as Record<
+      SignalSpriteId,
+      typeof cell
+    >,
+  };
+}
+
+type HeadLayer = {
+  props: {
+    data: { position: [number, number]; sprite: SignalSpriteId; bearing: number }[];
+    iconMapping: Record<string, unknown>;
+    getIcon: (head: { sprite: SignalSpriteId }) => string;
+    getSize: number;
+    opacity: number;
+  };
+};
 
 describe("zoom detail grammar", () => {
   it("splits far, mid and close tiers at the documented zooms", () => {
@@ -26,10 +63,53 @@ describe("zoom detail grammar", () => {
   });
 });
 
+describe("signal sprites", () => {
+  it("ships exactly the three states, each lighting a different lamp", () => {
+    expect([...SIGNAL_SPRITE_IDS]).toEqual(["signal-red", "signal-yellow", "signal-green"]);
+    expect(SIGNAL_SPRITE_LIT_LAMP["signal-red"]).toBe(0);
+    expect(SIGNAL_SPRITE_LIT_LAMP["signal-yellow"]).toBe(1);
+    expect(SIGNAL_SPRITE_LIT_LAMP["signal-green"]).toBe(2);
+    // Three lamp positions per state, plus the housing parts.
+    for (const id of SIGNAL_SPRITE_IDS) {
+      expect(SIGNAL_SPRITE_PATHS[id].length).toBeGreaterThanOrEqual(3 + 3);
+    }
+    // The states are genuinely different artwork, not one sprite recoloured.
+    const red = JSON.stringify(SIGNAL_SPRITE_PATHS["signal-red"]);
+    const yellow = JSON.stringify(SIGNAL_SPRITE_PATHS["signal-yellow"]);
+    const green = JSON.stringify(SIGNAL_SPRITE_PATHS["signal-green"]);
+    expect(red).not.toBe(yellow);
+    expect(yellow).not.toBe(green);
+  });
+
+  it("maps the simulation's stages onto the three sprites", () => {
+    expect(signalSpriteForStage("green", true)).toBe("signal-green");
+    expect(signalSpriteForStage("yellow", true)).toBe("signal-yellow");
+    expect(signalSpriteForStage("all-red", true)).toBe("signal-red");
+    // An approach that does not hold the stage reads red, whatever the stage.
+    for (const stage of ["green", "yellow", "all-red"] as const) {
+      expect(signalSpriteForStage(stage, false)).toBe("signal-red");
+    }
+  });
+
+  it("sizes the housing from the sprite's own proportions", () => {
+    // The rendered housing height equals the requested pixel height.
+    const size = signalIconSizeForHousingPx(11);
+    expect(size).toBeGreaterThan(11);
+    expect((size * SIGNAL_SPRITE_UNITS.height) / 128).toBeCloseTo(11, 6);
+  });
+
+  it("returns null without a DOM instead of inventing a fallback", () => {
+    // Node environment: no document. The contract is "quietly unavailable",
+    // and the layer hides the heads — never a coloured dot substitute.
+    expect(createSignalSprites()).toBeNull();
+  });
+});
+
 describe("signal rendering", () => {
   const model = chicagoModel(2);
   const indexes = buildDirectedPathIndexes(model);
   const plans = buildSignalPlans(model);
+  const sprites = stubSprites();
 
   it("hides every signal glyph below street zoom", () => {
     const signals: PresentationSignal[] = [...plans.keys()]
@@ -37,30 +117,65 @@ describe("signal rendering", () => {
       .map((intersectionId) => ({ intersectionId, phaseIndex: 0, stage: "green" }));
     const snapshot = snapshotWithSignals(signals);
     for (const zoom of [9, 11, 12.5, 13.9, CLOSE_TIER_MINZOOM - 0.05]) {
-      expect(buildSignalLayers(model.projection, model, snapshot, plans, indexes, zoom)).toEqual([]);
+      expect(
+        buildSignalLayers(model.projection, model, snapshot, plans, indexes, zoom, sprites),
+      ).toEqual([]);
     }
     expect(
-      buildSignalLayers(model.projection, model, snapshot, plans, indexes, 16).length,
+      buildSignalLayers(model.projection, model, snapshot, plans, indexes, 16, sprites).length,
     ).toBeGreaterThan(0);
   });
 
   it("returns nothing without a snapshot", () => {
-    expect(buildSignalLayers(model.projection, model, null, plans, indexes, 16)).toEqual([]);
+    expect(
+      buildSignalLayers(model.projection, model, null, plans, indexes, 16, sprites),
+    ).toEqual([]);
+  });
+
+  it("draws heads from the signal atlas and never from a vehicle icon", () => {
+    const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2);
+    expect(entry).toBeTruthy();
+    const [intersectionId] = entry!;
+    const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
+    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17, sprites);
+
+    const headLayer = layers.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
+    expect(headLayer).toBeTruthy();
+    // The layer is driven by the signal mapping, and every icon it can ask for
+    // is a signal sprite. "car" — the old placeholder — must not appear.
+    for (const id of SIGNAL_SPRITE_IDS) {
+      expect(Object.keys(headLayer.props.iconMapping)).toContain(id);
+    }
+    expect(Object.keys(headLayer.props.iconMapping)).not.toContain("car");
+    for (const head of headLayer.props.data) {
+      expect(SIGNAL_SPRITE_IDS).toContain(headLayer.props.getIcon(head));
+      expect(SIGNAL_SPRITE_IDS).toContain(head.sprite);
+    }
+    // No coloured-dot layers survive anywhere in the signal stack.
+    for (const layer of layers) {
+      expect(["signals-lamps", "signals-lamps-idle", "signals-housings"]).not.toContain(layer.id);
+    }
+  });
+
+  it("hides the heads when the atlas is missing, rather than drawing dots", () => {
+    const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2);
+    const [intersectionId] = entry!;
+    const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
+    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17, null);
+    expect(layers.find((layer) => layer.id === "signals-heads")).toBeUndefined();
+    expect(layers.find((layer) => layer.id === "signals-lamps")).toBeUndefined();
+    // The stop bars are geometry, not state: they still render.
+    expect(layers.find((layer) => layer.id === "signals-stopbars")).toBeTruthy();
   });
 
   it("places heads on the approach, never in the middle of the junction", () => {
-    // A signalized intersection with several approaches.
     const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2);
     expect(entry).toBeTruthy();
     const [intersectionId, plan] = entry!;
     const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
-    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17);
-    // Heads are a housing sprite plus a lamp dot; the lamp layer carries the
-    // per-approach positions.
-    const headLayer = layers.find((layer) => layer.id === "signals-lamps");
-    expect(headLayer).toBeTruthy();
-    const heads = (headLayer as unknown as { props: { data: { position: [number, number] }[] } })
-      .props.data;
+    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17, sprites);
+    const headLayer = layers.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
+    const heads = headLayer.props.data;
     expect(heads.length).toBeGreaterThanOrEqual(2);
     // Every head sits off the junction centre: a signal head is a roadside
     // object, not a dot on the crossing.
@@ -73,8 +188,9 @@ describe("signal rendering", () => {
       // Off the crossing, but on this junction's own approach.
       expect(metres).toBeGreaterThan(2);
       expect(metres).toBeLessThan(40);
+      // Oriented to its approach: the bearing is the approach's own heading.
+      expect(Number.isFinite(head.bearing)).toBe(true);
     }
-    void plan;
   });
 
   it("never signals an uncontrolled junction or a roundabout ring", () => {
@@ -110,5 +226,27 @@ describe("signal rendering", () => {
         false,
       );
     }
+  });
+});
+
+describe("production wiring", () => {
+  /**
+   * The bug this guards: the map created a signal atlas but never passed it to
+   * the layer builder, so the sprite path was dead and production fell back to
+   * coloured dots. Types and layer tests cannot catch that — only the call site
+   * can — so this reads the component that assembles the frame.
+   */
+  const source = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
+
+  it("builds the signal atlas once and hands it to the signal layers", () => {
+    expect(source).toContain("createSignalSprites");
+    expect(source).toMatch(/signalSpritesRef\.current\s*=\s*createSignalSprites\(\)/);
+    // The call passes the atlas as an argument. (A lazy match to the first ")"
+    // stops inside `new Map()`, so bound the window instead.)
+    expect(source).toMatch(/buildSignalLayers\([\s\S]{0,600}?signalSpritesRef\.current/);
+  });
+
+  it("no longer references the placeholder housing", () => {
+    expect(source).not.toContain("createSignalHousing");
   });
 });

@@ -35,6 +35,12 @@ import {
   vehicleLengthPx,
 } from "./visuals";
 import { iconSizeForLengthPx } from "./vehicle-sprites";
+import {
+  signalIconSizeForHousingPx,
+  signalSpriteForStage,
+  type SignalSpriteId,
+  type SignalSpriteSet,
+} from "./signal-sprites";
 import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
@@ -97,11 +103,11 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
 /** Stop line sits this far before the junction, on the real approach. */
 const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
 
-const SIGNAL_COLORS = {
-  green: [47, 138, 85, 235] as const,
-  yellow: [201, 138, 43, 235] as const,
-  "all-red": [178, 58, 44, 235] as const,
-};
+/**
+ * Zoom at which the full three-lamp housing is legible. Below it the sprite is
+ * drawn a little smaller, because the individual lamps stop being separable.
+ */
+const SIGNAL_FULL_HOUSING_MINZOOM = 16.8;
 
 /* ------------------------------------------------------------------ */
 /* Congestion                                                          */
@@ -278,7 +284,7 @@ export function buildSignalLayers(
   plans: Map<number, SignalPlanEntry>,
   indexes: DirectedPathIndexes,
   zoom: number,
-  housing: VehicleIconSet | null = null,
+  sprites: SignalSpriteSet | null = null,
 ): Layer[] {
   // Signals are a street-zoom instrument. At far and mid zoom this returns
   // nothing at all: a city-wide field of coloured dots is debug state, and
@@ -292,7 +298,8 @@ export function buildSignalLayers(
 
   interface Head {
     position: LngLat;
-    color: readonly [number, number, number, number];
+    /** Which signal sprite this approach shows: its state, or red if not active. */
+    sprite: SignalSpriteId;
     /** Bearing of the approach, so the housing faces the traffic it controls. */
     bearing: number;
   }
@@ -311,9 +318,8 @@ export function buildSignalLayers(
     const activeGroup =
       signal.stage === "all-red" ? -1 : ((signal.phaseIndex % groupCount) + groupCount) % groupCount;
     plan.groupIncoming.forEach((roads, groupIndex) => {
-      // The active group shows its own colour; every other approach reads red.
-      const base = groupIndex === activeGroup ? SIGNAL_COLORS[signal.stage] : SIGNAL_COLORS["all-red"];
-      const color = [base[0], base[1], base[2], Math.round(base[3] * opacity)] as const;
+      // The active group shows its own lamp; every other approach reads red.
+      const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
       for (const roadId of roads) {
         const index = indexes[roadId];
         const road = model.city.roads[roadId];
@@ -350,7 +356,7 @@ export function buildSignalLayers(
         );
         heads.push({
           position: toLngLat(projection, headSample.x, headSample.y),
-          color,
+          sprite,
           bearing: sample.heading,
         });
       }
@@ -373,54 +379,34 @@ export function buildSignalLayers(
       }),
     );
   }
-  if (heads.length > 0) {
-    // The head is a housing with ONE bright lamp — the active stage — plus dim
-    // companions at the closest zoom. A large filled circle at the junction
-    // (what this was) is instrumentation, not a traffic signal.
-    // The housing is decoration; the lamps carry the state, so signals still
-    // render when there is no sprite atlas (no DOM).
-    if (housing) {
-      layers.push(
-        new IconLayer<Head>({
-          id: "signals-housings",
-          data: heads,
-          iconAtlas: housing.atlas,
-          iconMapping: housing.mapping,
-          getIcon: () => "car",
-          getPosition: (head) => head.position,
-          getSize: 7,
-          getAngle: (head) => (head.bearing * 180) / Math.PI,
-          sizeUnits: "pixels",
-          billboard: false,
-          pickable: false,
-        }),
-      );
-    }
+  if (heads.length > 0 && sprites) {
+    // One sprite per approach: a graphite housing with the active lamp lit and
+    // its companions dim. The sprite carries the state, so there is no coloured
+    // dot anywhere in this layer.
+    //
+    // When the atlas is missing (no DOM) the heads are hidden rather than
+    // substituted: a coloured circle is the debug language this replaced. The
+    // map component reports the missing atlas in its debug tooling.
     layers.push(
-      new ScatterplotLayer<Head>({
-        id: "signals-lamps",
+      new IconLayer<Head>({
+        id: "signals-heads",
         data: heads,
+        iconAtlas: sprites.atlas,
+        iconMapping: sprites.mapping,
+        getIcon: (head) => head.sprite,
         getPosition: (head) => head.position,
-        getRadius: 1.5,
-        radiusUnits: "pixels",
-        getFillColor: (head) => [...head.color],
+        // The housing is portrait, so rotating by the approach bearing turns
+        // the lamp row across the road and the face meets the traffic.
+        getSize: signalIconSizeForHousingPx(
+          zoom >= SIGNAL_FULL_HOUSING_MINZOOM ? 11 : 9,
+        ),
+        getAngle: (head) => (head.bearing * 180) / Math.PI,
+        opacity,
+        sizeUnits: "pixels",
+        billboard: false,
         pickable: false,
       }),
     );
-    if (zoom >= 16.8) {
-      // Full housing: the two lamps that are not lit, barely there.
-      layers.push(
-        new ScatterplotLayer<Head>({
-          id: "signals-lamps-idle",
-          data: heads,
-          getPosition: (head) => head.position,
-          getRadius: 1.1,
-          radiusUnits: "pixels",
-          getFillColor: [90, 88, 82, 120],
-          pickable: false,
-        }),
-      );
-    }
   }
   return layers;
 }
@@ -432,6 +418,12 @@ export function buildSignalLayers(
 export interface IncidentExtras {
   /** DOM plates rendered by the map component (bridges, events). */
   readonly plates: readonly { id: string; kind: string; x: number; y: number; label: string }[];
+  /**
+   * Metric anchor of the first active crash, if any. Crashes draw as deck
+   * geometry (no DOM plate), so this is what lets the dev camera hook frame one
+   * for a screenshot. Never rendered.
+   */
+  readonly crash: { x: number; y: number } | null;
 }
 
 export function buildIncidentLayers(
@@ -442,7 +434,7 @@ export function buildIncidentLayers(
   const layers: Layer[] = [];
   const plates: { id: string; kind: string; x: number; y: number; label: string }[] = [];
   if (!snapshot) {
-    return { layers, extras: { plates } };
+    return { layers, extras: { plates, crash: null } };
   }
 
   const closedPaths: LngLat[][] = [];
@@ -679,5 +671,5 @@ export function buildIncidentLayers(
     );
   }
 
-  return { layers, extras: { plates } };
+  return { layers, extras: { plates, crash: crashMarkers[0] ? { x: crashMarkers[0].x, y: crashMarkers[0].y } : null } };
 }

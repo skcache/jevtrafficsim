@@ -1,13 +1,19 @@
 /**
  * Deterministic queue packing (presentation only).
  *
- * The simulation keeps its own truth: a queued vehicle's progress is where it
- * stopped. Presentation-wise that makes a queue look like a pile, because
- * several vehicles can share the same stop-line progress and stacked glyphs
- * read as one blob. This pass derives a queue rank per directed road from the
- * actual queue order (front first, by descending progress) and re-places the
- * queued vehicles bumper to bumper behind the front one using class-specific
- * physical lengths.
+ * The simulation keeps its own truth, and the worker already ships it: each
+ * vehicle carries an authoritative `queueRank` computed from the simulation's
+ * own ordering rule (queuedSinceMs ascending, then id). Presentation consumes
+ * that rank — it never reconstructs the order. Reconstructing it from progress
+ * was wrong on principle (the renderer could disagree with the simulation about
+ * who is in front) and wrong in practice (vehicles that share a stop-line
+ * progress sorted arbitrarily).
+ *
+ * What this pass does: group queued vehicles per directed road, order them by
+ * `queueRank` ascending (rank 0 is the front), and re-place them bumper to
+ * bumper behind the front one using class-specific physical lengths. Progress
+ * is read only to anchor the front vehicle at its real stop position — never to
+ * decide order, and never written back as a rank.
  *
  * Nothing here feeds back into the simulation: it is a pure function of the
  * rendered frame, the path indexes and the road lengths. It is safe when a road
@@ -23,15 +29,19 @@ import { lerpAngle } from "@/render/interpolate";
 import { QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
 
-/** A vehicle counts as queued when it is blocked at an approach. */
+/**
+ * Queued means the authoritative rank says so (`>= 0`; the renderer uses -1 for
+ * "not in a queue"). Wait time is NOT the test: a vehicle that has just joined a
+ * queue legitimately has 0 ms of wait.
+ */
 export function isQueued(vehicle: RenderedVehicle): boolean {
-  return vehicle.blockedWaitMs > 0;
+  return vehicle.queueRank >= 0;
 }
 
 /**
  * Re-place queued vehicles bumper to bumper behind the front of each queue.
- * `progressOf` reads a vehicle's current simulation progress, which is what
- * defines the true queue order.
+ * `progressOf` supplies the front vehicle's stop-line progress, which anchors
+ * the packed queue; the order itself comes from the authoritative `queueRank`.
  */
 export function packQueues(
   city: City,
@@ -50,20 +60,21 @@ export function packQueues(
     queues.set(vehicle.roadId, list);
   }
 
-  const placed = new Map<number, { progress: number; rank: number }>();
+  const placed = new Map<number, { progress: number }>();
   for (const [roadId, queue] of queues) {
     const road = city.roads[roadId];
     const index = indexes[roadId];
     if (!road || !index) {
       continue;
     }
-    // Front first: the vehicle closest to the stop line leads the queue.
-    queue.sort((a, b) => progressOf(b.id) - progressOf(a.id) || a.id - b.id);
+    // Ascending rank: 0 is the front. The tie-break on id only makes an
+    // impossible input (two vehicles sharing a rank) deterministic.
+    queue.sort((a, b) => a.queueRank - b.queueRank || a.id - b.id);
     const frontProgress = Math.min(road.length, Math.max(0, progressOf(queue[0].id)));
     let distance = 0;
-    queue.forEach((vehicle, rank) => {
+    queue.forEach((vehicle) => {
       const progress = Math.max(0, Math.min(road.length, frontProgress - distance));
-      placed.set(vehicle.id, { progress, rank });
+      placed.set(vehicle.id, { progress });
       const length = VEHICLE_LENGTH_M[vehicle.type] ?? VEHICLE_LENGTH_M.car;
       distance += length + QUEUE_GAP_M;
     });
@@ -74,6 +85,7 @@ export function packQueues(
     if (!target || vehicle.roadId === null) {
       return vehicle;
     }
+    // The rank is the worker's; this pass never invents one.
     const index = indexes[vehicle.roadId];
     if (!index) {
       return vehicle;
@@ -87,7 +99,6 @@ export function packQueues(
       x: sample.x,
       y: sample.y,
       headingRadians: sample.heading,
-      queueRank: target.rank,
     };
   });
 }
@@ -120,6 +131,13 @@ export const SETTLE_MAX_TURN_RATE_DEG_PER_S = 240;
  */
 export const SETTLE_MAX_TURN_PER_FRAME_RAD = (4 * Math.PI) / 180;
 
+/**
+ * Positional distance below which a frame-to-frame change is a re-orientation
+ * rather than a move. Heading-only settling divides by the distance, so without
+ * this floor a vehicle that swings 180 degrees in place produces NaN.
+ */
+export const SETTLE_EPSILON_M = 1e-6;
+
 export type DisplayedPlacement = { x: number; y: number; headingRadians: number };
 
 /** Short-way angular distance between two headings, in radians. */
@@ -132,6 +150,14 @@ function angleGap(from: number, to: number): number {
     delta += Math.PI * 2;
   }
   return Math.abs(delta);
+}
+
+/** Blend factor for a heading change, bounded by the angular rate cap. */
+function headingBlend(gap: number, factor: number, dt: number): number {
+  return Math.min(
+    factor,
+    ((SETTLE_MAX_TURN_RATE_DEG_PER_S * Math.PI) / 180) * dt / Math.max(1e-6, gap),
+  );
 }
 
 /**
@@ -174,18 +200,23 @@ export function settlePlacements(
     const dx = target.x - before.x;
     const dy = target.y - before.y;
     const distance = Math.hypot(dx, dy);
+    if (distance <= SETTLE_EPSILON_M) {
+      // Heading-only: the vehicle is re-orienting where it stands. Keep the
+      // position exactly — no manufactured movement, no dx/0 — and settle the
+      // rotation under the same angular cap.
+      const next: DisplayedPlacement = {
+        x: target.x,
+        y: target.y,
+        headingRadians: lerpAngle(before.headingRadians, target.headingRadians, headingBlend(gap, factor, dt)),
+      };
+      displayed.set(vehicle.id, next);
+      return { ...vehicle, x: next.x, y: next.y, headingRadians: next.headingRadians };
+    }
     const step = Math.min(distance * factor, SETTLE_MAX_SPEED_MPS * dt);
     const next: DisplayedPlacement = {
       x: before.x + (dx / distance) * step,
       y: before.y + (dy / distance) * step,
-      headingRadians: lerpAngle(
-        before.headingRadians,
-        target.headingRadians,
-        Math.min(
-          factor,
-          ((SETTLE_MAX_TURN_RATE_DEG_PER_S * Math.PI) / 180) * dt / Math.max(1e-6, gap),
-        ),
-      ),
+      headingRadians: lerpAngle(before.headingRadians, target.headingRadians, headingBlend(gap, factor, dt)),
     };
     displayed.set(vehicle.id, next);
     return { ...vehicle, x: next.x, y: next.y, headingRadians: next.headingRadians };

@@ -60,7 +60,8 @@ import {
 } from "@/render/deck-layers";
 import { waitHeatBucket } from "@/render/map-geometry";
 import { type VehicleIconSet } from "@/render/vehicle-icons";
-import { createSignalHousing, createVehicleSprites } from "@/render/vehicle-sprites";
+import { createVehicleSprites } from "@/render/vehicle-sprites";
+import { createSignalSprites, type SignalSpriteSet } from "@/render/signal-sprites";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
@@ -107,13 +108,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const overlayRef = useRef<MapLibreOverlay | null>(null);
   const zoomRef = useRef(16);
   const iconsRef = useRef<VehicleIconSet | null>(null);
-  const housingRef = useRef<VehicleIconSet | null>(null);
+  const signalSpritesRef = useRef<SignalSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
   /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   /** Latest incident plate positions (metric), for the dev camera helper. */
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
+  /** Metric anchor of the active crash, for the dev camera hook. */
+  const crashRef = useRef<{ x: number; y: number } | null>(null);
   /** What was drawn last frame, so queue re-placements can settle instead of jumping. */
   const displayedRef = useRef<Map<number, DisplayedPlacement>>(new Map());
   const lastFrameMsRef = useRef(0);
@@ -214,7 +217,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     zoomRef.current = map.getZoom();
     // Sprites are built once, never per frame.
     iconsRef.current = createVehicleSprites();
-    housingRef.current = createSignalHousing();
+    signalSpritesRef.current = createSignalSprites();
     if (window.location.search.includes("debug")) {
       // Dev-only diagnostics (URL-gated).
       (window as unknown as { __jevMapInstance?: unknown }).__jevMapInstance = map;
@@ -332,6 +335,23 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             });
             return true;
           },
+          /**
+           * Dev-only: centre the camera on the active crash. A crash has no DOM
+           * plate, so focusIncident cannot frame one — which is why the crash
+           * shot was previously taken wherever the camera happened to be.
+           */
+          focusCrash: (zoom = 16.6) => {
+            const crash = crashRef.current;
+            if (!crash) {
+              return false;
+            }
+            map.stop();
+            map.jumpTo({
+              center: metricToLngLat(projection, crash.x, crash.y),
+              zoom,
+            });
+            return true;
+          },
         };
       }
       onHandle?.(handle);
@@ -411,12 +431,14 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 plansRef.current ?? new Map(),
                 buffer.paths,
                 zoomRef.current,
+                signalSpritesRef.current,
               ),
               ...incidents.layers,
               ...congestion,
             ];
         overlayRef.current?.setProps({ layers });
         platesRef.current = incidents.extras.plates;
+        crashRef.current = incidents.extras.crash;
         syncPlates(incidents.extras.plates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];
@@ -437,6 +459,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             vehicleCount: vehicles.length,
             snapshotVehicles: buffer.current?.vehicles.length ?? 0,
             layerIds: layers.map((layer) => layer.id),
+            // Signals hide themselves when the atlas is missing rather than
+            // falling back to a coloured dot, so debug reports it explicitly.
+            signalSprites: signalSpritesRef.current ? "ok" : "missing",
             waitBuckets: buckets,
             maxWaitMs: vehicles.reduce(
               (max, vehicle) => Math.max(max, vehicle.blockedWaitMs),
