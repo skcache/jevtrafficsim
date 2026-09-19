@@ -94,7 +94,10 @@ function meanBearing(model: MapModel, roads: readonly RoadId[]): number {
   return Math.atan2(sy, sx);
 }
 
-const SIGNAL_ARM_MERGE_RAD = (18 * Math.PI) / 180;
+// OSM often splits one physical approach into several near-parallel directed
+// pieces. 24° is wide enough to collapse those artifacts while keeping true
+// orthogonal/Y-junction approaches distinct.
+const SIGNAL_ARM_MERGE_RAD = (24 * Math.PI) / 180;
 
 function bearingDistance(a: number, b: number): number {
   const full = Math.PI * 2;
