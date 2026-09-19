@@ -95,12 +95,17 @@ describe("road presentation hierarchy", () => {
         }),
       ).toBe("detail");
     }
-    // Surface-street links do not leak into any static road source.
+    // Surface-street links do not leak into any static road source. Pin this
+    // against Metro, where the imported Chicago asset actually contains them,
+    // so the assertion cannot pass vacuously on a smaller crop.
+    const metro = chicagoModel(4);
+    expect(metro.streets.some((piece) => piece.osmClass === "secondary_link")).toBe(true);
+    const metroGeo = buildShowcaseGeoJson(metro);
     const visible = [
-      ...geo.roadsLocal.features,
-      ...geo.roadsArterial.features,
-      ...geo.roadsHighway.features,
-      ...geo.roadsDetail.features,
+      ...metroGeo.roadsLocal.features,
+      ...metroGeo.roadsArterial.features,
+      ...metroGeo.roadsHighway.features,
+      ...metroGeo.roadsDetail.features,
     ];
     expect(
       visible.some((feature) => String(feature.properties.osmClass) === "secondary_link"),
