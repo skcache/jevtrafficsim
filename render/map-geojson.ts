@@ -128,6 +128,14 @@ const SLIVER_COMPACTNESS = 0.05;
  * sliver is at least architecture; a grass or water sliver is debris.
  */
 const AREA_SLIVER_COMPACTNESS = 0.12;
+/**
+ * The simulator is not a general-purpose basemap. Tiny extracted land-use
+ * fragments are valid OSM data but visual noise here, so only geography large
+ * enough to orient the traffic view reaches presentation.
+ */
+const PRESENTATION_WATER_MIN_AREA_M2 = 5_000;
+const PRESENTATION_PARK_MIN_AREA_M2 = 12_000;
+const PRESENTATION_PARK_COMPACTNESS = 0.16;
 
 /** Shoelace area of a metric ring, in m². */
 function ringArea(ring: readonly (readonly number[])[]): number {
@@ -197,7 +205,11 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.water
-      .filter((entry) => compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS)
+      .filter(
+        (entry) =>
+          entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
+          compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS,
+      )
       .map((entry, index) =>
       polygonFeature(projection, entry.rings, {
         id: `water-${index}`,
@@ -209,9 +221,14 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const parks: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.parks
-      // Hair-thin fragments are debris; small gardens are real green space and
-      // stay (the style decides when they are worth drawing).
-      .filter((entry) => compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS)
+      // Only orientation-scale green space belongs in a traffic simulator.
+      // Pocket parks and clipped land-use wedges are real data, but they are
+      // not part of the experiment and previously read as random triangles.
+      .filter(
+        (entry) =>
+          entry.areaM2 >= PRESENTATION_PARK_MIN_AREA_M2 &&
+          compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS,
+      )
       .map((entry, index) =>
         polygonFeature(projection, entry.rings, {
           id: `park-${index}`,
