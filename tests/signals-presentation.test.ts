@@ -45,10 +45,12 @@ function stubSprites(): SignalSpriteSet {
 
 type HeadLayer = {
   props: {
-    data: { position: [number, number]; sprite: SignalSpriteId; bearing: number }[];
+    data: { position: [number, number]; sprite: SignalSpriteId }[];
     iconMapping: Record<string, unknown>;
     getIcon: (head: { sprite: SignalSpriteId }) => string;
     getSize: number;
+    getAngle: number;
+    billboard: boolean;
     opacity: number;
   };
 };
@@ -181,6 +183,10 @@ describe("signal rendering", () => {
       expect(SIGNAL_SPRITE_IDS).toContain(headLayer.props.getIcon(head));
       expect(SIGNAL_SPRITE_IDS).toContain(head.sprite);
     }
+    // The physical traffic-light annotation stays screen-aligned. Direction is
+    // carried by the colored gate across the approach, not by rotating the icon.
+    expect(headLayer.props.getAngle).toBe(0);
+    expect(headLayer.props.billboard).toBe(true);
     // No coloured-dot layers survive anywhere in the signal stack.
     for (const layer of layers) {
       expect(["signals-lamps", "signals-lamps-idle", "signals-housings"]).not.toContain(layer.id);
@@ -218,8 +224,6 @@ describe("signal rendering", () => {
       // Off the crossing, but on this junction's own approach.
       expect(metres).toBeGreaterThan(2);
       expect(metres).toBeLessThan(40);
-      // Oriented to its approach: the bearing is the approach's own heading.
-      expect(Number.isFinite(head.bearing)).toBe(true);
     }
   });
 
