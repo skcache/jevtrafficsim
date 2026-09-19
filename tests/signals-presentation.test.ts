@@ -50,6 +50,9 @@ type HeadLayer = {
     getIcon: (head: { sprite: SignalSpriteId }) => string;
     getSize: number;
     getAngle: number;
+    sizeUnits: string;
+    sizeMinPixels: number;
+    sizeMaxPixels: number;
     billboard: boolean;
     opacity: number;
   };
@@ -183,7 +186,14 @@ describe("signal rendering", () => {
 
     const head17 = at17.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
     const head19 = at19.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
-    expect(head19.props.getSize).toBeGreaterThan(head17.props.getSize);
+    // The head is sized in map space, so projection zoom does the scaling.
+    // Pixel caps preserve legibility at entry and prevent billboard growth.
+    for (const head of [head17, head19]) {
+      expect(head.props.sizeUnits).toBe("meters");
+      expect(head.props.getSize).toBe(2.2);
+      expect(head.props.sizeMinPixels).toBe(18);
+      expect(head.props.sizeMaxPixels).toBe(38);
+    }
   });
 
   it("draws heads from the signal atlas and never from a vehicle icon", () => {
