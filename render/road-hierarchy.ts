@@ -48,7 +48,8 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
 
   // Only links attached to the expressway hierarchy are visually ramps.
   // Surface-street link classes are turn/slip channels; they stay routable but
-  // do not earn normal map ink until extreme close zoom.
+  // never become standalone cartographic roads. A vehicle traversing one reads
+  // as making a turn through the intersection, which is the useful abstraction.
   if (
     osmClass === "motorway" ||
     osmClass === "trunk" ||
