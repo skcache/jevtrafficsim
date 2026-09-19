@@ -23,7 +23,7 @@
  */
 import type { Point } from "@/cities/paths";
 
-export type RoadPresentationClass = "primary" | "secondary" | "detail";
+export type RoadPresentationClass = "primary" | "secondary" | "detail" | "hidden";
 
 export interface RoadPresentationInput {
   readonly osmClass: string;
@@ -40,6 +40,8 @@ export const DETAIL_MAX_LENGTH_M = 60;
  * SECONDARY ordinary local streets: tertiary, residential, unclassified.
  * DETAIL    short unnamed stubs. They are real roads and keep routing; they
  *           simply do not earn ink until the camera is close.
+ * HIDDEN    surface-street link channels. They remain simulation topology but
+ *           visually read as a turn through the intersection, not a tiny ramp.
  */
 export function roadPresentationClass(piece: RoadPresentationInput): RoadPresentationClass {
   const osmClass = piece.osmClass;
@@ -58,7 +60,7 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
     return "primary";
   }
   if (osmClass.endsWith("_link")) {
-    return "detail";
+    return "hidden";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
     return "detail";
