@@ -23,7 +23,7 @@
  */
 import type { Point } from "@/cities/paths";
 
-export type RoadPresentationClass = "primary" | "secondary" | "detail" | "hidden";
+export type RoadPresentationClass = "primary" | "secondary" | "hidden";
 
 export interface RoadPresentationInput {
   readonly osmClass: string;
@@ -38,10 +38,10 @@ export const DETAIL_MAX_LENGTH_M = 60;
  * PRIMARY   the network's structure: expressways, ramps, and Chicago's grid
  *           streets (secondary carries most of the Loop's named avenues).
  * SECONDARY ordinary local streets: tertiary, residential, unclassified.
- * DETAIL    short unnamed stubs. They are real roads and keep routing; they
- *           simply do not earn ink until the camera is close.
- * HIDDEN    surface-street link channels. They remain simulation topology but
- *           visually read as a turn through the intersection, not a tiny ramp.
+ * HIDDEN    surface-street link channels and tiny unnamed connector pieces.
+ *           They remain simulation topology but do not become standalone map
+ *           objects. At this product's scale they read as a vehicle completing
+ *           a turn/transition, which is more useful than drawing fake ramps.
  */
 export function roadPresentationClass(piece: RoadPresentationInput): RoadPresentationClass {
   const osmClass = piece.osmClass;
@@ -64,7 +64,7 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
     return "hidden";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
-    return "detail";
+    return "hidden";
   }
   return "secondary";
 }
