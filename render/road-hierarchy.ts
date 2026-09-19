@@ -16,6 +16,10 @@
  *   - the second cause was ordinary short pieces: 130 unnamed pieces under 60 m
  *     (mostly tertiary/residential stubs between close intersections) drawn at
  *     mid zoom with a legibility floor, which fattens a stub into a ramp.
+ *   - OSM "*_link" does NOT mean "freeway ramp". Chicago contains short
+ *     secondary_link turn channels on ordinary downtown streets. Promoting every
+ *     link class to the highway material produced the tan mini-ramps visible on
+ *     Washington/Madison in the showcase screenshots.
  */
 import type { Point } from "@/cities/paths";
 
@@ -39,19 +43,37 @@ export const DETAIL_MAX_LENGTH_M = 60;
  */
 export function roadPresentationClass(piece: RoadPresentationInput): RoadPresentationClass {
   const osmClass = piece.osmClass;
+
+  // Only links attached to the expressway hierarchy are visually ramps.
+  // Surface-street link classes are turn/slip channels; they stay routable but
+  // do not earn normal map ink until extreme close zoom.
   if (
     osmClass === "motorway" ||
     osmClass === "trunk" ||
+    osmClass === "motorway_link" ||
+    osmClass === "trunk_link" ||
     osmClass === "primary" ||
-    osmClass === "secondary" ||
-    osmClass.endsWith("_link")
+    osmClass === "secondary"
   ) {
     return "primary";
+  }
+  if (osmClass.endsWith("_link")) {
+    return "detail";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
     return "detail";
   }
   return "secondary";
+}
+
+/** True only for the OSM classes that should read as an expressway/ramp. */
+export function isExpresswayClass(osmClass: string): boolean {
+  return (
+    osmClass === "motorway" ||
+    osmClass === "trunk" ||
+    osmClass === "motorway_link" ||
+    osmClass === "trunk_link"
+  );
 }
 
 /** Ray-cast point-in-ring; the rings are metric, like the points. */
