@@ -157,6 +157,9 @@ export interface ChicagoAsset {
     readonly id: number;
     readonly name: string;
     readonly roadIds: readonly number[];
+    /** Set by the importer: the group's path genuinely crosses the river. */
+    readonly waterCrossing?: boolean;
+    readonly waterOverlapM?: number;
   }[];
   readonly counts: Readonly<Record<string, number>>;
 }
@@ -179,14 +182,37 @@ const MIN_WATER_CROSSING_M = 20;
  * Point sampling keeps this dependency-free and deterministic; the step is
  * small enough that a 20 m threshold is exact to a couple of metres.
  */
-function pathInsideWater(
+/** Shortest distance from a point to any water ring edge, in metres. */
+export function distanceToWater(point: Point, polygons: readonly PolygonRings[]): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (const rings of polygons) {
+    for (const ring of rings) {
+    for (let index = 0; index + 1 < ring.length; index += 1) {
+      const [ax, ay] = ring[index];
+      const [bx, by] = ring[index + 1];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lengthSq = dx * dx + dy * dy;
+      const t =
+        lengthSq === 0
+          ? 0
+          : Math.max(0, Math.min(1, ((point[0] - ax) * dx + (point[1] - ay) * dy) / lengthSq));
+      const px = ax + dx * t;
+      const py = ay + dy * t;
+      best = Math.min(best, Math.hypot(point[0] - px, point[1] - py));
+      }
+    }
+  }
+  return Number.isFinite(best) ? best : Number.POSITIVE_INFINITY;
+}
+
+export function pathInsideWater(
   points: readonly (readonly number[])[],
   water: readonly PolygonRings[],
 ): { length: number; midpoint: Point; entersAndExits: boolean } {
   const step = 2;
   let length = 0;
-  let first: Point | null = null;
-  let last: Point | null = null;
+  const insideSamples: Point[] = [];
   let sawOutsideBefore = false;
   let sawInside = false;
   let sawOutsideAfter = false;
@@ -208,10 +234,7 @@ function pathInsideWater(
       if (inWater) {
         length += span / steps;
         sawInside = true;
-        if (!first) {
-          first = point;
-        }
-        last = point;
+        insideSamples.push(point);
       } else if (!sawInside) {
         sawOutsideBefore = true;
       } else {
@@ -219,7 +242,11 @@ function pathInsideWater(
       }
     }
   }
-  const midpoint: Point = first && last ? [(first[0] + last[0]) / 2, (first[1] + last[1]) / 2] : [0, 0];
+  // The middle inside sample, not the average of the first and last: a path that
+  // crosses water twice (river, then a basin) would average back onto land and
+  // plant the incident marker off the bridge.
+  const midpoint: Point =
+    insideSamples.length > 0 ? insideSamples[Math.floor(insideSamples.length / 2)] : [0, 0];
   return { length, midpoint, entersAndExits: sawInside && sawOutsideBefore && sawOutsideAfter };
 }
 
@@ -516,6 +543,9 @@ export function compileChicagoCity(
   const buildings: BuildingFootprint[] = [];
   for (const feature of features.buildings.features) {
     const area = typeof feature.properties.area === "number" ? feature.properties.area : 0;
+    // A multipolygon building is drawn as separate parts; `area` describes the
+    // whole building while `areaM2` describes the part actually drawn here.
+    const partArea = typeof feature.properties.areaM2 === "number" ? feature.properties.areaM2 : undefined;
     for (const rings of polygonsOf(projection, feature)) {
       const outer = rings[0];
       if (outer.length < 4 || !withinBounds(bounds, outer)) {
@@ -524,7 +554,7 @@ export function compileChicagoCity(
       buildings.push({
         district: "",
         rings,
-        prominent: area >= 3000 || ringArea(outer) >= 3000,
+        prominent: (partArea ?? area) >= 3000 || ringArea(outer) >= 3000,
       });
     }
   }
@@ -573,6 +603,7 @@ export function compileChicagoCity(
   // geographic: the bridge path is walked in the metric frame and the portion
   // lying inside a water polygon is measured. Named bridges only break ties.
   const waterCrossingBridges: WaterCrossingBridge[] = [];
+  const rings = water.map((entry) => entry.rings);
   for (const bridge of [...asset.bridges].sort((a, b) => a.id - b.id)) {
     let best: { roadId: number; at: Point; inside: number } | null = null;
     for (const roadId of bridge.roadIds) {
@@ -580,7 +611,7 @@ export function compileChicagoCity(
       if (!road) {
         continue;
       }
-      const inside = pathInsideWater(road.points, water.map((entry) => entry.rings));
+      const inside = pathInsideWater(road.points, rings);
       if (inside.length >= MIN_WATER_CROSSING_M && inside.entersAndExits) {
         if (!best || inside.length > best.inside) {
           best = { roadId, at: inside.midpoint, inside: inside.length };
@@ -594,8 +625,72 @@ export function compileChicagoCity(
         name: bridge.name ?? "",
         at: best.at,
       });
+      continue;
+    }
+    // The importer classifies crossings against buffered river geometry, which
+    // sees the bridges OSM's river polygons are cut around. Those groups have no
+    // strictly-inside road, so place the incident on the group's longest road
+    // whose midpoint is nearest water.
+    if (bridge.waterCrossing !== true) {
+      continue;
+    }
+    // Nearest water first, then the longest road: the incident must land on the
+    // part of the group that actually sits over the river.
+    // Walk each road and keep the sample nearest water: the crossing may sit at
+    // one END of a road, not at its midpoint.
+    let fallback: { roadId: number; at: Point; distance: number; length: number } | null = null;
+    for (const roadId of bridge.roadIds) {
+      const road = asset.roads[roadId];
+      if (!road || road.points.length < 2 || rings.length === 0) {
+        continue;
+      }
+      const step = 5;
+      for (let index = 0; index < road.points.length - 1; index += 1) {
+        const [x1, y1] = road.points[index];
+        const [x2, y2] = road.points[index + 1];
+        const span = Math.hypot(x2 - x1, y2 - y1);
+        const steps = Math.max(1, Math.ceil(span / step));
+        for (let s = 0; s <= steps; s += 1) {
+          const t = s / steps;
+          const point: Point = [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+          const nearest = distanceToWater(point, rings);
+          const better =
+            !fallback ||
+            nearest < fallback.distance - 1 ||
+            (Math.abs(nearest - fallback.distance) <= 1 && road.lengthM > fallback.length);
+          if (better) {
+            fallback = { roadId, at: point, distance: nearest, length: road.lengthM };
+          }
+        }
+      }
+    }
+    if (fallback) {
+      waterCrossingBridges.push({
+        groupId: bridge.id,
+        roadId: fallback.roadId,
+        name: bridge.name ?? "",
+        at: fallback.at,
+      });
     }
   }
+
+  // Named crossings first, then by how much river they actually span, then by
+  // group id: deterministic, and the first BRIDGE CLOSED closes a real, named
+  // Loop river bridge rather than an anonymous deck.
+  const overlapOf = new Map(asset.bridges.map((bridge) => [bridge.id, bridge.waterOverlapM ?? 0]));
+  waterCrossingBridges.sort((a, b) => {
+    const namedA = a.name && a.name !== "Bridge" ? 1 : 0;
+    const namedB = b.name && b.name !== "Bridge" ? 1 : 0;
+    if (namedA !== namedB) {
+      return namedB - namedA;
+    }
+    const overlapA = overlapOf.get(a.groupId) ?? 0;
+    const overlapB = overlapOf.get(b.groupId) ?? 0;
+    if (overlapA !== overlapB) {
+      return overlapB - overlapA;
+    }
+    return a.groupId - b.groupId;
+  });
 
   // District cells: the fixed region grid, so a street keeps its region id.
   const { cols, rows } = metadata.regionGrid;

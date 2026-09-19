@@ -272,6 +272,20 @@ sig_other_name = ex.merge_signature({"highway": "residential", "name": "W Jackso
 if sig_none == sig_other_name:
     FAILURES.append("different street names must not merge")
 
+# Bridge values: Chicago's Loop river bridges are tagged bridge=movable. Missing
+# that erased all 26 of them from the asset, so BRIDGE CLOSED could never pick a
+# real water crossing.
+for value in ("yes", "true", "1", "movable", "viaduct", "aqueduct", "covered", "cantilever", "trestle", "boardwalk"):
+    check(f"is_bridge_value({value!r})", ex.is_bridge_value(value), True)
+for value in ("no", "false", "0", "NO", "False", None, "", "  "):
+    check(f"is_bridge_value({value!r})", ex.is_bridge_value(value), False)
+for value in ("yes", "true", "1", "viaduct", "boardwalk"):
+    check(
+        f"is_bridge_value/is_truthy agree on {value!r}",
+        ex.is_bridge_value(value),
+        ex.is_truthy(value),
+    )
+
 if FAILURES:
     print(f"FAILED ({len(FAILURES)}):")
     for line in FAILURES:

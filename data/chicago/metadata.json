@@ -3,7 +3,7 @@
   "attribution": "\u00a9 OpenStreetMap contributors",
   "attributionUrl": "https://www.openstreetmap.org/copyright",
   "extraction": {
-    "snapshotDate": "2026-09-19T00:28:23Z",
+    "snapshotDate": "2026-09-19T01:19:29Z",
     "tool": "tools/chicago-map/extract_chicago.py",
     "toolVersion": 1,
     "networkType": "drive",
@@ -72,83 +72,89 @@
       "roads": 222,
       "signals": 78,
       "stops": 14,
-      "bridges": 9,
-      "bridgeGroups": 4,
+      "bridges": 11,
+      "bridgeGroups": 5,
       "highways": 3,
-      "arterials": 199,
+      "arterials": 197,
       "locals": 11,
       "roundaboutNodes": 0,
       "corridors": 8,
-      "regions": 5
+      "regions": 5,
+      "waterCrossings": 1
     },
     "small": {
       "intersections": 436,
       "roads": 801,
       "signals": 220,
       "stops": 57,
-      "bridges": 147,
-      "bridgeGroups": 66,
+      "bridges": 170,
+      "bridgeGroups": 86,
       "highways": 27,
-      "arterials": 583,
+      "arterials": 560,
       "locals": 44,
       "roundaboutNodes": 22,
-      "corridors": 33,
-      "regions": 9
+      "corridors": 32,
+      "regions": 9,
+      "waterCrossings": 22
     },
     "medium": {
       "intersections": 982,
       "roads": 1893,
       "signals": 462,
       "stops": 133,
-      "bridges": 263,
-      "bridgeGroups": 128,
-      "highways": 103,
-      "arterials": 1305,
+      "bridges": 297,
+      "bridgeGroups": 147,
+      "highways": 100,
+      "arterials": 1274,
       "locals": 222,
       "roundaboutNodes": 40,
       "corridors": 72,
-      "regions": 18
+      "regions": 18,
+      "waterCrossings": 34
     },
     "large": {
       "intersections": 2148,
       "roads": 4583,
       "signals": 771,
       "stops": 534,
-      "bridges": 353,
-      "bridgeGroups": 203,
-      "highways": 245,
-      "arterials": 2521,
+      "bridges": 393,
+      "bridgeGroups": 222,
+      "highways": 238,
+      "arterials": 2488,
       "locals": 1464,
       "roundaboutNodes": 40,
       "corridors": 102,
-      "regions": 41
+      "regions": 41,
+      "waterCrossings": 43
     },
     "metro": {
       "intersections": 2352,
       "roads": 5131,
       "signals": 818,
       "stops": 608,
-      "bridges": 357,
-      "bridgeGroups": 205,
-      "highways": 253,
-      "arterials": 2774,
+      "bridges": 397,
+      "bridgeGroups": 224,
+      "highways": 246,
+      "arterials": 2741,
       "locals": 1747,
       "roundaboutNodes": 40,
       "corridors": 107,
-      "regions": 41
+      "regions": 41,
+      "waterCrossings": 43
     }
   },
   "features": {
-    "buildings": 5860,
+    "buildings": 5857,
     "buildingAreaM2": {
-      "min": 150,
-      "p25": 235,
-      "median": 498,
-      "p75": 1287,
-      "max": 49085
+      "min": 2,
+      "p25": 113,
+      "median": 239,
+      "p75": 620,
+      "max": 28668
     },
     "water": 75,
     "parks": 1833,
-    "landmarks": 12
+    "landmarks": 12,
+    "riverPolygons": 16
   }
 }

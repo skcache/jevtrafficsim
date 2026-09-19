@@ -47,8 +47,8 @@ from pathlib import Path
 
 import networkx as nx
 import osmnx as ox
-from shapely.geometry import LineString, Polygon, box, mapping
-from shapely.ops import unary_union
+from shapely.geometry import LineString, Point, Polygon, box, mapping, shape
+from shapely.ops import transform, unary_union
 
 # --------------------------------------------------------------------------
 # Frozen configuration (changing any of these is a deliberate asset revision)
@@ -256,6 +256,21 @@ def norm(value) -> str | None:
 def is_truthy(value) -> bool:
     text = norm(value)
     return text is not None and text.lower() in {"yes", "true", "1", "viaduct", "boardwalk"}
+
+
+# OSM bridge values in the wild: yes/true/1, viaduct, boardwalk, and — critically
+# for downtown Chicago — `movable` (the bascule bridges over the river), plus
+# aqueduct/covered/cantilever/trestle. Only an explicit negative is not a bridge,
+# so anything else counts as one. Getting this wrong silently erased every Loop
+# river bridge from the asset.
+BRIDGE_FALSE_VALUES = {"no", "false", "0", "nan", "none", ""}
+
+
+def is_bridge_value(value) -> bool:
+    text = norm(value)
+    if text is None:
+        return False
+    return text.lower() not in BRIDGE_FALSE_VALUES
 
 
 def parse_speed_mps(raw) -> float | None:
@@ -707,7 +722,7 @@ def consolidate_pass(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
         if length > CONSOLIDATE_MAX_M:
             continue
         osm_class = norm(data.get("highway"))
-        if osm_class in LIMITED_ACCESS_CLASSES or is_truthy(data.get("bridge")):
+        if osm_class in LIMITED_ACCESS_CLASSES or is_bridge_value(data.get("bridge")):
             continue
         if control_rank(graph.nodes[a]) and control_rank(graph.nodes[b]):
             continue
@@ -977,7 +992,7 @@ def compile_scale(
             length = 0.5
 
         speed = parse_speed_mps(data.get("maxspeed")) or SPEED_FALLBACK_MPS.get(osm_class, 8.0)
-        bridge = is_truthy(data.get("bridge"))
+        bridge = is_bridge_value(data.get("bridge"))
         kind = "bridge" if bridge else KIND_BY_CLASS.get(osm_class, "local")
         road_id = len(roads)
         roundabout_edge = is_roundabout_edge(data)
@@ -1053,6 +1068,8 @@ def compile_scale(
             },
         )
         entry["roadIds"].append(road_id)
+    for entry in groups.values():
+        entry["lengthM"] = int(round(sum(roads[road_id]["lengthM"] for road_id in entry["roadIds"])))
     bridge_groups = sorted(groups.values(), key=lambda entry: entry["id"])
     group_of = {
         road_id: entry["id"] for entry in bridge_groups for road_id in entry["roadIds"]
@@ -1248,7 +1265,14 @@ def extract_features(bbox, out_dir: Path) -> dict:
             part_index = 0
             for clipped in clip_and_round([geometry], clip_box, 1.5, COORD_DECIMALS):
                 for part in round_coords(clipped, COORD_DECIMALS):
-                    building_areas.append(area)
+                    # Area of the ring actually drawn, holes subtracted: a part
+                    # of a multipolygon is much smaller than the whole building.
+                    ring_area = metric_area_m2(shape(part))
+                    if ring_area < 1.0:
+                        # Sliver left by clipping: drawing it adds nothing.
+                        part_index += 1
+                        continue
+                    building_areas.append(ring_area)
                     building_features.append(
                         {
                             "type": "Feature",
@@ -1260,6 +1284,7 @@ def extract_features(bbox, out_dir: Path) -> dict:
                                 "name": norm(getattr(row, "name", None)),
                                 "levels": norm(getattr(row, "building_levels", None)),
                                 "area": int(round(area)),
+                                "areaM2": int(round(ring_area)),
                             },
                             "geometry": part,
                         }
@@ -1281,10 +1306,20 @@ def extract_features(bbox, out_dir: Path) -> dict:
         bbox=bbox, tags={"natural": ["water", "bay"], "water": True, "waterway": ["river", "canal"]}
     )
     water_geoms = []
-    for geometry in water.geometry:
+    river_geoms = []
+    for geometry, row in zip(water.geometry, water.itertuples()):
         if geometry is None or geometry.is_empty:
             continue
         water_geoms.append(geometry.buffer(0))
+        # The Chicago River and its canals are the crossings a BRIDGE CLOSED
+        # incident should target; the lake is not (the lakefront drive runs
+        # alongside it, it does not cross it). OSM tags the river polygon both
+        # ways — the linear waterway=river ways AND natural=water + water=river —
+        # and the downtown main stem only carries the latter, so both are read.
+        waterway = (norm(getattr(row, "waterway", None)) or "").lower()
+        kind = (norm(getattr(row, "water", None)) or "").lower()
+        if waterway in {"river", "canal", "stream", "ditch"} or kind in {"river", "canal"}:
+            river_geoms.append(geometry.buffer(0))
     merged = unary_union([g for g in water_geoms if not g.is_empty]) if water_geoms else None
     water_features = []
     if merged is not None and not merged.is_empty:
@@ -1352,15 +1387,89 @@ def extract_features(bbox, out_dir: Path) -> dict:
     (out_dir / "parks.geojson").write_text(
         json.dumps(feature_collection(park_features), separators=(",", ":"))
     )
+    stats["riverPolygons"] = len(river_geoms)
     (out_dir / "landmarks.geojson").write_text(
         json.dumps(feature_collection(landmark_features), separators=(",", ":"))
     )
-    return stats
+    river_union = (
+        unary_union([g for g in river_geoms if not g.is_empty]) if river_geoms else None
+    )
+    return stats, river_union
 
 
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+
+WATER_CROSSING_BUFFER_M = 20.0
+WATER_CROSSING_MIN_M = 40.0
+WATER_SAMPLE_M = 2.0
+
+
+def point_along(
+    points: list[tuple[float, float]], cumulative: list[float], distance: float
+) -> tuple[float, float]:
+    """Position at `distance` along a metric polyline."""
+    if distance <= 0.0:
+        return points[0]
+    if distance >= cumulative[-1]:
+        return points[-1]
+    low, high = 0, len(cumulative) - 1
+    while low < high - 1:
+        mid = (low + high) // 2
+        if cumulative[mid] <= distance:
+            low = mid
+        else:
+            high = mid
+    span = cumulative[high] - cumulative[low]
+    t = 0.0 if span <= 0.0 else (distance - cumulative[low]) / span
+    ax, ay = points[low]
+    bx, by = points[high]
+    return (ax + (bx - ax) * t, ay + (by - ay) * t)
+
+
+def annotate_water_crossings(payload: dict, river_union) -> int:
+    """Mark bridge groups that genuinely cross the river.
+
+    Geographic, not id-based: the group's polyline is walked in the documented
+    metric frame and the length lying within WATER_CROSSING_BUFFER_M of extracted
+    river geometry is measured. The buffer matters because OSM river polygons are
+    cut where bridges span them, so an exact inside test measures 0 m for Wabash
+    or Randolph while a 20 m corridor sees the real crossing. The lake is excluded
+    upstream, so the lakefront drive cannot win.
+    """
+    groups = payload.get("bridges", [])
+    if river_union is None or river_union.is_empty:
+        for group in groups:
+            group["waterCrossing"] = False
+            group["waterOverlapM"] = 0
+        return 0
+
+    # Road points are in the documented metric frame, so the river has to be too
+    # (and the buffer is in metres).
+    river_metric = transform(lambda x, y, z=None: to_metric(x, y), river_union)
+    buffered = river_metric.buffer(WATER_CROSSING_BUFFER_M)
+    roads = payload["roads"]
+    crossings = 0
+    for group in groups:
+        overlap = 0.0
+        for road_id in group["roadIds"]:
+            road = roads[road_id]
+            points = road["points"]
+            cumulative = road["cumulative"]
+            distance = 0.0
+            total = cumulative[-1]
+            while distance <= total:
+                x, y = point_along(points, cumulative, distance)
+                if buffered.contains(Point(x, y)):
+                    overlap += WATER_SAMPLE_M
+                distance += WATER_SAMPLE_M
+        group["waterOverlapM"] = int(round(overlap))
+        group["waterCrossing"] = overlap >= WATER_CROSSING_MIN_M
+        if group["waterCrossing"]:
+            crossings += 1
+    return crossings
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract the Chicago showcase map")
@@ -1383,15 +1492,25 @@ def main() -> int:
         f"{simplified.number_of_edges()} edges in {time.time() - started:.0f}s"
     )
 
+    # Features first: the river union is needed to classify bridge groups, so the
+    # scale payloads are annotated before they are written.
+    river_union = None
+    if args.skip_features:
+        feature_stats = {}
+    else:
+        feature_stats, river_union = extract_features(MASTER_BBOX, out_dir)
+
     scales = {}
     for scale in SCALE_BBOXES:
         payload = compile_scale(simplified, scale)
+        crossings = annotate_water_crossings(payload, river_union)
+        payload["counts"]["waterCrossings"] = crossings
         path = out_dir / f"{scale}.json"
         path.write_text(json.dumps(payload, separators=(",", ":")))
         scales[scale] = payload["counts"]
-        print(f"  {scale:6s} {payload['counts']}  {path.stat().st_size / 1e6:.2f} MB")
-
-    feature_stats = {} if args.skip_features else extract_features(MASTER_BBOX, out_dir)
+        print(
+            f"  {scale:6s} {payload['counts']}  {path.stat().st_size / 1e6:.2f} MB"
+        )
 
     metadata = {
         "source": "OpenStreetMap (ODbL 1.0)",

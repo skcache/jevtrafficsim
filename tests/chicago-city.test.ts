@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import { CHICAGO_SCALES, CHICAGO_VENUES, chicagoScaleForSize, nearestIntersectionTo } from "@/cities/chicago";
+import { CHICAGO_SCALES, CHICAGO_VENUES, chicagoScaleForSize, distanceToWater, nearestIntersectionTo } from "@/cities/chicago";
 import { metricToLngLat, pointInPolygon } from "@/cities/map-model";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { createEngine, queueIncident, stepEngine, takeSnapshot } from "@/sim/engine";
@@ -549,13 +549,71 @@ describe("Chicago engine compatibility", () => {
       for (const crossing of model.waterCrossingBridges) {
         const road = asset.roads[crossing.roadId];
         expect(road.bridge, `target ${crossing.roadId} must be a bridge`).toBe(true);
+        const rings = model.water.map((entry) => entry.rings);
         const inWater = model.water.some(
           (entry) =>
             pointInPolygon(crossing.at, entry.rings[0]) &&
             !entry.rings.slice(1).some((hole) => pointInPolygon(crossing.at, hole)),
         );
-        expect(inWater, `crossing ${crossing.groupId} midpoint must be in water`).toBe(true);
+        // Either the point is inside extracted water, or it is within the
+        // importer's crossing corridor of it — OSM cuts river polygons around
+        // the bridges that span them.
+        const nearWater = distanceToWater(crossing.at, rings) <= 25;
+        expect(
+          inWater || nearWater,
+          `scale ${scale}: crossing ${crossing.groupId} (${crossing.name}) must sit on the river (in=${inWater} near=${nearWater})`,
+        ).toBe(true);
       }
+    }
+  });
+
+  it("offers the real Loop river bridges to BRIDGE CLOSED", () => {
+    // Chicago's bascule bridges are tagged `bridge=movable`, not `bridge=yes`.
+    // When the importer only accepted yes/true/1, every one of them vanished
+    // from the asset and BRIDGE CLOSED could only ever pick an elevated
+    // expressway structure. The named downtown crossings must be selectable.
+    const model = chicagoModel(4);
+    const names = model.waterCrossingBridges.map((crossing) => crossing.name).join(" | ");
+    const downtown = [
+      "Michigan",
+      "Wabash",
+      "State",
+      "Clark",
+      "LaSalle",
+      "Wells",
+      "Franklin",
+      "Dearborn",
+      "Madison",
+      "Randolph",
+      "Wacker",
+      "Kinzie",
+    ];
+    const found = downtown.filter((name) => names.includes(name));
+    expect(found.length, `downtown river bridges in the selectable set: ${names}`).toBeGreaterThan(
+      4,
+    );
+    // The first BRIDGE CLOSED must close a named river bridge, not an anonymous
+    // deck, and it must span real river length. Lake Shore Drive genuinely
+    // crosses the river at its mouth, so it is a legitimate candidate.
+    const first = model.waterCrossingBridges[0];
+    expect(first.name, `first crossing: ${first.name}`).not.toBe("Bridge");
+    expect(first.name.length).toBeGreaterThan(4);
+    const overlap = chicagoAsset(4).bridges.find((bridge) => bridge.id === first.groupId)
+      ?.waterOverlapM;
+    expect(overlap ?? 0, `first crossing river span: ${overlap} m`).toBeGreaterThan(90);
+    // And every crossing in the set really spans river, not a puddle.
+    for (const crossing of model.waterCrossingBridges) {
+      const span = chicagoAsset(4).bridges.find((bridge) => bridge.id === crossing.groupId)
+        ?.waterOverlapM;
+      expect(span ?? 0, `crossing ${crossing.groupId} span`).toBeGreaterThanOrEqual(40);
+    }
+    // And they are genuinely river crossings, not lakefront expressway decks.
+    for (const crossing of model.waterCrossingBridges) {
+      if (!downtown.some((name) => crossing.name.includes(name))) {
+        continue;
+      }
+      const asset = chicagoAsset(4);
+      expect(asset.roads[crossing.roadId].kind).toBe("bridge");
     }
   });
 
