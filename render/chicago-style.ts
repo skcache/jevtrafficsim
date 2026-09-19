@@ -95,26 +95,26 @@ export const MAP_ZOOM = {
   waterBank: 13.6,
   /** City blocks are the urban mass; they arrive before any footprint does. */
   blocks: 11.6,
-  blocksEdge: 14.4,
+  blocksEdge: 17.2,
   /**
    * Buildings: at neighborhood zoom only the prominent masses read as aggregate
    * city weight; every footprint waits for street zoom.
    */
-  buildings: 14.2,
-  buildingsAll: 15.8,
-  buildingsOutline: 16.6,
+  buildings: 16.6,
+  buildingsAll: 17.4,
+  buildingsOutline: 17.9,
   /** Short unnamed stubs earn ink only when the camera is close. */
-  roadsDetail: 16,
+  roadsDetail: 17.2,
   /** Park edges, like building outlines, are a close-zoom instrument. */
-  parksEdge: 14.6,
-  landmarks: 13.4,
+  parksEdge: 17,
+  landmarks: 15.6,
   /** Local streets arrive with the neighborhood, not with the city. */
   localRoads: 12.8,
   highwayRail: 15,
-  markings: 16.2,
+  markings: 17.2,
   /** Highway refs are the spine and may appear early; street names may not. */
   streetRefs: 12.2,
-  streetNames: 15.2,
+  streetNames: 16.2,
   /** District and landmark labels, with collision doing the decluttering. */
   labels: 11.4,
 } as const;
@@ -132,11 +132,11 @@ export const AREA_MIN = {
    * wedges, but a small triangle is compact and still reads as a scrap beside
    * calm blocks.
    */
-  waterClose: 500,
+  waterClose: 2500,
   parkFar: 12000,
-  parkMid: 2500,
+  parkMid: 8000,
   /** The same floor for green: below this it is a garden scrap, not a park. */
-  parkClose: 900,
+  parkClose: 6000,
 } as const;
 
 /** Zoom at which the mid-band area thresholds take over. */
@@ -340,27 +340,18 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       minzoom: MAP_ZOOM.buildingsAll,
       // Meaningful footprints only: below this a building is texture, and a
       // field of tiny shapes beside calm blocks reads as debris.
-      filter: ["all", ["!=", ["get", "prominent"], true], [">=", ["get", "area"], 250]],
+      filter: ["all", ["!=", ["get", "prominent"], true], [">=", ["get", "area"], 600]],
       paint: {
         "fill-color": palette.buildingSmall,
         "fill-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.buildingsAll, 0.55, 16.6, 0.95],
       },
     },
     {
-      id: "buildings-small",
-      type: "fill",
-      source: "buildings",
-      // The rest of the footprints earn ink only at the closest zooms, and
-      // quietly, so nothing competes with the block fabric.
-      minzoom: 17.2,
-      filter: ["all", ["!=", ["get", "prominent"], true], ["<", ["get", "area"], 250]],
-      paint: { "fill-color": palette.buildingSmall, "fill-opacity": 0.55 },
-    },
-    {
       id: "buildings-outline",
       type: "line",
       source: "buildings",
       minzoom: MAP_ZOOM.buildingsOutline,
+      filter: ["any", ["==", ["get", "prominent"], true], [">=", ["get", "area"], 600]],
       paint: {
         "line-color": palette.buildingLine,
         "line-width": zoomWidth(0.4, 0.6, 0.9),
