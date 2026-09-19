@@ -209,18 +209,20 @@ function transitionPosition(
   const distance = clamp01(t) * total;
   const previousOffset = options.laneOffsets[before.roadId] ?? 0;
   const currentOffset = options.laneOffsets[current.roadId] ?? 0;
+  const fromHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
+  const toHeading = samplePathIndex(currentIndex, 0).heading;
 
   if (distance <= remaining) {
     const position = applyLaneOffset(
       samplePathIndex(previousIndex, before.progress + distance),
       previousOffset,
     );
-    return { ...position, fromHeading: position.heading, toHeading: position.heading };
+    return { ...position, fromHeading, toHeading };
   }
 
   const position = applyLaneOffset(
     samplePathIndex(currentIndex, Math.min(currentIndex.total, distance - remaining)),
     currentOffset,
   );
-  return { ...position, fromHeading: position.heading, toHeading: position.heading };
+  return { ...position, fromHeading, toHeading };
 }
