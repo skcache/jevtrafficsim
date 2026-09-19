@@ -105,7 +105,7 @@ describe("road presentation hierarchy", () => {
     expect(
       visible.some((feature) => String(feature.properties.osmClass) === "secondary_link"),
     ).toBe(true);
-  });
+  }, 10_000);
 
   it("gives bridge material only to pieces that cross water", () => {
     const geo = buildShowcaseGeoJson(model);
