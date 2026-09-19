@@ -299,6 +299,12 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       layer: piece.layer,
       oneway: piece.oneway,
     });
+    if (presentation === "hidden") {
+      // Surface-street turn channels are routing topology, not cartography.
+      // Hiding the line makes a vehicle read as turning through the junction
+      // instead of driving along a tiny tan/white pseudo-ramp.
+      continue;
+    }
     if (presentation === "detail") {
       detail.push(feature);
       continue;
