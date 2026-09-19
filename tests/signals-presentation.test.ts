@@ -160,6 +160,32 @@ describe("signal rendering", () => {
     expect(layers.find((layer) => layer.id === "signals-heads")).toBeUndefined();
   });
 
+  it("uses one same-path backing stroke and grows the physical head with zoom", () => {
+    const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2);
+    expect(entry).toBeTruthy();
+    const [intersectionId] = entry!;
+    const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
+
+    const at17 = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17, sprites);
+    const at19 = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 19, sprites);
+    const state = at17.find((layer) => layer.id === "signals-state-gates") as unknown as {
+      props: { data: { path: [number, number][] }[]; getWidth: number };
+    };
+    const backing = at17.find((layer) => layer.id === "signals-state-gate-backing") as unknown as {
+      props: { data: { path: [number, number][] }[]; getWidth: number };
+    };
+    expect(state).toBeTruthy();
+    expect(backing).toBeTruthy();
+    expect(backing.props.data.map((entry) => entry.path)).toEqual(
+      state.props.data.map((entry) => entry.path),
+    );
+    expect(backing.props.getWidth).toBeGreaterThan(state.props.getWidth);
+
+    const head17 = at17.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
+    const head19 = at19.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
+    expect(head19.props.getSize).toBeGreaterThan(head17.props.getSize);
+  });
+
   it("draws heads from the signal atlas and never from a vehicle icon", () => {
     const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2);
     expect(entry).toBeTruthy();
