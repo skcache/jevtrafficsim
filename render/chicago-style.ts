@@ -66,7 +66,7 @@ export const CHICAGO_PALETTE = {
   arterialSurface: "#fffdf8",
   arterialCasing: "#d0cabd",
   /** Highways: near-white surface, a warm grey casing, and WIDTH does the rest. */
-  highwaySurface: "#ead7ad",
+  highwaySurface: "#f0dfbd",
   highwayCasing: "#c5ad7f",
   highwayRail: "#9d8d70",
   highwayShadow: "#5c5242",
