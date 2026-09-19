@@ -29,6 +29,9 @@ export interface RoadPresentationInput {
   readonly osmClass: string;
   readonly name?: string;
   readonly length: number;
+  readonly bridgeStructure?: boolean;
+  readonly tunnel?: boolean;
+  readonly layer?: number;
 }
 
 /** Pieces shorter than this with no name are map texture, not streets. */
@@ -61,6 +64,17 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
     return "primary";
   }
   if (osmClass.endsWith("_link")) {
+    // A short at-grade surface link is intersection plumbing. A long,
+    // grade-separated, tunnel or bridge link is a real piece of roadway that a
+    // vehicle must visibly remain attached to.
+    if (
+      piece.length >= 120 ||
+      piece.bridgeStructure ||
+      piece.tunnel ||
+      (piece.layer ?? 0) !== 0
+    ) {
+      return "secondary";
+    }
     return "hidden";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
