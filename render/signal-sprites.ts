@@ -15,9 +15,9 @@
  *
  * Colours are baked in — graphite housing, a restrained border, and the lit
  * lamp in the same muted palette the signal layer already used — so nothing is
- * tinted at draw time. The housing is portrait (lamps stacked along the
- * sprite's +Y), and deck.gl rotates it by the approach bearing, which turns the
- * lamp row across the road so the face meets the traffic it controls.
+ * tinted at draw time. The housing stays screen-aligned like a map annotation.
+ * Approach direction is carried by the colored state gate across the road; the
+ * head's only job is to read instantly as a familiar red/yellow/green light.
  *
  * Convention: sprites are centred in their cell; `getAngle` rotates them.
  */
