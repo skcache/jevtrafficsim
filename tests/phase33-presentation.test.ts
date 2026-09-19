@@ -29,6 +29,16 @@ describe("road presentation hierarchy", () => {
     // A surface-street link is a turn channel, not an expressway ramp.
     expect(roadPresentationClass({ osmClass: "secondary_link", length: 80 })).toBe("hidden");
     expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("hidden");
+    // Long or grade-separated surface links are real road geometry. Hiding one
+    // would leave a vehicle floating with no road under it.
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 180 })).toBe("secondary");
+    expect(
+      roadPresentationClass({
+        osmClass: "secondary_link",
+        length: 70,
+        bridgeStructure: true,
+      }),
+    ).toBe("secondary");
     expect(isExpresswayClass("secondary_link")).toBe(false);
     expect(isExpresswayClass("motorway_link")).toBe(true);
     // Ordinary streets are secondary; short unnamed stubs are hidden visual topology.
