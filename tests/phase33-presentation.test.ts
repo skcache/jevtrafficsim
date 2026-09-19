@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
+import { isExpresswayClass, roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
 import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
@@ -26,6 +26,11 @@ describe("road presentation hierarchy", () => {
     // Ramps are structure, however short: they stay visible.
     expect(roadPresentationClass({ osmClass: "motorway_link", length: 40 })).toBe("primary");
     expect(roadPresentationClass({ osmClass: "trunk_link", length: 30 })).toBe("primary");
+    // A surface-street link is a turn channel, not an expressway ramp.
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 80 })).toBe("detail");
+    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("detail");
+    expect(isExpresswayClass("secondary_link")).toBe(false);
+    expect(isExpresswayClass("motorway_link")).toBe(true);
     // Ordinary streets are secondary; short unnamed stubs are detail.
     expect(roadPresentationClass({ osmClass: "residential", name: "West Polk Street", length: 80 })).toBe("secondary");
     expect(roadPresentationClass({ osmClass: "tertiary", length: 200 })).toBe("secondary");
@@ -126,7 +131,7 @@ describe("signal presentation stays simulation-first", () => {
     } as never;
     const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17.5, sprites);
     const ids = layers.map((layer) => layer.id).sort();
-    expect(ids).toEqual(["signals-heads", "signals-state-gates"]);
+    expect(ids).toEqual(["signals-heads", "signals-state-gate-backing", "signals-state-gates"]);
     const bars = (layers.find((layer) => layer.id === "signals-state-gates") as unknown as {
       props: { data: unknown[] };
     }).props.data;
