@@ -192,3 +192,15 @@ export const VEHICLE_LENGTH_M: Record<string, number> = {
 };
 /** Gap left between queued vehicles. */
 export const QUEUE_GAP_M = 1.1;
+/** Extra bumper clearance behind the rendered stop/go gate. */
+export const STOP_LINE_CLEARANCE_M = 0.8;
+
+/**
+ * Physical stop-line setback from an intersection centre for one incoming lane
+ * group. Signal rendering and queued-vehicle placement MUST share this helper,
+ * otherwise the light and the vehicle can disagree about where "stop" is.
+ */
+export function stopLineSetbackMetres(lanes: number): number {
+  const halfLaneGroupM = (Math.max(1, lanes) * LANE_WIDTH_M) / 2;
+  return Math.min(9, Math.max(5, halfLaneGroupM + 3.6));
+}
