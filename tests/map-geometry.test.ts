@@ -13,6 +13,7 @@ import {
   carriagewayPairs,
   directionalLanes,
   laneCentreOffsetMetres,
+  widthMetresForRoad,
   LANE_WIDTH_M,
 } from "@/render/road-presentation";
 
@@ -125,6 +126,28 @@ describe("showcase geometry", () => {
       forwardOffset + reverseOffset,
       4,
     );
+  });
+
+  it("keeps every lane centre inside its rendered carriageway", () => {
+    const model = chicagoModel(4);
+    const indexes = buildDirectedPathIndexes(model);
+    const pairs = carriagewayPairs(model);
+    for (const road of model.city.roads) {
+      const offset = laneCentreOffsetMetres(model, road.id, pairs);
+      const centre = sampleDirectedRoad(indexes, road.id, road.length / 2)!;
+      const lane = sampleDirectedRoadWithLane(
+        indexes,
+        road.id,
+        road.length / 2,
+        offset,
+      )!;
+      const lateral = Math.hypot(lane.x - centre.x, lane.y - centre.y);
+      const halfCarriageway = widthMetresForRoad(model, road.id, pairs) / 2;
+      expect(
+        lateral,
+        `road ${road.id} lane centre outside carriageway`,
+      ).toBeLessThanOrEqual(halfCarriageway + 1e-6);
+    }
   });
 
   it("takes every lane offset from the carriageway model, never a default", () => {
