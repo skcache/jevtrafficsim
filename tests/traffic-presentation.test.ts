@@ -14,6 +14,11 @@ import { buildDirectedPathIndexes, type DirectedPathIndexes } from "@/render/map
 import { interpolateVehicles, type RenderedVehicle } from "@/render/interpolate";
 import { availableChicagoEventVenues } from "@/cities/chicago";
 import { carriagewayPairs, laneCentreOffsetMetres } from "@/render/road-presentation";
+import {
+  SETTLE_THRESHOLD_M,
+  settlePlacements,
+  type DisplayedPlacement,
+} from "@/render/queue-packing";
 import { VEHICLE_MINZOOM } from "@/render/zoom-grammar";
 import * as mapGeometry from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
@@ -113,6 +118,105 @@ describe("vehicle zoom strategy", () => {
     expect(vehicleSampleRatio(13.5)).toBeLessThan(vehicleSampleRatio(14.5));
     expect(vehicleSampleRatio(14.5)).toBeLessThan(vehicleSampleRatio(15.5));
     expect(vehicleSampleRatio(16.5)).toBe(1);
+  });
+});
+
+/* ---------------------- 6. queue re-placement settles ---------------------- */
+
+describe("settling re-placed vehicles", () => {
+  const at = (id: number, x: number, y: number, headingRadians = 0): RenderedVehicle => ({
+    id,
+    roadId: 0,
+    type: "car",
+    state: "queued",
+    x,
+    y,
+    headingRadians,
+    blockedWaitMs: 4000,
+    fade: 1,
+    queueRank: 0,
+  });
+
+  it("blends a jump instead of teleporting, and converges on the target", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    // The vehicle is re-placed 5 m away — a queue packing move, not driving.
+    const jump = settlePlacements([at(1, 5, 0)], memory, 0.016)[0];
+    expect(jump.x).toBeGreaterThan(0);
+    expect(jump.x).toBeLessThan(5);
+    let previous = jump.x;
+    let current = jump;
+    for (let frame = 0; frame < 160; frame += 1) {
+      current = settlePlacements([at(1, 5, 0)], memory, 0.016)[0];
+      expect(current.x).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = current.x;
+    }
+    expect(current.x).toBeCloseTo(5, 1);
+  });
+
+  it("never moves a vehicle further in one frame than the jump itself", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    let last = 0;
+    for (let frame = 0; frame < 30; frame += 1) {
+      const step = settlePlacements([at(1, 5, 0)], memory, 0.016)[0].x - last;
+      // A settle may not look faster than a car: at most 10 m/s of catch-up.
+      expect(step).toBeLessThanOrEqual(10 * 0.016 + 1e-9);
+      last += step;
+    }
+  });
+
+  it("holds a re-placement below a physical speed even when a frame stalls", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    // A 40 m jump across a stalled 100 ms frame would otherwise land at 400 m/s.
+    const stalled = settlePlacements([at(1, 40, 0)], memory, 0.1)[0];
+    expect(stalled.x).toBeLessThanOrEqual(10 * 0.1 + 1e-9);
+    expect(stalled.x / 0.1).toBeLessThanOrEqual(10 + 1e-6);
+  });
+
+  it("lets ordinary motion through untouched", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    const moving = settlePlacements([at(1, 0.2, 0, 0.02)], memory, 0.016)[0];
+    expect(moving.x).toBe(0.2);
+    expect(moving.headingRadians).toBe(0.02);
+  });
+
+  it("settles a large heading change even when the vehicle barely moves", () => {
+    // A road change with a reversed direction swings the sprite ~180 deg in
+    // place. Position alone would let that through as if nothing happened.
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    const swung = settlePlacements([at(1, 0.05, 0, Math.PI)], memory, 0.016)[0];
+    expect(swung.headingRadians).toBeGreaterThan(0);
+    expect(swung.headingRadians).toBeLessThan(Math.PI / 4);
+  });
+
+  it("snaps a vehicle it has never seen, and forgets vehicles that left", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    const fresh = settlePlacements([at(9, 12, 7)], memory, 0.016)[0];
+    expect(fresh.x).toBe(12);
+    expect(memory.has(9)).toBe(true);
+    settlePlacements([], memory, 0.016);
+    expect(memory.size).toBe(0);
+  });
+
+  it("takes the short way round when it blends a heading", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    const almost = (180 - 2) * (Math.PI / 180);
+    const minus = (-180 + 2) * (Math.PI / 180);
+    settlePlacements([at(1, 0, 0, almost)], memory, 0.016);
+    const blended = settlePlacements([at(1, 8, 0, minus)], memory, 0.016)[0];
+    // Rotating the short way passes through ±180 deg, not through zero.
+    expect(Math.abs(blended.headingRadians)).toBeGreaterThan(almost);
+  });
+
+  it("treats a sub-threshold nudge as motion, not as a re-placement", () => {
+    const memory = new Map<number, DisplayedPlacement>();
+    settlePlacements([at(1, 0, 0)], memory, 0.016);
+    const nudged = settlePlacements([at(1, SETTLE_THRESHOLD_M - 0.01, 0)], memory, 0.016)[0];
+    expect(nudged.x).toBe(SETTLE_THRESHOLD_M - 0.01);
   });
 });
 
