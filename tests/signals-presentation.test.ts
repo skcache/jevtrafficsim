@@ -190,9 +190,9 @@ describe("signal rendering", () => {
     // Pixel caps preserve legibility at entry and prevent billboard growth.
     for (const head of [head17, head19]) {
       expect(head.props.sizeUnits).toBe("meters");
-      expect(head.props.getSize).toBe(2.2);
-      expect(head.props.sizeMinPixels).toBe(18);
-      expect(head.props.sizeMaxPixels).toBe(38);
+      expect(head.props.getSize).toBe(3);
+      expect(head.props.sizeMinPixels).toBe(24);
+      expect(head.props.sizeMaxPixels).toBe(56);
     }
   });
 
