@@ -114,6 +114,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   /** Latest incident plate positions (metric), for the dev camera helper. */
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
+  /** Last rendered frame, for the dev motion-QA hook. */
+  const frameRef = useRef<
+    { id: number; roadId: number | null; x: number; y: number; headingRadians: number; blockedWaitMs: number }[]
+  >([]);
   const liveRef = useRef(live);
   /** `?notraffic=1`: hide every traffic primitive for a basemap review. */
   const trafficHiddenRef = useRef(
@@ -298,6 +302,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           fitCity: () => handle.fitCity({ immediate: true }),
           /** Dev-only: the vehicle sprite atlas, for inspecting the artwork. */
           spriteAtlas: () => iconsRef.current?.atlas ?? null,
+          /**
+           * Dev-only: the last rendered vehicle frame, so motion can be
+           * measured (step size, heading change) instead of eyeballed.
+           */
+          vehicles: () => frameRef.current,
           flyToCentral: () => handle.flyToCentral({ immediate: true }),
           /**
            * Dev-only: centre the camera on the first active incident plate, so a
@@ -364,6 +373,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               (id) => progress.get(id) ?? 0,
             )
           : [];
+        if (window.location.search.includes("debug")) {
+          frameRef.current = vehicles.map((vehicle) => ({
+            id: vehicle.id,
+            roadId: vehicle.roadId,
+            x: vehicle.x,
+            y: vehicle.y,
+            headingRadians: vehicle.headingRadians,
+            blockedWaitMs: vehicle.blockedWaitMs,
+          }));
+        }
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.

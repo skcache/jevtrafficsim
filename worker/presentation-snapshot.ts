@@ -76,17 +76,25 @@ export type PresentationMetrics = SimulationMetrics & {
   readonly activeVehicles: number;
 };
 
-export function buildPresentationSnapshot(
-  engine: EngineState,
-  sequence: number,
-): PresentationSnapshot {
-  // Queue ranks first, in one pass: per directed road, ordered exactly as
-  // sim/traffic.ts orders its own queue (queuedSinceMs ascending, then id). The
-  // renderer reads this instead of trying to reconstruct the order from
-  // progress, which is what let presentation disagree with the simulation.
-  const queueRanks = new Map<VehicleId, number>();
+/**
+ * Queue rank per vehicle: 0 is the front of its directed road's queue.
+ *
+ * The rule is copied from `sim/traffic.ts` deliberately — queuedSinceMs
+ * ascending, then id — because presentation must never disagree with the
+ * simulation about who is in front. Exported so the exact semantics are
+ * testable without standing up an engine.
+ */
+export function assignQueueRanks(
+  vehicles: readonly {
+    readonly id: VehicleId;
+    readonly state: string;
+    readonly roadId: RoadId | null;
+    readonly queuedSinceMs: number | null;
+  }[],
+): Map<VehicleId, number> {
+  const ranks = new Map<VehicleId, number>();
   const queues = new Map<RoadId, { id: VehicleId; since: number }[]>();
-  for (const vehicle of engine.traffic.vehicles) {
+  for (const vehicle of vehicles) {
     if (vehicle.state !== "queued" || vehicle.roadId === null) {
       continue;
     }
@@ -96,8 +104,20 @@ export function buildPresentationSnapshot(
   }
   for (const queue of queues.values()) {
     queue.sort((a, b) => a.since - b.since || a.id - b.id);
-    queue.forEach((entry, rank) => queueRanks.set(entry.id, rank));
+    queue.forEach((entry, rank) => ranks.set(entry.id, rank));
   }
+  return ranks;
+}
+
+export function buildPresentationSnapshot(
+  engine: EngineState,
+  sequence: number,
+): PresentationSnapshot {
+  // Queue ranks first, in one pass: per directed road, ordered exactly as
+  // sim/traffic.ts orders its own queue (queuedSinceMs ascending, then id). The
+  // renderer reads this instead of trying to reconstruct the order from
+  // progress, which is what let presentation disagree with the simulation.
+  const queueRanks = assignQueueRanks(engine.traffic.vehicles);
 
   const vehicles: PresentationVehicle[] = [];
   for (const vehicle of engine.traffic.vehicles) {
