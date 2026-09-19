@@ -17,7 +17,6 @@ import { LANE_WIDTH_M, type MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
 import { widthPxAt } from "./road-presentation";
 import {
-  CLOSE_TIER_MINZOOM,
   VEHICLE_MINZOOM,
   WAIT_HEAT_MINZOOM,
 } from "./zoom-grammar";
@@ -106,7 +105,8 @@ const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
  * Zoom at which the full three-lamp housing is legible. Below it the sprite is
  * drawn a little smaller, because the individual lamps stop being separable.
  */
-const SIGNAL_FULL_HOUSING_MINZOOM = 16.8;
+const SIGNAL_MINZOOM = 16.6;
+const SIGNAL_FULL_HOUSING_MINZOOM = 17.4;
 
 /* ------------------------------------------------------------------ */
 /* Congestion                                                          */
@@ -289,7 +289,7 @@ export function buildSignalLayers(
   // nothing at all: a city-wide field of coloured dots is debug state, and
   // congestion is carried by the road overlay instead. There is never a glyph
   // in the middle of a junction — heads sit on the real approaches.
-  if (!snapshot || zoom < CLOSE_TIER_MINZOOM) {
+  if (!snapshot || zoom < SIGNAL_MINZOOM) {
     return [];
   }
   const opacity = signalTierOpacity(zoom);
@@ -362,8 +362,8 @@ export function buildSignalLayers(
         getPath: (bar) => bar.path,
         // Stop bars sit on a near-white road surface, so they read as a dark
         // neutral line rather than a white one that disappears into the casing.
-        getColor: [120, 112, 98, Math.round(190 * opacity)],
-        getWidth: 3,
+        getColor: [120, 112, 98, Math.round(110 * opacity)],
+        getWidth: 1.5,
         widthUnits: "pixels",
         pickable: false,
       }),
@@ -388,7 +388,7 @@ export function buildSignalLayers(
         // The housing is portrait, so rotating by the approach bearing turns
         // the lamp row across the road and the face meets the traffic.
         getSize: signalIconSizeForHousingPx(
-          zoom >= SIGNAL_FULL_HOUSING_MINZOOM ? 11 : 9,
+          zoom >= SIGNAL_FULL_HOUSING_MINZOOM ? 8 : 6.5,
         ),
         getAngle: (head) => (head.bearing * 180) / Math.PI,
         opacity,
@@ -479,7 +479,8 @@ export function buildIncidentLayers(
       closedRoundels.push(toLngLat(projection, mid[0], mid[1]));
       const already = plates.some((plate) => plate.label.startsWith(name));
       if (!already) {
-        plates.push({ id: `bridge-${name}`, kind: "bridge-closed", x: mid[0], y: mid[1], label: `${name} closed` });
+        const closureLabel = name.length > 28 ? "Road closed" : `${name} closed`;
+        plates.push({ id: `bridge-${name}`, kind: "bridge-closed", x: mid[0], y: mid[1], label: closureLabel });
       }
     } else {
       closedPaths.push(converted);
@@ -547,8 +548,8 @@ export function buildIncidentLayers(
         id: "closed-roads",
         data: closedPaths,
         getPath: (path) => path,
-        getColor: [200, 64, 44, 210],
-        getWidth: 9,
+        getColor: [176, 57, 43, 175],
+        getWidth: 5,
         widthUnits: "pixels",
         capRounded: true,
         pickable: false,
@@ -570,8 +571,8 @@ export function buildIncidentLayers(
         id: "closed-bridges",
         data: closedBridgePaths,
         getPath: (path) => path,
-        getColor: [176, 57, 43, 235],
-        getWidth: 12,
+        getColor: [176, 57, 43, 195],
+        getWidth: 7,
         widthUnits: "pixels",
         capRounded: true,
         pickable: false,
@@ -584,13 +585,13 @@ export function buildIncidentLayers(
         id: "closed-roundels",
         data: closedRoundels,
         getPosition: (position) => position,
-        getRadius: 6,
+        getRadius: 4,
         radiusUnits: "pixels",
         getFillColor: [255, 253, 249, 250],
         stroked: true,
         getLineColor: [176, 57, 43, 250],
         lineWidthUnits: "pixels",
-        getLineWidth: 2.5,
+        getLineWidth: 1.5,
         pickable: false,
       }),
     );
@@ -607,7 +608,7 @@ export function buildIncidentLayers(
         getPosition: (center) => center.position,
         // Sized to read at neighborhood zoom: a 4 px dot vanished into the
         // basemap, and an incident marker nobody can see is not a marker.
-        getRadius: 6.5,
+        getRadius: 5,
         radiusUnits: "pixels",
         filled: true,
         getFillColor: [176, 126, 68, 240],
@@ -635,7 +636,7 @@ export function buildIncidentLayers(
         id: "crash-markers",
         data: crashMarkers,
         getPosition: (marker) => marker.position,
-        getRadius: 8,
+        getRadius: 6,
         radiusUnits: "pixels",
         getFillColor: [176, 57, 43, 245],
         stroked: true,
