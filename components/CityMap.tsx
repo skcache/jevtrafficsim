@@ -112,6 +112,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const laneOffsetsRef = useRef<number[] | null>(null);
   /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
+  /** Latest incident plate positions (metric), for the dev camera helper. */
+  const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
   const liveRef = useRef(live);
   /** `?notraffic=1`: hide every traffic primitive for a basemap review. */
   const trafficHiddenRef = useRef(
@@ -294,7 +296,30 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           getZoom: () => map.getZoom(),
           getCenter: () => map.getCenter(),
           fitCity: () => handle.fitCity({ immediate: true }),
+          /** Dev-only: the vehicle sprite atlas, for inspecting the artwork. */
+          spriteAtlas: () => iconsRef.current?.atlas ?? null,
           flyToCentral: () => handle.flyToCentral({ immediate: true }),
+          /**
+           * Dev-only: centre the camera on the first active incident plate, so a
+           * screenshot can show the incident the app actually chose rather than
+           * wherever the camera happened to be. Never rendered, URL-gated.
+           */
+          focusIncident: (zoom = 16.4, index = 0) => {
+            const plates = platesRef.current;
+            // Negative index counts back from the newest incident, so a capture
+            // can target the one it just triggered rather than an older one
+            // that is still active.
+            const plate = index < 0 ? plates[plates.length + index] : plates[index];
+            if (!plate) {
+              return false;
+            }
+            map.stop();
+            map.jumpTo({
+              center: metricToLngLat(projection, plate.x, plate.y),
+              zoom,
+            });
+            return true;
+          },
         };
       }
       onHandle?.(handle);
@@ -363,6 +388,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               ...congestion,
             ];
         overlayRef.current?.setProps({ layers });
+        platesRef.current = incidents.extras.plates;
         syncPlates(incidents.extras.plates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];

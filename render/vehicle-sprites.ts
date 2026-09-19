@@ -37,55 +37,56 @@ const SPRITE_UNITS: Record<VehicleType, { length: number; width: number }> = {
 };
 
 export const VEHICLE_SPRITE_PATHS: Record<VehicleType, readonly SpritePart[]> = {
-  // Front at +X: nose tapers, windshield sits behind it, cabin then rear glass.
+  // Front at +X. Detail is deliberately coarse: a car renders about 12 px long,
+  // so anything finer than ~2 px of sprite becomes a smudge. One bold windshield
+  // band is what makes the front obvious; the roof and rear glass only have to
+  // separate it.
   car: [
     {
       d: "M 44,0 L 36,-9 L 16,-14 L -34,-14 L -46,-8 L -46,8 L -34,14 L 16,14 L 36,9 Z",
       fill: "#3f4348",
     },
-    // Windshield: a trapezoid, widest at the cabin side.
-    { d: "M 34,-7 L 20,-11 L 20,11 L 34,7 Z", fill: "#7d8894" },
-    // Roof panel, then the rear window.
-    { d: "M 18,-11 L -14,-11 L -14,11 L 18,11 Z", fill: "#4a4f55" },
-    { d: "M -16,-11 L -32,-10 L -32,10 L -16,11 Z", fill: "#6c7681" },
-    // Wheels: four nubs that break the silhouette at the corners.
-    { d: "M 24,-16 L 34,-16 L 34,-13 L 24,-13 Z", fill: "#23262a" },
-    { d: "M 24,13 L 34,13 L 34,16 L 24,16 Z", fill: "#23262a" },
-    { d: "M -30,-16 L -18,-16 L -18,-13 L -30,-13 Z", fill: "#23262a" },
-    { d: "M -30,13 L -18,13 L -18,16 L -30,16 Z", fill: "#23262a" },
+    // Windshield: wide and clearly lighter, right behind the nose.
+    { d: "M 34,-8 L 12,-12 L 12,12 L 34,8 Z", fill: "#93a0ad" },
+    // Roof between the two glass bands.
+    { d: "M 10,-12 L -14,-12 L -14,12 L 10,12 Z", fill: "#464b51" },
+    // Rear glass, narrower and darker than the windshield.
+    { d: "M -16,-12 L -34,-10 L -34,10 L -16,12 Z", fill: "#6d7883" },
+    // Wheels break the silhouette at the four corners.
+    { d: "M 24,-16 L 36,-16 L 36,-12 L 24,-12 Z", fill: "#202327" },
+    { d: "M 24,12 L 36,12 L 36,16 L 24,16 Z", fill: "#202327" },
+    { d: "M -32,-16 L -18,-16 L -18,-12 L -32,-12 Z", fill: "#202327" },
+    { d: "M -32,12 L -18,12 L -18,16 L -32,16 Z", fill: "#202327" },
   ],
-  // A truck is a cab and a box, not a longer car.
+  // A truck is a cab and a box. Ribs and small detail vanish at 19 px, so the
+  // only interior marks are one bold glass band and the cab/box joint.
   truck: [
-    // Box body (rear two thirds).
     { d: "M -58,-19 L 10,-19 L 10,19 L -58,19 Z", fill: "#55524c" },
-    // Cab, narrower and set behind a short nose.
-    { d: "M 12,-17 L 44,-14 L 50,-6 L 50,6 L 44,14 L 12,17 Z", fill: "#6a665e" },
-    { d: "M 40,-11 L 47,-5 L 47,5 L 40,11 Z", fill: "#8792a0" },
-    // Cargo ribs, so the box reads as a box.
-    { d: "M -50,-17 L -47,-17 L -47,17 L -50,17 Z", fill: "#494640" },
-    { d: "M -34,-18 L -31,-18 L -31,18 L -34,18 Z", fill: "#494640" },
-    { d: "M -18,-18 L -15,-18 L -15,18 L -18,18 Z", fill: "#494640" },
-    { d: "M -2,-18 L 1,-18 L 1,18 L -2,18 Z", fill: "#494640" },
-    // Five wheels: two steer, four drive (paired).
-    { d: "M 30,-21 L 42,-21 L 42,-17 L 30,-17 Z", fill: "#23262a" },
-    { d: "M 30,17 L 42,17 L 42,21 L 30,21 Z", fill: "#23262a" },
-    { d: "M -30,-22 L -14,-22 L -14,-18 L -30,-18 Z", fill: "#23262a" },
-    { d: "M -30,18 L -14,18 L -14,22 L -30,22 Z", fill: "#23262a" },
-    { d: "M -10,-22 L 6,-22 L 6,-18 L -10,-18 Z", fill: "#23262a" },
-    { d: "M -10,18 L 6,18 L 6,22 L -10,22 Z", fill: "#23262a" },
+    { d: "M 12,-17 L 44,-14 L 50,-6 L 50,6 L 44,14 L 12,17 Z", fill: "#6f6a61" },
+    { d: "M 38,-12 L 46,-5 L 46,5 L 38,12 Z", fill: "#93a0ad" },
+    // The joint between cab and box.
+    { d: "M 10,-19 L 14,-19 L 14,19 L 10,19 Z", fill: "#3f3c37" },
+    // Rear door line, the one detail a box needs.
+    { d: "M -56,-18 L -52,-18 L -52,18 L -56,18 Z", fill: "#454239" },
+    // Six wheels: two steer, four drive.
+    { d: "M 30,-22 L 44,-22 L 44,-17 L 30,-17 Z", fill: "#202327" },
+    { d: "M 30,17 L 44,17 L 44,22 L 30,22 Z", fill: "#202327" },
+    { d: "M -32,-23 L -14,-23 L -14,-18 L -32,-18 Z", fill: "#202327" },
+    { d: "M -32,18 L -14,18 L -14,23 L -32,23 Z", fill: "#202327" },
+    { d: "M -10,-23 L 6,-23 L 6,-18 L -10,-18 Z", fill: "#202327" },
+    { d: "M -10,18 L 6,18 L 6,23 L -10,23 Z", fill: "#202327" },
   ],
-  // Thin frame, wire wheels, handlebar. Deliberately nothing like a tiny car.
+  // At ~7 px long, an outlined wheel is invisible: the wheels are filled discs
+  // and the frame is one bold bar. Still unmistakably not a small car.
   bicycle: [
-    { d: "M -16,-7 A 7,7 0 1 1 -16,7 A 7,7 0 1 1 -16,-7 Z", fill: "#4a5b6b" },
-    { d: "M 16,-7 A 7,7 0 1 1 16,7 A 7,7 0 1 1 16,-7 Z", fill: "#4a5b6b" },
-    { d: "M -16,-5 A 5,5 0 1 1 -16,5 A 5,5 0 1 1 -16,-5 Z", fill: "#e8e6e1" },
-    { d: "M 16,-5 A 5,5 0 1 1 16,5 A 5,5 0 1 1 16,-5 Z", fill: "#e8e6e1" },
-    // Frame: down tube, top tube, seat stay.
-    { d: "M -14,0 L 0,-4 L 14,0 L 0,0 Z", fill: "#4a5b6b" },
-    { d: "M -1,-4 L 1,-4 L 1,5 L -1,5 Z", fill: "#4a5b6b" },
-    // Handlebar across the front, saddle behind the rider.
-    { d: "M 12,-6 L 15,-6 L 15,6 L 12,6 Z", fill: "#33383f" },
-    { d: "M -8,-4 L -5,-4 L -5,4 L -8,4 Z", fill: "#33383f" },
+    { d: "M -17,-7 A 7,7 0 1 1 -17,7 A 7,7 0 1 1 -17,-7 Z", fill: "#3c4a57" },
+    { d: "M 17,-7 A 7,7 0 1 1 17,7 A 7,7 0 1 1 17,-7 Z", fill: "#3c4a57" },
+    { d: "M -17,-3.5 A 3.5,3.5 0 1 1 -17,3.5 A 3.5,3.5 0 1 1 -17,-3.5 Z", fill: "#e8e6e1" },
+    { d: "M 17,-3.5 A 3.5,3.5 0 1 1 17,3.5 A 3.5,3.5 0 1 1 17,-3.5 Z", fill: "#e8e6e1" },
+    // Frame bar plus the rider's shoulders: enough to read as a bicycle.
+    { d: "M -15,-2.5 L 15,-2.5 L 15,2.5 L -15,2.5 Z", fill: "#4a5b6b" },
+    { d: "M -6,-5 L 6,-5 L 6,5 L -6,5 Z", fill: "#33383f" },
+    { d: "M 12,-6.5 L 15,-6.5 L 15,6.5 L 12,6.5 Z", fill: "#2b3036" },
   ],
 };
 
