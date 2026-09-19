@@ -11,7 +11,7 @@
  *   road) rather than straight-lined between the two positions, which used to
  *   cut the corner through buildings on turns.
  */
-import type { PathIndex, PathSample } from "@/cities/paths";
+import type { PathIndex } from "@/cities/paths";
 import { samplePathIndex } from "@/cities/paths";
 import type { DirectedPathIndexes } from "@/render/map-geometry";
 import { applyLaneOffset } from "@/render/map-geometry";
