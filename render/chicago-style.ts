@@ -223,7 +223,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
-    "roads-detail": { type: "geojson", data: geo.roadsDetail as never },
     "roads-arterial": { type: "geojson", data: geo.roadsArterial as never },
     "roads-highway": { type: "geojson", data: geo.roadsHighway as never },
     bridges: { type: "geojson", data: geo.bridges as never },
@@ -305,21 +304,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         "line-color": palette.localSurface,
         "line-width": roadWidthPx(),
         "line-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.localRoads, 0, 13.6, 1],
-      },
-    },
-    // Short unnamed stubs: real roads that keep routing, but they only earn ink
-    // once the camera is close. Drawing them at neighborhood zoom is what made
-    // ordinary street pieces read as fake ramps.
-    {
-      id: "roads-detail",
-      type: "line",
-      source: "roads-detail",
-      minzoom: MAP_ZOOM.roadsDetail,
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": palette.localSurface,
-        "line-width": roadWidthPx(0.2),
-        "line-opacity": 0.6,
       },
     },
     {
