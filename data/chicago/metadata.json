@@ -3,7 +3,7 @@
   "attribution": "\u00a9 OpenStreetMap contributors",
   "attributionUrl": "https://www.openstreetmap.org/copyright",
   "extraction": {
-    "snapshotDate": "2026-09-18T23:36:29Z",
+    "snapshotDate": "2026-09-19T00:28:23Z",
     "tool": "tools/chicago-map/extract_chicago.py",
     "toolVersion": 1,
     "networkType": "drive",
@@ -138,5 +138,17 @@
       "regions": 41
     }
   },
-  "features": {}
+  "features": {
+    "buildings": 5860,
+    "buildingAreaM2": {
+      "min": 150,
+      "p25": 235,
+      "median": 498,
+      "p75": 1287,
+      "max": 49085
+    },
+    "water": 75,
+    "parks": 1833,
+    "landmarks": 12
+  }
 }
