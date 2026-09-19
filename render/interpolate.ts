@@ -180,4 +180,47 @@ function transitionPosition(
   current: PresentationVehicle,
   t: number,
   options: InterpolateOptions,
-): (WorldPosition & { fromHeading: number; toHeading: number
+): (WorldPosition & { fromHeading: number; toHeading: number }) | null {
+  if (before.roadId === null || current.roadId === null) {
+    return null;
+  }
+  const previousIndex = indexes[before.roadId];
+  const currentIndex = indexes[current.roadId];
+  if (!previousIndex || !currentIndex) {
+    return null;
+  }
+  const previousRoad = options.city.roads[before.roadId];
+  const currentRoad = options.city.roads[current.roadId];
+  if (!previousRoad || !currentRoad || previousRoad.to !== currentRoad.from) {
+    return null;
+  }
+
+  const remaining = Math.max(0, previousIndex.total - before.progress);
+  const travelled = Math.max(0, current.progress);
+  const total = remaining + travelled;
+  if (total <= 0) {
+    return null;
+  }
+
+  // Position is never interpolated through free space. It walks the old road
+  // to its actual endpoint, then walks the new road from its actual start.
+  // This is intentionally stricter than a cosmetic Bezier: a renderer may not
+  // invent drivable geometry that the map itself does not contain.
+  const distance = clamp01(t) * total;
+  const previousOffset = options.laneOffsets[before.roadId] ?? 0;
+  const currentOffset = options.laneOffsets[current.roadId] ?? 0;
+
+  if (distance <= remaining) {
+    const position = applyLaneOffset(
+      samplePathIndex(previousIndex, before.progress + distance),
+      previousOffset,
+    );
+    return { ...position, fromHeading: position.heading, toHeading: position.heading };
+  }
+
+  const position = applyLaneOffset(
+    samplePathIndex(currentIndex, Math.min(currentIndex.total, distance - remaining)),
+    currentOffset,
+  );
+  return { ...position, fromHeading: position.heading, toHeading: position.heading };
+}
