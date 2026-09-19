@@ -216,7 +216,7 @@ export function SimChrome(props: SimChromeProps) {
           >
             <div className="group flex flex-col items-start gap-[3px]">
               <span className="label-micro on-map-soft">Jev Traffic</span>
-              <span className="text-ui font-medium leading-none text-ink on-map">Central</span>
+              <span className="text-ui font-medium leading-none text-ink on-map">Chicago</span>
               <span className="value-num text-meta text-ink-52 on-map-soft">
                 {scaleLabel} · {trafficLabel(trafficLevel)} · seed {seed}
               </span>
