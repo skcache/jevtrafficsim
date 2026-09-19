@@ -27,8 +27,8 @@ describe("road presentation hierarchy", () => {
     expect(roadPresentationClass({ osmClass: "motorway_link", length: 40 })).toBe("primary");
     expect(roadPresentationClass({ osmClass: "trunk_link", length: 30 })).toBe("primary");
     // A surface-street link is a turn channel, not an expressway ramp.
-    expect(roadPresentationClass({ osmClass: "secondary_link", length: 80 })).toBe("detail");
-    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("detail");
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 80 })).toBe("hidden");
+    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("hidden");
     expect(isExpresswayClass("secondary_link")).toBe(false);
     expect(isExpresswayClass("motorway_link")).toBe(true);
     // Ordinary streets are secondary; short unnamed stubs are detail.
@@ -70,7 +70,8 @@ describe("road presentation hierarchy", () => {
     const hidden = [];
     for (let scale = 0; scale < 5; scale += 1) {
       for (const piece of chicagoModel(scale).streets) {
-        if (roadPresentationClass(piece) === "detail") {
+        const presentation = roadPresentationClass(piece);
+        if (presentation === "detail" || presentation === "hidden") {
           hidden.push({ scale, piece });
         }
       }
@@ -83,8 +84,9 @@ describe("road presentation hierarchy", () => {
         expect(city.roads[roadId].capacity).toBeGreaterThan(0);
       }
     }
+    const geo = buildShowcaseGeoJson(model);
     // Whatever is in the detail collection must obey the rule that put it there.
-    for (const feature of buildShowcaseGeoJson(model).roadsDetail.features) {
+    for (const feature of geo.roadsDetail.features) {
       expect(
         roadPresentationClass({
           osmClass: String(feature.properties.osmClass),
@@ -93,6 +95,16 @@ describe("road presentation hierarchy", () => {
         }),
       ).toBe("detail");
     }
+    // Surface-street links do not leak into any static road source.
+    const visible = [
+      ...geo.roadsLocal.features,
+      ...geo.roadsArterial.features,
+      ...geo.roadsHighway.features,
+      ...geo.roadsDetail.features,
+    ];
+    expect(
+      visible.some((feature) => String(feature.properties.osmClass) === "secondary_link"),
+    ).toBe(false);
   });
 
   it("gives bridge material only to pieces that cross water", () => {
