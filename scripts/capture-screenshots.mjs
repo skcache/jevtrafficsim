@@ -2,15 +2,18 @@
 /**
  * Visual history for the Chicago showcase.
  *
- * Screenshots are committed to git on purpose (until the final cleanup pass), so
- * a reviewer can pull the repo and see what each phase actually looked like
- * without running anything. Everything hangs off docs/screenshots/manifest.json:
+ * The visual history lives on disk (docs/ is local-only) because a git host will
+ * not serve binaries to a reviewing agent; shots are handed over as files, which
+ * is what --bundle is for. Everything hangs off docs/screenshots/manifest.json:
  * it is the source of truth, and INDEX.md is generated from it so the two can
  * never drift.
  *
  * Usage
  *   # regenerate docs/screenshots/INDEX.md after editing the manifest by hand
  *   node scripts/capture-screenshots.mjs --index
+ *
+ *   # bundle a phase for handoff to a reviewer (zip + a plain-text shot list)
+ *   node scripts/capture-screenshots.mjs --bundle phase-2
  *
  *   # capture a phase against a running production build
  *   node scripts/capture-screenshots.mjs \
@@ -218,10 +221,47 @@ async function capture(options) {
   console.log(`updated manifest.json and INDEX.md (${shots.length} shots)`);
 }
 
+/** Zip a phase with a plain-text shot list, so a reviewer can be handed one file. */
+function bundle(phaseId) {
+  const manifest = readManifest();
+  const phase = manifest.phases.find((candidate) => candidate.id === phaseId);
+  if (!phase) {
+    console.error(`no phase ${phaseId} in manifest.json`);
+    process.exit(1);
+  }
+  const dir = join(SHOT_DIR, phase.id);
+  if (!existsSync(dir)) {
+    console.error(`no directory ${dir}`);
+    process.exit(1);
+  }
+  const exportsDir = join(SHOT_DIR, "exports");
+  mkdirSync(exportsDir, { recursive: true });
+  const stamp = new Date().toISOString().slice(0, 10);
+  const archive = join(exportsDir, `${phase.id}-${stamp}.zip`);
+  const notes = join(exportsDir, `${phase.id}-${stamp}.txt`);
+  writeFileSync(
+    notes,
+    [
+      phase.title,
+      `commit ${phase.commit} · captured ${phase.capturedAt}`,
+      "",
+      phase.note ?? "",
+      "",
+      ...phase.shots.map((shot) => `${shot.file}\n  view:  ${shot.view}\n  shows: ${shot.shows}\n`),
+    ].join("\n"),
+  );
+  execFileSync("zip", ["-q", "-j", archive, ...phase.shots.map((shot) => join(dir, shot.file)), notes], {
+    cwd: ROOT,
+  });
+  console.log(`bundled ${phase.shots.length} shots -> ${archive}`);
+}
+
 const options = args();
 if (options.index) {
   writeIndex(readManifest());
   console.log("regenerated docs/screenshots/INDEX.md");
+} else if (options.bundle) {
+  bundle(options.bundle);
 } else if (options.phase) {
   if (!options.list || !existsSync(resolve(options.list))) {
     console.error("--list <shots.json> is required and must exist");
