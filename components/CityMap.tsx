@@ -418,6 +418,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const layers: Layer[] = trafficHiddenRef.current
           ? []
           : [
+              // Road pressure is the macro layer and belongs BELOW the things
+              // the user is actually inspecting. The previous order painted
+              // congestion last, which could visually sit on top of vehicles
+              // and signal state and made the simulation feel like an overlay
+              // soup instead of a city with traffic in it.
+              ...congestion,
               ...buildVehicleLayers(
                 projection,
                 settled,
@@ -434,7 +440,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 signalSpritesRef.current,
               ),
               ...incidents.layers,
-              ...congestion,
             ];
         overlayRef.current?.setProps({ layers });
         platesRef.current = incidents.extras.plates;
