@@ -114,7 +114,7 @@ export const MAP_ZOOM = {
   markings: 17.2,
   /** Highway refs are the spine and may appear early; street names may not. */
   streetRefs: 12.2,
-  streetNames: 16.2,
+  streetNames: 17.1,
   /** District and landmark labels, with collision doing the decluttering. */
   labels: 11.4,
 } as const;
@@ -282,13 +282,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         // A 150 m² grass fragment is not geography at city zoom.
         "fill-opacity": areaGate(AREA_MIN.parkFar, AREA_MIN.parkMid, 15.5, AREA_MIN.parkClose),
       },
-    },
-    {
-      id: "landmarks",
-      type: "fill",
-      source: "landmarks",
-      minzoom: MAP_ZOOM.landmarks,
-      paint: { "fill-color": palette.landmark, "fill-opacity": 0.9 },
     },
     // Buildings: at neighborhood zoom only the prominent masses read as
     // aggregate city weight; every ordinary footprint waits for street zoom, so
