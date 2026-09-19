@@ -417,14 +417,13 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
-        const layers: Layer[] = trafficHiddenRef.current
+        const layers: Layer[] = trafficHiddenRef.current || !liveRef.current
           ? []
           : [
               // Road pressure is the macro layer and belongs BELOW the things
-              // the user is actually inspecting. The previous order painted
-              // congestion last, which could visually sit on top of vehicles
-              // and signal state and made the simulation feel like an overlay
-              // soup instead of a city with traffic in it.
+              // the user is actually inspecting. Landing/configuration stays
+              // deliberately traffic-free; simulation state appears only after
+              // Enter City so the first live frame has a clear semantic shift.
               ...congestion,
               ...buildVehicleLayers(
                 projection,
@@ -510,14 +509,18 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         source?.setData(data as never);
       };
       setData("land", current.land);
+      setData("blocks", current.blocks);
       setData("water", current.water);
       setData("parks", current.parks);
       setData("buildings", current.buildings);
       setData("roads-local", current.roadsLocal);
+      setData("roads-detail", current.roadsDetail);
       setData("roads-arterial", current.roadsArterial);
       setData("roads-highway", current.roadsHighway);
       setData("bridges", current.bridges);
       setData("landmarks", current.landmarks);
+      setData("labels", current.labels);
+      setData("street-labels", current.streetLabels);
     };
     if (map.isStyleLoaded()) {
       apply();
