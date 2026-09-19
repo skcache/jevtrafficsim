@@ -515,7 +515,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       setData("water", current.water);
       setData("parks", current.parks);
       setData("roads-local", current.roadsLocal);
-      setData("roads-detail", current.roadsDetail);
       setData("roads-arterial", current.roadsArterial);
       setData("roads-highway", current.roadsHighway);
       setData("bridges", current.bridges);
