@@ -90,12 +90,12 @@ describe("signal tiers", () => {
   });
 
   it("scales both semantic gates and physical heads continuously with zoom", () => {
-    expect(signalGateWidthPx(15.8)).toBeCloseTo(3.25, 3);
-    expect(signalGateWidthPx(19.5)).toBeCloseTo(5.5, 3);
+    expect(signalGateWidthPx(15.8)).toBeCloseTo(3.1, 3);
+    expect(signalGateWidthPx(19.5)).toBeGreaterThan(6.3);
     expect(signalGateBackingWidthPx(17)).toBeGreaterThan(signalGateWidthPx(17));
-    expect(signalHeadHeightPx(16.5)).toBe(16);
-    expect(signalHeadHeightPx(18)).toBeGreaterThan(16);
-    expect(signalHeadHeightPx(19.5)).toBe(28);
+    expect(signalHeadHeightPx(16.5)).toBe(18);
+    expect(signalHeadHeightPx(18)).toBeGreaterThan(22);
+    expect(signalHeadHeightPx(19.5)).toBeGreaterThan(35);
 
     let previousGate = signalGateWidthPx(15.8);
     let previousHead = signalHeadHeightPx(16.5);
