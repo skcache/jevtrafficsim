@@ -108,16 +108,6 @@ export function signalGateBackingWidthPx(zoom: number): number {
   return signalGateWidthPx(zoom) + 2;
 }
 
-/**
- * Physical traffic-light housing height. This is deliberately more aggressive
- * than vehicle scaling: the lamp is interaction state, not literal map scale.
- * It starts compact at neighborhood zoom and becomes unmistakable when the user
- * zooms in to inspect a junction.
- */
-export function signalHeadHeightPx(zoom: number): number {
-  const t = zoomProgress(zoom, SIGNAL_HEAD_MINZOOM, 19.8);
-  return 18 + t * 18;
-}
 
 /* ------------------------------------------------------------------ */
 /* Incidents                                                           */
