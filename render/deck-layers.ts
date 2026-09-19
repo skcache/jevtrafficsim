@@ -27,6 +27,9 @@ import type { RenderedVehicle } from "./interpolate";
 import { metricToLngLat, type Projection } from "@/cities/map-model";
 import {
   hatchSegments,
+  signalGateBackingWidthPx,
+  signalGateWidthPx,
+  signalHeadHeightPx,
   signalTierOpacity,
   vehicleLengthPx,
 } from "./visuals";
@@ -169,8 +172,14 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
   return plans;
 }
 
-/** State gate sits this far before the junction, on the real approach. */
-const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
+/**
+ * Stop-line setback grows with the incoming lane group. A fixed 3.2 m setback
+ * looked fine on a one-lane street but landed visually inside wide downtown
+ * intersections. This keeps the state gate unmistakably on the approach.
+ */
+function signalStopSetbackM(arm: SignalArm): number {
+  return Math.min(9, Math.max(5, arm.halfWidthM + 3.6));
+}
 
 const SIGNAL_GATE_COLORS: Record<SignalSpriteId, [number, number, number, number]> = {
   "signal-red": [188, 63, 52, 235],
@@ -367,10 +376,11 @@ export function buildSignalLayers(
       const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
       for (const arm of arms) {
         const index = indexes[arm.roadId];
-        if (!index || index.total < SIGNAL_STOP_BAR_OFFSET_M + 1) {
+        const setbackM = signalStopSetbackM(arm);
+        if (!index || index.total < setbackM + 1) {
           continue;
         }
-        const stopProgress = index.total - SIGNAL_STOP_BAR_OFFSET_M;
+        const stopProgress = index.total - setbackM;
         const sample = samplePathIndex(index, stopProgress);
         const laneCenter = applyLaneOffset(sample, arm.laneOffsetM);
         const nx = -Math.sin(sample.heading);
@@ -392,8 +402,8 @@ export function buildSignalLayers(
         });
         if (zoom >= SIGNAL_HEAD_MINZOOM) {
           const headSample = applyLaneOffset(
-            samplePathIndex(index, Math.max(0, stopProgress - 2.4)),
-            arm.laneOffsetM + arm.halfWidthM + 1.2,
+            samplePathIndex(index, Math.max(0, stopProgress - 1.4)),
+            arm.laneOffsetM + arm.halfWidthM + 1.1,
           );
           heads.push({
             position: toLngLat(projection, headSample.x, headSample.y),
@@ -406,7 +416,21 @@ export function buildSignalLayers(
 
   const layers: Layer[] = [];
   if (bars.length > 0) {
+    // One geometry, two strokes: a quiet neutral keyline under the semantic
+    // state color. This reads as a single stop/go gate on both white roads and
+    // warm highway surfaces, not as the old pair of mysterious parallel lines.
     layers.push(
+      new PathLayer<Bar>({
+        id: "signals-state-gate-backing",
+        data: bars,
+        getPath: (bar) => bar.path,
+        getColor: [255, 253, 247, Math.round(230 * opacity)],
+        getWidth: signalGateBackingWidthPx(zoom),
+        widthUnits: "pixels",
+        capRounded: true,
+        pickable: false,
+        updateTriggers: { getWidth: zoom },
+      }),
       new PathLayer<Bar>({
         id: "signals-state-gates",
         data: bars,
@@ -415,10 +439,11 @@ export function buildSignalLayers(
           const [r, g, b, a] = SIGNAL_GATE_COLORS[bar.sprite];
           return [r, g, b, Math.round(a * opacity)];
         },
-        getWidth: 3,
+        getWidth: signalGateWidthPx(zoom),
         widthUnits: "pixels",
         capRounded: true,
         pickable: false,
+        updateTriggers: { getWidth: zoom },
       }),
     );
   }
@@ -442,12 +467,13 @@ export function buildSignalLayers(
         // is therefore screen-aligned like a map annotation, which keeps the
         // familiar red/yellow/green stack instantly recognizable at any street
         // angle instead of turning into a tiny rotated black dash.
-        getSize: signalIconSizeForHousingPx(zoom >= 17.8 ? 15 : 13),
+        getSize: signalIconSizeForHousingPx(signalHeadHeightPx(zoom)),
         getAngle: 0,
         opacity,
         sizeUnits: "pixels",
         billboard: true,
         pickable: false,
+        updateTriggers: { getSize: zoom },
       }),
     );
   }
