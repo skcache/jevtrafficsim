@@ -125,7 +125,7 @@ export const MAP_ZOOM = {
  * grass sliver waits until the camera is close enough to mean it.
  */
 export const AREA_MIN = {
-  waterFar: 5000,
+  waterFar: 12000,
   waterMid: 5000,
   /**
    * Even at close zoom, water has to be a real body: compactness catches thin
