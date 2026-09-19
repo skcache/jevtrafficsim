@@ -29,6 +29,13 @@ export interface PresentationVehicle {
   readonly state: VehicleState;
   readonly roadId: RoadId | null;
   readonly progress: number;
+  /**
+   * Position in this road's queue, 0 = front (nearest the stop line), or null
+   * when the vehicle is not queued. Computed here with the SAME ordering rule
+   * the simulation uses — queuedSinceMs ascending, then id — so presentation can
+   * never disagree with the simulation about who is in front.
+   */
+  readonly queueRank: number | null;
   /** Continuous blocked wait (ms); 0 while moving. */
   readonly blockedWaitMs: number;
 }
@@ -73,6 +80,25 @@ export function buildPresentationSnapshot(
   engine: EngineState,
   sequence: number,
 ): PresentationSnapshot {
+  // Queue ranks first, in one pass: per directed road, ordered exactly as
+  // sim/traffic.ts orders its own queue (queuedSinceMs ascending, then id). The
+  // renderer reads this instead of trying to reconstruct the order from
+  // progress, which is what let presentation disagree with the simulation.
+  const queueRanks = new Map<VehicleId, number>();
+  const queues = new Map<RoadId, { id: VehicleId; since: number }[]>();
+  for (const vehicle of engine.traffic.vehicles) {
+    if (vehicle.state !== "queued" || vehicle.roadId === null) {
+      continue;
+    }
+    const list = queues.get(vehicle.roadId) ?? [];
+    list.push({ id: vehicle.id, since: vehicle.queuedSinceMs ?? 0 });
+    queues.set(vehicle.roadId, list);
+  }
+  for (const queue of queues.values()) {
+    queue.sort((a, b) => a.since - b.since || a.id - b.id);
+    queue.forEach((entry, rank) => queueRanks.set(entry.id, rank));
+  }
+
   const vehicles: PresentationVehicle[] = [];
   for (const vehicle of engine.traffic.vehicles) {
     if (vehicle.state === "arrived") {
@@ -84,6 +110,7 @@ export function buildPresentationSnapshot(
       state: vehicle.state,
       roadId: vehicle.roadId,
       progress: vehicle.progress,
+      queueRank: queueRanks.get(vehicle.id) ?? null,
       blockedWaitMs:
         vehicle.state === "queued"
           ? currentQueueWaitMs(engine.traffic.timeMs, vehicle.queuedSinceMs)

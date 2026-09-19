@@ -55,7 +55,9 @@ describe("signal rendering", () => {
     const [intersectionId, plan] = entry!;
     const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
     const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17);
-    const headLayer = layers.find((layer) => layer.id === "signals-heads");
+    // Heads are a housing sprite plus a lamp dot; the lamp layer carries the
+    // per-approach positions.
+    const headLayer = layers.find((layer) => layer.id === "signals-lamps");
     expect(headLayer).toBeTruthy();
     const heads = (headLayer as unknown as { props: { data: { position: [number, number] }[] } })
       .props.data;

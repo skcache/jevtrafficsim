@@ -43,15 +43,15 @@ export function waitHeatBucket(blockedWaitMs: number): WaitHeatBucket {
 
 /**
  * Lane offset applied in world metres. Vehicles drive on the RIGHT side of
- * their direction of travel, so the two directions of one physical road are
- * always separated by 2 × LANE_OFFSET_METRES — derived purely from heading.
+ * their direction of travel, so the two directions of one physical road
+ * separate purely from heading.
+ *
+ * The offset is REQUIRED, and comes from `render/road-presentation` (the
+ * carriageway's own lane group). There is deliberately no default: a silent
+ * 3.2 m constant here is how every vehicle ended up on one made-up lane
+ * whatever the road was.
  */
-export const LANE_OFFSET_METRES = 3.2;
-
-export function applyLaneOffset(
-  sample: PathSample,
-  metres: number = LANE_OFFSET_METRES,
-): PathSample {
+export function applyLaneOffset(sample: PathSample, metres: number): PathSample {
   return {
     x: sample.x + Math.sin(sample.heading) * metres,
     y: sample.y - Math.cos(sample.heading) * metres,
@@ -78,12 +78,16 @@ export function sampleDirectedRoad(
   return samplePathIndex(index, progress);
 }
 
-/** Sample plus right-side lane offset, ready for rendering. */
+/**
+ * Sample plus right-side lane offset, ready for rendering. The offset is passed
+ * in from the carriageway model — never defaulted here.
+ */
 export function sampleDirectedRoadWithLane(
   indexes: DirectedPathIndexes,
   roadId: RoadId,
   progress: number,
+  laneOffsetMetres: number,
 ): PathSample | null {
   const sample = sampleDirectedRoad(indexes, roadId, progress);
-  return sample ? applyLaneOffset(sample) : null;
+  return sample ? applyLaneOffset(sample, laneOffsetMetres) : null;
 }

@@ -95,10 +95,61 @@ const PLACE_LABELS: readonly {
 ];
 
 /** Venue anchors used by the event-release incident (nearest intersection). */
-export const CHICAGO_VENUES: readonly { readonly name: string; readonly lon: number; readonly lat: number }[] = [
+export interface ChicagoEventVenue {
+  readonly name: string;
+  readonly lon: number;
+  readonly lat: number;
+}
+
+export const CHICAGO_VENUES: readonly ChicagoEventVenue[] = [
   { name: "United Center", lon: -87.6742, lat: 41.8806 },
   { name: "Soldier Field", lon: -87.6167, lat: 41.8623 },
+  { name: "Millennium Park", lon: -87.6229, lat: 41.8826 },
+  { name: "Merchandise Mart", lon: -87.6356, lat: 41.8885 },
 ];
+
+/** How close a venue must be to real road topology to be worth releasing. */
+const VENUE_ROAD_RADIUS_M = 320;
+
+/**
+ * Venues that are genuinely part of the ACTIVE scale.
+ *
+ * EVENT LETS OUT used to take every known venue and snap it to the nearest
+ * intersection, with no bounds check at all: on a scale that does not contain
+ * Soldier Field, the nearest intersection is somewhere on the scale's boundary,
+ * so the incident fired in a random street nowhere near a stadium. A venue is
+ * eligible only when it lies inside the compiled extent AND has real road
+ * topology within a short walk of it.
+ */
+export function availableChicagoEventVenues(model: MapModel): readonly {
+  readonly name: string;
+  readonly intersectionId: number;
+}[] {
+  const bounds = model.bounds;
+  const margin = 150;
+  const available: { name: string; intersectionId: number }[] = [];
+  for (const venue of CHICAGO_VENUES) {
+    const [x, y] = lngLatToMetric(model.projection, venue.lon, venue.lat);
+    if (
+      x < bounds.minX + margin ||
+      x > bounds.maxX - margin ||
+      y < bounds.minY + margin ||
+      y > bounds.maxY - margin
+    ) {
+      continue;
+    }
+    const intersectionId = nearestIntersectionTo(model, venue.lon, venue.lat);
+    if (intersectionId === null) {
+      continue;
+    }
+    const intersection = model.city.intersections[intersectionId];
+    if (Math.hypot(intersection.x - x, intersection.y - y) > VENUE_ROAD_RADIUS_M) {
+      continue;
+    }
+    available.push({ name: venue.name, intersectionId });
+  }
+  return available;
+}
 
 /* ------------------------------------------------------------------ */
 /* Artifact shapes (produced by the Python preprocessing tool)         */

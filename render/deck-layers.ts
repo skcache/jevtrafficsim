@@ -30,18 +30,11 @@ import type { RenderedVehicle } from "./interpolate";
 import { metricToLngLat, type Projection } from "@/cities/map-model";
 import { waitHeatBucket, WAIT_HEAT_COLORS } from "./map-geometry";
 import {
-  egressArrows,
-  groupByHeatBucket,
   hatchSegments,
   signalTierOpacity,
-  VEHICLE_BODY_COLORS,
-  VEHICLE_OUTLINE_COLOR,
-  ringScaleForZoom,
-  vehicleHaloColor,
-  vehicleHaloExtraPx,
   vehicleLengthPx,
-  vehicleRingExtraPx,
 } from "./visuals";
+import { iconSizeForLengthPx } from "./vehicle-sprites";
 import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
@@ -158,6 +151,47 @@ export function buildCongestionLayers(
 /* Vehicles                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Deterministic sampling: how much of the fleet is worth drawing at a zoom.
+ * Below close zoom a thousand equally prominent cars is confetti, so the
+ * population thins with distance — but a queued or badly blocked vehicle is
+ * never sampled out, because that is the information the frame is carrying.
+ */
+export function vehicleSampleRatio(zoom: number): number {
+  if (zoom >= 16) {
+    return 1;
+  }
+  if (zoom >= 15) {
+    return 0.6;
+  }
+  if (zoom >= 14) {
+    return 0.25;
+  }
+  return 0.08;
+}
+
+/** Stable hash, so the same vehicle is drawn or hidden frame after frame. */
+function vehicleHash(id: number): number {
+  let value = (id * 2654435761) >>> 0;
+  value ^= value >>> 13;
+  value = (value * 1274126177) >>> 0;
+  return (value ^ (value >>> 16)) >>> 0;
+}
+
+export function sampleVehicles(
+  vehicles: readonly RenderedVehicle[],
+  zoom: number,
+): RenderedVehicle[] {
+  const ratio = vehicleSampleRatio(zoom);
+  if (ratio >= 1) {
+    return [...vehicles];
+  }
+  const threshold = Math.round(ratio * 0xffffffff);
+  return vehicles.filter(
+    (vehicle) => vehicle.blockedWaitMs > 0 || vehicleHash(vehicle.id) < threshold,
+  );
+}
+
 export function buildVehicleLayers(
   projection: Projection,
   vehicles: readonly RenderedVehicle[],
@@ -169,76 +203,67 @@ export function buildVehicleLayers(
     // visual noise rather than information.
     return [];
   }
-  // Wait heat is a close-zoom instrument. Further out, individual heat rings
-  // read as coloured confetti, and the road-level congestion overlay carries
-  // the same information far better.
-  const heatVisible = zoom >= WAIT_HEAT_MINZOOM;
-  // Glow first: the most patient vehicles get a soft warm bloom underneath.
-  const halos = new IconLayer<RenderedVehicle>({
-    id: "vehicle-halos",
-    data: heatVisible
-      ? vehicles.filter((vehicle) => vehicleHaloExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) > 0)
-      : [],
-    iconAtlas: icons.atlas,
-    iconMapping: icons.mapping,
-    getIcon: (vehicle) => vehicle.type,
-    getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-    getSize: (vehicle) =>
-      vehicleLengthPx(vehicle.type, zoom) +
-      vehicleHaloExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) * ringScaleForZoom(zoom),
-    getColor: (vehicle) => [...vehicleHaloColor(waitHeatBucket(vehicle.blockedWaitMs))],
-    getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
-    sizeUnits: "pixels",
-    billboard: false,
-    pickable: false,
-    updateTriggers: { getSize: zoom },
-  });
-  const rings = new IconLayer<RenderedVehicle>({
-    id: "vehicle-rings",
-    data: vehicles as RenderedVehicle[],
-    iconAtlas: icons.atlas,
-    iconMapping: icons.mapping,
-    getIcon: (vehicle) => vehicle.type,
-    getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-    getSize: (vehicle) =>
-      vehicleLengthPx(vehicle.type, zoom) +
-      vehicleRingExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) * ringScaleForZoom(zoom),
-    getColor: (vehicle) => {
-      const bucket = waitHeatBucket(vehicle.blockedWaitMs);
-      if (bucket === 0) {
-        return [...VEHICLE_OUTLINE_COLOR];
-      }
-      const [r, g, b] = WAIT_HEAT_COLORS[bucket];
-      return [r, g, b, 235];
-    },
-    getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
-    sizeUnits: "pixels",
-    billboard: false,
-    pickable: false,
-    updateTriggers: {
-      getSize: zoom,
-      getColor: vehicles.map((vehicle) => vehicle.blockedWaitMs).join(","),
-    },
-  });
-  const bodies = groupByHeatBucket(vehicles).map(
-    (group, bucket) =>
+  const visible = sampleVehicles(vehicles, zoom);
+  // Glyph length in pixels per class, at this zoom: a car stays a car and a
+  // truck stays a truck instead of every class shrinking together.
+  const lengthPx = (type: RenderedVehicle["type"]) => vehicleLengthPx(type, zoom);
+  const layers: Layer[] = [];
+  // One layer per class (three at most, not the seven wait-heat buckets this
+  // used to split into): the sprite already carries the class silhouette and
+  // its restrained body colour, so nothing is tinted per frame.
+  for (const type of ["car", "truck", "bicycle"] as const) {
+    const group = visible.filter((vehicle) => vehicle.type === type);
+    if (group.length === 0) {
+      continue;
+    }
+    layers.push(
       new IconLayer<RenderedVehicle>({
-        id: `vehicle-body-${bucket}`,
+        id: `vehicle-body-${type}`,
         data: group,
         iconAtlas: icons.atlas,
         iconMapping: icons.mapping,
-        getIcon: (vehicle) => vehicle.type,
+        getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        getSize: (vehicle) => vehicleLengthPx(vehicle.type, zoom),
-        getColor: (vehicle) => [...VEHICLE_BODY_COLORS[vehicle.type], 255],
+        getSize: iconSizeForLengthPx(type, lengthPx(type)),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
         sizeUnits: "pixels",
         billboard: false,
         pickable: false,
         updateTriggers: { getSize: zoom },
       }),
-  );
-  return [halos, rings, ...bodies];
+    );
+  }
+  // Wait state: a thin outline on a blocked vehicle, close zoom only. No halo,
+  // no pulsing, no recoloured body — the road-level congestion overlay is the
+  // macro signal, and this is a whisper for the one vehicle you are watching.
+  if (zoom >= WAIT_HEAT_MINZOOM) {
+    const waiting = visible.filter((vehicle) => vehicle.blockedWaitMs > 0);
+    if (waiting.length > 0) {
+      layers.push(
+        new ScatterplotLayer<RenderedVehicle>({
+          id: "vehicle-wait-outline",
+          data: waiting,
+          getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
+          getRadius: (vehicle) => iconSizeForLengthPx(vehicle.type, lengthPx(vehicle.type)) * 0.42,
+          radiusUnits: "pixels",
+          stroked: true,
+          filled: false,
+          getLineColor: (vehicle) => {
+            const bucket = waitHeatBucket(vehicle.blockedWaitMs);
+            const [r, g, b] = WAIT_HEAT_COLORS[Math.min(bucket, WAIT_HEAT_COLORS.length - 1)];
+            return [r, g, b, bucket >= 4 ? 150 : 90];
+          },
+          getLineWidth: 1,
+          lineWidthUnits: "pixels",
+          pickable: false,
+          updateTriggers: {
+            getLineColor: waiting.map((vehicle) => vehicle.blockedWaitMs).join(","),
+          },
+        }),
+      );
+    }
+  }
+  return layers;
 }
 
 /* ------------------------------------------------------------------ */
@@ -253,6 +278,7 @@ export function buildSignalLayers(
   plans: Map<number, SignalPlanEntry>,
   indexes: DirectedPathIndexes,
   zoom: number,
+  housing: VehicleIconSet | null = null,
 ): Layer[] {
   // Signals are a street-zoom instrument. At far and mid zoom this returns
   // nothing at all: a city-wide field of coloured dots is debug state, and
@@ -267,6 +293,8 @@ export function buildSignalLayers(
   interface Head {
     position: LngLat;
     color: readonly [number, number, number, number];
+    /** Bearing of the approach, so the housing faces the traffic it controls. */
+    bearing: number;
   }
   interface Bar {
     path: LngLat[];
@@ -323,6 +351,7 @@ export function buildSignalLayers(
         heads.push({
           position: toLngLat(projection, headSample.x, headSample.y),
           color,
+          bearing: sample.heading,
         });
       }
     });
@@ -345,17 +374,53 @@ export function buildSignalLayers(
     );
   }
   if (heads.length > 0) {
+    // The head is a housing with ONE bright lamp — the active stage — plus dim
+    // companions at the closest zoom. A large filled circle at the junction
+    // (what this was) is instrumentation, not a traffic signal.
+    // The housing is decoration; the lamps carry the state, so signals still
+    // render when there is no sprite atlas (no DOM).
+    if (housing) {
+      layers.push(
+        new IconLayer<Head>({
+          id: "signals-housings",
+          data: heads,
+          iconAtlas: housing.atlas,
+          iconMapping: housing.mapping,
+          getIcon: () => "car",
+          getPosition: (head) => head.position,
+          getSize: 7,
+          getAngle: (head) => (head.bearing * 180) / Math.PI,
+          sizeUnits: "pixels",
+          billboard: false,
+          pickable: false,
+        }),
+      );
+    }
     layers.push(
       new ScatterplotLayer<Head>({
-        id: "signals-heads",
+        id: "signals-lamps",
         data: heads,
         getPosition: (head) => head.position,
-        getRadius: 3.2,
+        getRadius: 1.5,
         radiusUnits: "pixels",
         getFillColor: (head) => [...head.color],
         pickable: false,
       }),
     );
+    if (zoom >= 16.8) {
+      // Full housing: the two lamps that are not lit, barely there.
+      layers.push(
+        new ScatterplotLayer<Head>({
+          id: "signals-lamps-idle",
+          data: heads,
+          getPosition: (head) => head.position,
+          getRadius: 1.1,
+          radiusUnits: "pixels",
+          getFillColor: [90, 88, 82, 120],
+          pickable: false,
+        }),
+      );
+    }
   }
   return layers;
 }
@@ -372,7 +437,6 @@ export interface IncidentExtras {
 export function buildIncidentLayers(
   snapshot: PresentationSnapshot | null,
   model: MapModel,
-  nowMs: number,
 ): { layers: Layer[]; extras: IncidentExtras } {
   const projection = model.projection;
   const layers: Layer[] = [];
@@ -493,27 +557,7 @@ export function buildIncidentLayers(
     }
   }
 
-  const eventBearings = eventCenters.flatMap((center) => {
-    const node = model.city.intersections.find(
-      (intersection) => intersection.x === center.x && intersection.y === center.y,
-    );
-    if (!node) {
-      return [];
-    }
-    return node.outgoing.slice(0, 6).map((roadId) => {
-      const road = model.city.roads[roadId];
-      const to = model.city.intersections[road.to];
-      return Math.atan2(to.y - node.y, to.x - node.x);
-    });
-  });
-  const arrows = eventCenters.flatMap((center) =>
-    egressArrows([center.x, center.y], eventBearings).map((arrow) => ({
-      source: toLngLat(projection, arrow.source[0], arrow.source[1]),
-      target: toLngLat(projection, arrow.target[0], arrow.target[1]),
-    })),
-  );
 
-  const pulse = (nowMs % 1400) / 1400;
 
   if (closedPaths.length > 0) {
     layers.push(
@@ -570,31 +614,23 @@ export function buildIncidentLayers(
     );
   }
   if (eventCenters.length > 0) {
+    // An event is a place, not an effect: a small static badge on the venue.
+    // The pulsing ring and the violet egress arrows that used to be here read as
+    // a game ability; the traffic emerging on the surrounding streets is the
+    // real feedback, and the plate names the venue.
     layers.push(
       new ScatterplotLayer<{ position: LngLat }>({
-        id: "event-rings",
+        id: "event-badges",
         data: eventCenters,
         getPosition: (center) => center.position,
-        // A restrained venue pulse: a small warm ring breathing outward, not a
-        // giant coloured circle over the neighborhood. The traffic emerging on
-        // the surrounding streets is what should read.
-        getRadius: 13 + pulse * 9,
+        getRadius: 4,
         radiusUnits: "pixels",
+        filled: true,
+        getFillColor: [176, 126, 68, 235],
         stroked: true,
-        filled: false,
-        getLineColor: [186, 132, 74, Math.round(150 - pulse * 95)],
+        getLineColor: [255, 253, 249, 240],
         lineWidthUnits: "pixels",
-        getLineWidth: 1.6,
-        pickable: false,
-      }),
-      new LineLayer<{ source: LngLat; target: LngLat }>({
-        id: "event-arrows",
-        data: arrows,
-        getSourcePosition: (arrow) => arrow.source,
-        getTargetPosition: (arrow) => arrow.target,
-        getColor: [111, 102, 232, 190],
-        getWidth: 2.5,
-        widthUnits: "pixels",
+        getLineWidth: 1.4,
         pickable: false,
       }),
     );

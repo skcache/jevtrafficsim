@@ -37,32 +37,54 @@ export function widthPxAt(zoom: number, widthMetres: number, minPx = 0.6): numbe
 }
 
 /**
- * Directed roads paired by carriageway: two directed roads that are the same
- * physical street (both directions of one roadway) share a carriageway, while a
- * one-way street is its own carriageway.
+ * Directed roads grouped by carriageway.
+ *
+ * The authority is `model.streets[].roadIds` — the physical StreetPiece the
+ * compiler built from the importer's carriageway model. Deriving the grouping
+ * from unordered `from`/`to` node pairs instead (as this did) is not
+ * authoritative: two geometrically distinct carriageways that happen to share
+ * logical endpoints — a divided roadway, a one-way pair rejoining the same two
+ * intersections — were merged into one carriageway, which then reported double
+ * the lanes, double the width and the wrong lane centres.
+ *
+ * `widthM` is likewise the piece's own physical width, not a recomputation.
  */
 export function carriagewayPairs(model: MapModel): {
   readonly partners: readonly (readonly number[])[];
   readonly indexOf: readonly number[];
+  readonly pieceOf: readonly number[];
+  readonly widthM: readonly number[];
 } {
-  const byPair = new Map<string, number[]>();
-  for (const road of model.city.roads) {
-    const key = `${Math.min(road.from, road.to)}:${Math.max(road.from, road.to)}`;
-    const list = byPair.get(key) ?? [];
-    list.push(road.id);
-    byPair.set(key, list);
-  }
+  const count = model.city.roads.length;
   const partners: number[][] = model.city.roads.map(() => []);
   const indexOf: number[] = model.city.roads.map(() => -1);
-  let index = 0;
-  for (const list of byPair.values()) {
-    for (const roadId of list) {
-      partners[roadId] = list;
-      indexOf[roadId] = index;
+  const pieceOf: number[] = model.city.roads.map(() => -1);
+  const widthM: number[] = model.city.roads.map(() => 0);
+  model.streets.forEach((piece, pieceIndex) => {
+    const members = [...piece.roadIds].sort((a, b) => a - b);
+    for (const roadId of members) {
+      if (roadId < 0 || roadId >= count) {
+        continue;
+      }
+      partners[roadId] = members;
+      indexOf[roadId] = pieceIndex;
+      pieceOf[roadId] = pieceIndex;
+      widthM[roadId] = piece.widthM;
     }
-    index += 1;
+  });
+  // Any directed road the compiler did not place in a piece stands alone.
+  for (let roadId = 0; roadId < count; roadId += 1) {
+    if (partners[roadId].length === 0) {
+      partners[roadId] = [roadId];
+      indexOf[roadId] = pieceOf[roadId] = -1;
+      const road = model.city.roads[roadId];
+      widthM[roadId] = carriagewayWidthMetres(
+        Math.max(1, road?.lanes ?? 1),
+        road?.kind === "highway" && (road?.lanes ?? 1) <= 1,
+      );
+    }
   }
-  return { partners, indexOf };
+  return { partners, indexOf, pieceOf, widthM };
 }
 
 /** Directional lanes of the road itself. */
@@ -90,8 +112,12 @@ export function carriagewayLanes(
 export function widthMetresForRoad(
   model: MapModel,
   roadId: number,
-  pairs: { readonly partners: readonly (readonly number[])[] },
+  pairs: { readonly partners: readonly (readonly number[])[]; readonly widthM?: readonly number[] },
 ): number {
+  const declared = pairs.widthM?.[roadId];
+  if (typeof declared === "number" && declared > 0) {
+    return declared;
+  }
   const road = model.city.roads[roadId];
   const lanes = carriagewayLanes(model, roadId, pairs);
   // Ramps stay visibly narrower than the road they leave.
@@ -113,13 +139,38 @@ export function laneCentreOffsetMetres(
   model: MapModel,
   roadId: number,
   pairs: { readonly partners: readonly (readonly number[])[] },
+  /**
+   * Lane slot within this direction's group. Omit it for the group CENTRE
+   * (what a single vehicle on the road should use); pass a slot to spread
+   * several vehicles across the lanes the road actually has.
+   */
+  slot?: number,
 ): number {
   const partners = pairs.partners[roadId] ?? [roadId];
-  if (partners.length < 2) {
+  const lanes = directionalLanes(model, roadId);
+  // Shared carriageway: this direction keeps to its own half. One-way
+  // carriageway: its traffic runs on the carriageway centre.
+  const base = partners.length < 2 ? 0 : (lanes * LANE_WIDTH_M) / 2;
+  if (slot === undefined) {
+    return base;
+  }
+  const clamped = Math.max(0, Math.min(lanes - 1, slot));
+  return base + (clamped - (lanes - 1) / 2) * LANE_WIDTH_M;
+}
+
+/**
+ * Deterministic presentation-only lane assignment: the same vehicle keeps the
+ * same lane on the same road, and different vehicles spread across the lanes
+ * the road actually has. Simulation truth is untouched — this only decides where
+ * on the carriageway the glyph is painted.
+ */
+export function laneSlotFor(vehicleId: number, roadId: number, lanes: number): number {
+  if (lanes <= 1) {
     return 0;
   }
-  const lanes = directionalLanes(model, roadId);
-  return (lanes * LANE_WIDTH_M) / 2;
+  // A cheap stable mix: consecutive ids land on different lanes on one road
+  // while staying spread within the road's own lane count.
+  return Math.abs((vehicleId * 2654435761 + roadId * 40503) % lanes);
 }
 
 /** True when this directed road is one of two directions on one carriageway. */

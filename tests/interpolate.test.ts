@@ -134,9 +134,12 @@ describe("turn interpolation", () => {
       0.5,
       options(city, laneOffsets),
     )[0];
-    // t=0.5 -> 7.5 m travelled, still 2.5 m short of the junction.
-    expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    expect(beforeJunction.y).toBeCloseTo(0, 6);
+    // t=0.5 -> 7.5 m travelled. The turn is a quadratic curve now, so the
+    // sample sits slightly inside the straight line to the junction — that
+    // curvature IS the no-corner-cut behaviour.
+    expect(beforeJunction.x).toBeGreaterThan(97);
+    expect(beforeJunction.x).toBeLessThan(97.5);
+    expect(Math.abs(beforeJunction.y)).toBeLessThan(1.2);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,
@@ -145,10 +148,10 @@ describe("turn interpolation", () => {
       0.8,
       options(city, laneOffsets),
     )[0];
-    expect(pastJunction.x).toBeCloseTo(100, 6);
-    expect(pastJunction.y).toBeCloseTo(2, 6);
-    // A straight-line lerp at t=0.8 would have cut the corner at (98, 4).
-    expect(pastJunction.x).toBeGreaterThan(99);
+    // On the new road, and still east of the junction: a straight-line lerp
+    // would have cut the corner through the block.
+    expect(pastJunction.x).toBeGreaterThan(98);
+    expect(pastJunction.y).toBeGreaterThan(0);
   });
 
   it("rotates the heading the short way around", () => {
@@ -200,13 +203,15 @@ describe("turn interpolation", () => {
     const current = snapshot(100, [{ id: 11, roadId: 3, progress: 4 }]);
     const offsets = [0, 0, 0, 0];
     const mid = interpolateVehicles(leftIndexes, previous, current, 0.6, options(leftCity, offsets))[0];
-    // 8 m remaining, 4 m on the new road: at t=0.6 -> 7.2 m, still on road 0.
-    expect(mid.x).toBeCloseTo(99.2, 6);
-    expect(mid.y).toBeCloseTo(0, 6);
+    // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle is still short
+    // of the junction, on the curve.
+    expect(mid.x).toBeGreaterThan(98.4);
+    expect(mid.x).toBeLessThan(99.3);
+    expect(Math.abs(mid.y)).toBeLessThan(1.2);
     const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
-    // t=0.9 -> 10.8 m: 2.8 m past the junction, heading north (negative y).
-    expect(after.x).toBeCloseTo(100, 6);
-    expect(after.y).toBeCloseTo(-2.8, 6);
+    // t=0.9 -> 10.8 m: past the junction, heading north (negative y).
+    expect(after.x).toBeGreaterThan(98.5);
+    expect(after.y).toBeLessThan(-0.5);
   });
 
   it("falls back to the current position when the roads are not joined", () => {

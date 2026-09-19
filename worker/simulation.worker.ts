@@ -17,9 +17,8 @@ import { createFixedController } from "@/controllers/fixed";
 import type { WaterCrossingBridge } from "@/cities/map-model";
 import {
   CHICAGO_SCALE_LABELS,
-  CHICAGO_VENUES,
+  availableChicagoEventVenues,
   chicagoScaleForSize,
-  nearestIntersectionTo,
 } from "@/cities/chicago";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
@@ -177,9 +176,8 @@ async function buildRun(config: RunConfig): Promise<void> {
   state.venueTurn = 0;
   state.bridgeTurn = 0;
   state.waterCrossingBridges = model.waterCrossingBridges;
-  state.venues = CHICAGO_VENUES.map((venue) =>
-    nearestIntersectionTo(model, venue.lon, venue.lat),
-  ).filter((id): id is number => id !== null);
+  // Only venues actually present in this scale, near real road topology.
+  state.venues = availableChicagoEventVenues(model).map((venue) => venue.intersectionId);
   post({
     type: "READY",
     config,

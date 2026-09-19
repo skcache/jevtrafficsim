@@ -160,19 +160,45 @@ export function interpolateVehicles(
       headingRadians: heading,
       blockedWaitMs: vehicle.blockedWaitMs,
       fade: before ? 1 : fade,
-      queueRank: -1,
+      queueRank: vehicle.queueRank ?? -1,
     });
   }
   return rendered;
 }
 
+/** Half-width of the turn window on each road, in metres. */
+const TURN_WINDOW_M = 9;
+
+/** Quadratic Bézier point. */
+function quadAt(
+  p0: WorldPosition,
+  p1: WorldPosition,
+  p2: WorldPosition,
+  u: number,
+): { x: number; y: number; heading: number } {
+  const w = 1 - u;
+  const x = w * w * p0.x + 2 * w * u * p1.x + u * u * p2.x;
+  const y = w * w * p0.y + 2 * w * u * p1.y + u * u * p2.y;
+  // Tangent of a quadratic Bézier: B'(u) = 2(1-u)(P1-P0) + 2u(P2-P1).
+  const dx = 2 * w * (p1.x - p0.x) + 2 * u * (p2.x - p1.x);
+  const dy = 2 * w * (p1.y - p0.y) + 2 * u * (p2.y - p1.y);
+  return { x, y, heading: Math.atan2(dy, dx) };
+}
+
 /**
- * Position while crossing from one road to the next.
+ * Position and heading while crossing from one road to the next.
  *
- * Walks the previous road to the shared junction and then along the current
- * road, using path distance so the vehicle follows the corner. Returns null
- * when the two roads are not joined (the caller then keeps the current
- * position): a fallback beats drawing a straight line through a block.
+ * The turn is a quadratic curve: it leaves the old lane centre, bends through
+ * the junction and arrives on the new lane centre, with heading taken from the
+ * curve tangent. Walking the two roads and blending headings (what this did
+ * before) kept position continuous but made the heading read as a snap, and it
+ * cut the corner whenever the two lane centres were offset differently — which
+ * is every real turn.
+ *
+ * The curve spans a bounded window either side of the junction, so a short
+ * segment simply shrinks the window instead of producing nonsense. Returns null
+ * when the two roads are not joined: the caller then keeps the current position,
+ * which beats drawing a line through a block.
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
@@ -204,15 +230,67 @@ function transitionPosition(
   const distance = t * total;
   const previousOffset = laneOffsets[before.roadId] ?? 0;
   const currentOffset = laneOffsets[current.roadId] ?? 0;
-  if (distance <= remaining) {
-    const sample: PathSample = samplePathIndex(previousIndex, before.progress + distance);
-    const position = applyLaneOffset(sample, previousOffset);
-    const atJunction = applyLaneOffset(samplePathIndex(previousIndex, previousIndex.total), previousOffset);
-    return { ...position, fromHeading: position.heading, toHeading: atJunction.heading };
+  // The window shrinks on a short segment rather than overshooting the road.
+  const window = Math.min(TURN_WINDOW_M, remaining, travelled);
+  if (window < 0.5) {
+    // Not enough room to curve: follow the geometry exactly.
+    if (distance <= remaining) {
+      const position = applyLaneOffset(
+        samplePathIndex(previousIndex, before.progress + distance),
+        previousOffset,
+      );
+      return { ...position, fromHeading: position.heading, toHeading: position.heading };
+    }
+    const position = applyLaneOffset(
+      samplePathIndex(currentIndex, distance - remaining),
+      currentOffset,
+    );
+    return { ...position, fromHeading: position.heading, toHeading: position.heading };
   }
-  const overshoot = distance - remaining;
-  const sample: PathSample = samplePathIndex(currentIndex, overshoot);
-  const position = applyLaneOffset(sample, currentOffset);
-  const atEntry = applyLaneOffset(samplePathIndex(currentIndex, 0), currentOffset);
-  return { ...position, fromHeading: atEntry.heading, toHeading: position.heading };
+  const turnStart = remaining - window;
+  const turnEnd = remaining + window;
+  if (distance < turnStart) {
+    const position = applyLaneOffset(
+      samplePathIndex(previousIndex, before.progress + distance),
+      previousOffset,
+    );
+    return { ...position, fromHeading: position.heading, toHeading: position.heading };
+  }
+  if (distance > turnEnd) {
+    const position = applyLaneOffset(
+      samplePathIndex(currentIndex, distance - remaining),
+      currentOffset,
+    );
+    return { ...position, fromHeading: position.heading, toHeading: position.heading };
+  }
+  const u = (distance - turnStart) / (2 * window);
+  const start = applyLaneOffset(
+    samplePathIndex(previousIndex, previousIndex.total - window),
+    previousOffset,
+  );
+  const end = applyLaneOffset(samplePathIndex(currentIndex, window), currentOffset);
+  // Control point: where the two lane-centre lines meet. That is what makes the
+  // curve leave and arrive tangent to the roads; when the lines are parallel
+  // (a straight-through movement) the junction midpoint is the honest control.
+  const control = laneLineIntersection(start, end);
+  const point = quadAt(start, control, end, u);
+  return { ...point, fromHeading: point.heading, toHeading: point.heading };
+}
+
+/**
+ * Intersection of the line through `start` along its heading with the line
+ * through `end` along its heading. Parallel or degenerate inputs fall back to
+ * the midpoint, which keeps a straight movement straight.
+ */
+function laneLineIntersection(start: WorldPosition, end: WorldPosition): WorldPosition {
+  const ax = Math.cos(start.heading);
+  const ay = Math.sin(start.heading);
+  const bx = Math.cos(end.heading);
+  const by = Math.sin(end.heading);
+  const denominator = ax * by - ay * bx;
+  if (Math.abs(denominator) < 1e-6) {
+    return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2, heading: start.heading };
+  }
+  const t = ((end.x - start.x) * by - (end.y - start.y) * bx) / denominator;
+  return { x: start.x + ax * t, y: start.y + ay * t, heading: start.heading };
 }

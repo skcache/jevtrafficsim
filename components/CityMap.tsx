@@ -59,7 +59,8 @@ import {
   type IncidentExtras,
 } from "@/render/deck-layers";
 import { waitHeatBucket } from "@/render/map-geometry";
-import { createVehicleIcons, type VehicleIconSet } from "@/render/vehicle-icons";
+import { type VehicleIconSet } from "@/render/vehicle-icons";
+import { createSignalHousing, createVehicleSprites } from "@/render/vehicle-sprites";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
@@ -106,6 +107,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const overlayRef = useRef<MapLibreOverlay | null>(null);
   const zoomRef = useRef(16);
   const iconsRef = useRef<VehicleIconSet | null>(null);
+  const housingRef = useRef<VehicleIconSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
   /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
@@ -201,7 +203,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     mapRef.current = map;
     overlayRef.current = overlay;
     zoomRef.current = map.getZoom();
-    iconsRef.current = createVehicleIcons();
+    // Sprites are built once, never per frame.
+    iconsRef.current = createVehicleSprites();
+    housingRef.current = createSignalHousing();
     if (window.location.search.includes("debug")) {
       // Dev-only diagnostics (URL-gated).
       (window as unknown as { __jevMapInstance?: unknown }).__jevMapInstance = map;
@@ -335,7 +339,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               (id) => progress.get(id) ?? 0,
             )
           : [];
-        const incidents = buildIncidentLayers(buffer.current, buffer.model, now);
+        const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
         const layers: Layer[] = trafficHiddenRef.current
@@ -344,7 +348,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               ...buildVehicleLayers(
                 projection,
                 vehicles,
-                iconsRef.current ?? createVehicleIcons() ?? EMPTY_ICONS,
+                iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
                 zoomRef.current,
               ),
               ...buildSignalLayers(

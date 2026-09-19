@@ -4,12 +4,17 @@ import { buildPathIndex, pathLength, type Point } from "@/cities/paths";
 import {
   applyLaneOffset,
   buildDirectedPathIndexes,
-  LANE_OFFSET_METRES,
   sampleDirectedRoad,
   sampleDirectedRoadWithLane,
   waitHeatBucket,
   WAIT_HEAT_COLORS,
 } from "@/render/map-geometry";
+import {
+  carriagewayPairs,
+  directionalLanes,
+  laneCentreOffsetMetres,
+  LANE_WIDTH_M,
+} from "@/render/road-presentation";
 
 describe("showcase geometry", () => {
   it("builds a presentation path for every directed road", () => {
@@ -99,29 +104,50 @@ describe("showcase geometry", () => {
     expect(Math.hypot(midForward.x - midReverse.x, midForward.y - midReverse.y)).toBeLessThan(10);
     // ...but the lane-offset versions sit on opposite sides (right of travel
     // for each direction), so they never overlap.
-    const laneForward = sampleDirectedRoadWithLane(indexes, forward, model.city.roads[forward].length / 2)!;
-    const laneReverse = sampleDirectedRoadWithLane(indexes, reverse, model.city.roads[reverse].length / 2)!;
+    const pairs = carriagewayPairs(model);
+    const forwardOffset = laneCentreOffsetMetres(model, forward, pairs);
+    const reverseOffset = laneCentreOffsetMetres(model, reverse, pairs);
+    const laneForward = sampleDirectedRoadWithLane(
+      indexes,
+      forward,
+      model.city.roads[forward].length / 2,
+      forwardOffset,
+    )!;
+    const laneReverse = sampleDirectedRoadWithLane(
+      indexes,
+      reverse,
+      model.city.roads[reverse].length / 2,
+      reverseOffset,
+    )!;
+    // Each direction sits half its own lane span off the centreline, so the two
+    // are separated by the sum of both — derived, never a constant.
     expect(Math.hypot(laneForward.x - laneReverse.x, laneForward.y - laneReverse.y)).toBeCloseTo(
-      LANE_OFFSET_METRES * 2,
+      forwardOffset + reverseOffset,
       4,
     );
   });
 
-  it("applies deterministic right-side lane offsets", () => {
+  it("takes every lane offset from the carriageway model, never a default", () => {
     const model = chicagoModel(2);
     const indexes = buildDirectedPathIndexes(model);
+    const pairs = carriagewayPairs(model);
     const road = model.city.roads[0];
+    const offset = laneCentreOffsetMetres(model, road.id, pairs);
     const plain = sampleDirectedRoad(indexes, road.id, 10)!;
-    const withLane = sampleDirectedRoadWithLane(indexes, road.id, 10)!;
-    expect(Math.hypot(withLane.x - plain.x, withLane.y - plain.y)).toBeCloseTo(
-      LANE_OFFSET_METRES,
-      6,
-    );
+    const withLane = sampleDirectedRoadWithLane(indexes, road.id, 10, offset)!;
+    expect(Math.hypot(withLane.x - plain.x, withLane.y - plain.y)).toBeCloseTo(offset, 6);
     // Right side of travel: for an eastbound heading the offset points south.
-    const eastbound = applyLaneOffset({ x: 0, y: 0, heading: 0 });
-    expect(eastbound.y).toBeCloseTo(-LANE_OFFSET_METRES, 9);
-    const westbound = applyLaneOffset({ x: 0, y: 0, heading: Math.PI });
-    expect(westbound.y).toBeCloseTo(LANE_OFFSET_METRES, 9);
+    const eastbound = applyLaneOffset({ x: 0, y: 0, heading: 0 }, offset);
+    expect(eastbound.y).toBeCloseTo(-offset, 9);
+    const westbound = applyLaneOffset({ x: 0, y: 0, heading: Math.PI }, offset);
+    expect(westbound.y).toBeCloseTo(offset, 9);
+    // Lane slots spread across the lanes the road actually has.
+    const lanes = directionalLanes(model, road.id);
+    if (lanes > 1) {
+      const first = laneCentreOffsetMetres(model, road.id, pairs, 0);
+      const last = laneCentreOffsetMetres(model, road.id, pairs, lanes - 1);
+      expect(Math.abs(last - first)).toBeCloseTo((lanes - 1) * LANE_WIDTH_M, 6);
+    }
   });
 
   it("maps blocked wait to the documented heat buckets", () => {
