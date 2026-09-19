@@ -31,6 +31,7 @@
 import type { LayerSpecification, StyleSpecification } from "maplibre-gl";
 import type { ShowcaseGeoJson } from "./map-geojson";
 import { CLOSE_TIER_MINZOOM, MID_TIER_MINZOOM } from "./zoom-grammar";
+import { roadVisualScaleAt } from "./road-presentation";
 
 /* ------------------------------------------------------------------ */
 /* Palette                                                             */
@@ -167,7 +168,7 @@ const FLOOR_PX: Record<number, number> = {
  */
 export function roadWidthPx(extraPx = 0, floorScale = 1): number {
   const at = (zoom: number) => {
-    const pixels: unknown[] = ["/", ["*", ["get", "widthM"], 2 ** zoom], METRES_PER_PIXEL_AT_Z0];
+    const pixels: unknown[] = ["/", ["*", ["get", "widthM"], roadVisualScaleAt(zoom), 2 ** zoom], METRES_PER_PIXEL_AT_Z0];
     const withExtra = extraPx > 0 ? ["+", pixels, extraPx] : pixels;
     // Far zoom exaggerates for legibility, and the exaggeration has to be
     // class-aware: with a shared floor every road collapses to ~1 px and the
