@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
-import { buildChicagoStyle, AREA_MIN, MAP_ZOOM } from "@/render/chicago-style";
+import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
 import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
@@ -105,11 +105,11 @@ describe("road presentation hierarchy", () => {
   });
 });
 
-describe("synthetic markings are gone", () => {
+describe("signal presentation stays simulation-first", () => {
   const indexes = buildDirectedPathIndexes(model);
   const plans = buildSignalPlans(model);
 
-  it("draws one stop bar per approach and nothing else", () => {
+  it("draws one colored state gate per physical approach arm", () => {
     const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2)!;
     const signals: PresentationSignal[] = [
       { intersectionId: entry[0], phaseIndex: 0, stage: "green" },
@@ -126,15 +126,14 @@ describe("synthetic markings are gone", () => {
     } as never;
     const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17.5, sprites);
     const ids = layers.map((layer) => layer.id).sort();
-    expect(ids).toEqual(["signals-heads", "signals-stopbars"]);
-    const bars = (layers.find((layer) => layer.id === "signals-stopbars") as unknown as {
+    expect(ids).toEqual(["signals-heads", "signals-state-gates"]);
+    const bars = (layers.find((layer) => layer.id === "signals-state-gates") as unknown as {
       props: { data: unknown[] };
     }).props.data;
     const heads = (layers.find((layer) => layer.id === "signals-heads") as unknown as {
       props: { data: unknown[] };
     }).props.data;
-    // Exactly one bar per head: no second parallel line pretending to be a
-    // crosswalk we do not actually know about.
+    // State gates and optional housings share the same deduped physical arms.
     expect(bars.length).toBe(heads.length);
   });
 });
@@ -161,7 +160,7 @@ describe("block fabric", () => {
     expect(at("blocks")).toBeLessThan(at("water"));
     expect(at("blocks")).toBeLessThan(at("parks"));
     expect(at("blocks")).toBeLessThan(at("roads-local"));
-    expect(at("blocks-edge")).toBeGreaterThan(at("blocks"));
+    expect(at("blocks-edge")).toBe(-1);
   });
 });
 
@@ -170,18 +169,18 @@ describe("detail hierarchy by zoom", () => {
   const byId = new Map(style.layers.map((layer) => [layer.id, layer]));
   const minzoom = (id: string) => (byId.get(id) as { minzoom?: number } | undefined)?.minzoom ?? 0;
 
-  it("shows blocks before any footprint, and prominent mass before clutter", () => {
-    expect(minzoom("blocks")).toBeLessThan(minzoom("buildings-prominent"));
-    expect(minzoom("buildings-prominent")).toBeLessThan(minzoom("buildings"));
-    expect(minzoom("buildings")).toBeLessThan(minzoom("buildings-small"));
-    expect(MAP_ZOOM.buildingsAll).toBeGreaterThan(MAP_ZOOM.buildings);
+  it("uses block fabric instead of raw building footprints", () => {
+    expect(minzoom("blocks")).toBeGreaterThan(0);
+    expect(byId.has("buildings-prominent")).toBe(false);
+    expect(byId.has("buildings")).toBe(false);
+    expect(byId.has("buildings-outline")).toBe(false);
   });
 
   it("keeps green and blue out until they are meaningful", () => {
     expect(AREA_MIN.parkFar).toBeGreaterThan(AREA_MIN.parkMid);
     expect(AREA_MIN.parkMid).toBeGreaterThan(AREA_MIN.parkClose);
     expect(AREA_MIN.waterFar).toBeGreaterThan(AREA_MIN.waterMid);
-    expect(AREA_MIN.waterMid).toBeGreaterThan(AREA_MIN.waterClose);
+    expect(AREA_MIN.waterMid).toBeGreaterThanOrEqual(AREA_MIN.waterClose);
     // Even at close zoom a scrap has a floor: no zero-area confetti.
     expect(AREA_MIN.parkClose).toBeGreaterThanOrEqual(500);
     expect(AREA_MIN.waterClose).toBeGreaterThanOrEqual(300);
@@ -222,5 +221,27 @@ describe("product shell contracts", () => {
     expect(chrome).toContain("CONTROLLER_OPTIONS");
     expect(chrome).toContain("Segmented");
     expect(map.toLowerCase()).toContain("attribution");
+  });
+
+  it("keeps onboarding traffic-free even while the worker is prewarmed", () => {
+    expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
+    expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
+  });
+
+  it("swaps every presentation source when the city scale changes", () => {
+    for (const source of [
+      "blocks",
+      "water",
+      "parks",
+      "roads-local",
+      "roads-detail",
+      "roads-arterial",
+      "roads-highway",
+      "bridges",
+      "labels",
+      "street-labels",
+    ]) {
+      expect(map).toContain(`setData("${source}"`);
+    }
   });
 });

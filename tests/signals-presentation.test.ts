@@ -1,19 +1,18 @@
 /**
  * Signal rendering grammar, zoom detail tiers, and the signal sprite contract.
  *
- * The product rejection list is explicit: no sea of coloured dots, no giant
- * signal dominating a road, no glyph in the middle of a junction, nothing on
- * expressways or roundabouts — and at close zoom a signal must read as a
- * traffic-light housing with an active lamp, not as a coloured circle. These
- * tests pin that grammar down, including the wiring that makes the sprite path
- * the live one.
+ * The product rejection list is explicit: no sea of coloured dots, no black
+ * hedgehog cluster at every junction, nothing on expressways or roundabouts.
+ * Signal STATE belongs at the stop line as a colored gate; the physical
+ * three-lamp housing is progressive close-zoom detail. These tests pin that
+ * grammar down, including deduplication of raw OSM approaches.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { metricToLngLat } from "@/cities/map-model";
-import { CLOSE_TIER_MINZOOM, detailTier } from "@/render/zoom-grammar";
+import { SIGNAL_HEAD_MINZOOM, SIGNAL_STATE_MINZOOM, detailTier } from "@/render/zoom-grammar";
 import {
   createSignalSprites,
   signalIconSizeForHousingPx,
@@ -46,10 +45,12 @@ function stubSprites(): SignalSpriteSet {
 
 type HeadLayer = {
   props: {
-    data: { position: [number, number]; sprite: SignalSpriteId; bearing: number }[];
+    data: { position: [number, number]; sprite: SignalSpriteId }[];
     iconMapping: Record<string, unknown>;
     getIcon: (head: { sprite: SignalSpriteId }) => string;
     getSize: number;
+    getAngle: number;
+    billboard: boolean;
     opacity: number;
   };
 };
@@ -111,12 +112,12 @@ describe("signal rendering", () => {
   const plans = buildSignalPlans(model);
   const sprites = stubSprites();
 
-  it("hides every signal glyph below street zoom", () => {
+  it("hides signal state until the camera is close enough to reason about an intersection", () => {
     const signals: PresentationSignal[] = [...plans.keys()]
       .slice(0, 12)
       .map((intersectionId) => ({ intersectionId, phaseIndex: 0, stage: "green" }));
     const snapshot = snapshotWithSignals(signals);
-    for (const zoom of [9, 11, 12.5, 13.9, CLOSE_TIER_MINZOOM - 0.05]) {
+    for (const zoom of [9, 11, 12.5, 14.5, SIGNAL_STATE_MINZOOM - 0.05]) {
       expect(
         buildSignalLayers(model.projection, model, snapshot, plans, indexes, zoom, sprites),
       ).toEqual([]);
@@ -130,6 +131,33 @@ describe("signal rendering", () => {
     expect(
       buildSignalLayers(model.projection, model, null, plans, indexes, 16, sprites),
     ).toEqual([]);
+  });
+
+  it("never expands raw OSM roads into more visual signal arms", () => {
+    for (const plan of [...plans.values()].slice(0, 40)) {
+      plan.groupIncoming.forEach((roads, index) => {
+        expect(plan.groupArms[index].length).toBeLessThanOrEqual(roads.length);
+        expect(plan.groupArms[index].length).toBeGreaterThan(0);
+      });
+    }
+  });
+
+  it("uses colored state gates before physical housings appear", () => {
+    const entry = [...plans.entries()].find(([, plan]) => plan.groupArms.length >= 2);
+    expect(entry).toBeTruthy();
+    const [intersectionId] = entry!;
+    const snapshot = snapshotWithSignals([{ intersectionId, phaseIndex: 0, stage: "green" }]);
+    const layers = buildSignalLayers(
+      model.projection,
+      model,
+      snapshot,
+      plans,
+      indexes,
+      SIGNAL_HEAD_MINZOOM - 0.05,
+      sprites,
+    );
+    expect(layers.find((layer) => layer.id === "signals-state-gates")).toBeTruthy();
+    expect(layers.find((layer) => layer.id === "signals-heads")).toBeUndefined();
   });
 
   it("draws heads from the signal atlas and never from a vehicle icon", () => {
@@ -151,6 +179,10 @@ describe("signal rendering", () => {
       expect(SIGNAL_SPRITE_IDS).toContain(headLayer.props.getIcon(head));
       expect(SIGNAL_SPRITE_IDS).toContain(head.sprite);
     }
+    // The physical traffic-light annotation stays screen-aligned. Direction is
+    // carried by the colored gate across the approach, not by rotating the icon.
+    expect(headLayer.props.getAngle).toBe(0);
+    expect(headLayer.props.billboard).toBe(true);
     // No coloured-dot layers survive anywhere in the signal stack.
     for (const layer of layers) {
       expect(["signals-lamps", "signals-lamps-idle", "signals-housings"]).not.toContain(layer.id);
@@ -164,8 +196,8 @@ describe("signal rendering", () => {
     const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17, null);
     expect(layers.find((layer) => layer.id === "signals-heads")).toBeUndefined();
     expect(layers.find((layer) => layer.id === "signals-lamps")).toBeUndefined();
-    // The stop bars are geometry, not state: they still render.
-    expect(layers.find((layer) => layer.id === "signals-stopbars")).toBeTruthy();
+    // The colored state gates are the primary signal channel and still render.
+    expect(layers.find((layer) => layer.id === "signals-state-gates")).toBeTruthy();
   });
 
   it("places heads on the approach, never in the middle of the junction", () => {
@@ -188,8 +220,6 @@ describe("signal rendering", () => {
       // Off the crossing, but on this junction's own approach.
       expect(metres).toBeGreaterThan(2);
       expect(metres).toBeLessThan(40);
-      // Oriented to its approach: the bearing is the approach's own heading.
-      expect(Number.isFinite(head.bearing)).toBe(true);
     }
   });
 

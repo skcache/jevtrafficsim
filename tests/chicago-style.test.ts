@@ -63,25 +63,21 @@ const minzoom = (id: string) => byId.get(id)?.minzoom as number | undefined;
 /* ------------------------------- palette -------------------------------- */
 
 describe("restrained basemap palette", () => {
-  it("never puts a saturated colour in the road hierarchy", () => {
-    // The old style drew highways in #f8ce8b over #d9a85c — an orange basemap
-    // that competed with the traffic it was supposed to carry.
+  it("keeps context roads neutral while giving highways one restrained identity cue", () => {
     for (const key of [
       "localSurface",
       "localCasing",
       "arterialSurface",
       "arterialCasing",
-      "highwaySurface",
-      "highwayCasing",
-      "highwayRail",
       "bridgeSurface",
       "bridgeCasing",
     ] as const) {
-      // The old palette drew highways in #f8ce8b over #d9a85c — chroma 109 and
-      // 125. Every road tone in the new palette stays under 40, which is the
-      // difference between "a map" and "an orange basemap".
       expect(chroma(CHICAGO_PALETTE[key]), `${key} chroma`).toBeLessThan(40);
     }
+    // The highway is allowed one muted warm family so users can identify the
+    // road class instantly; it still stays far below incident/congestion color.
+    expect(chroma(CHICAGO_PALETTE.highwaySurface)).toBeGreaterThan(40);
+    expect(chroma(CHICAGO_PALETTE.highwaySurface)).toBeLessThan(90);
   });
 
   it("keeps land, water and parks light and quiet", () => {
@@ -92,14 +88,11 @@ describe("restrained basemap palette", () => {
     }
   });
 
-  it("gives highways no colour advantage over arterials", () => {
+  it("makes highways recognizable without competing with traffic state", () => {
     const highway = toHsl(CHICAGO_PALETTE.highwaySurface);
     const arterial = toHsl(CHICAGO_PALETTE.arterialSurface);
-    // Hierarchy comes from width and casing; the surfaces stay in the same family.
-    // Hierarchy comes from width and a restrained tonal step; neither surface
-    // is allowed to be a saturated colour.
-    expect(Math.abs(highway.l - arterial.l)).toBeLessThan(0.12);
-    expect(chroma(CHICAGO_PALETTE.highwaySurface)).toBeLessThan(40);
+    expect(Math.abs(highway.l - arterial.l)).toBeLessThan(0.16);
+    expect(chroma(CHICAGO_PALETTE.highwaySurface)).toBeLessThan(90);
   });
 });
 
@@ -112,24 +105,18 @@ describe("subtraction at city zoom", () => {
     expect(byId.has("buildings-shadow")).toBe(false);
   });
 
-  it("keeps the layer list small enough to read as a designed map", () => {
-    // Phase 3.1 set this ceiling at 24. Phase 3.3 added four purposeful layers
-    // and raised it: blocks + blocks-edge (the city fabric), roads-detail
-    // (short stubs, close zoom only), and buildings-prominent (the mid-zoom
-    // aggregate mass). The ceiling stays a ceiling — every addition is named
-    // here, so an unexplained layer cannot slip in.
-    const phase33Additions = ["blocks", "blocks-edge", "roads-detail", "buildings-prominent"];
-    expect(layers.length).toBeLessThan(31);
-    expect(layers.length).toBeGreaterThanOrEqual(24 + phase33Additions.length - 1);
-    // No duplicate ids: a copy-paste layer would double-draw silently.
+  it("keeps the layer list deliberately small for a simulation, not a basemap clone", () => {
+    expect(layers.length).toBeLessThan(25);
+    expect(layers.length).toBeGreaterThanOrEqual(16);
     const ids = layers.map((layer) => layer.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("does not draw buildings until neighborhood zoom", () => {
-    expect(minzoom("buildings")).toBeGreaterThanOrEqual(14);
-    expect(minzoom("buildings-outline")).toBeGreaterThanOrEqual(16);
-    expect(minzoom("parks-edge")).toBeGreaterThanOrEqual(14);
+  it("does not draw raw building footprints at all", () => {
+    expect(byId.has("buildings-prominent")).toBe(false);
+    expect(byId.has("buildings")).toBe(false);
+    expect(byId.has("buildings-outline")).toBe(false);
+    expect(byId.has("blocks")).toBe(true);
   });
 
   it("hides small water and small green until the camera earns them", () => {
@@ -140,6 +127,7 @@ describe("subtraction at city zoom", () => {
     }
     expect(AREA_MIN.waterFar).toBeGreaterThan(AREA_MIN.waterMid);
     expect(AREA_MIN.parkFar).toBeGreaterThan(AREA_MIN.parkMid);
+    expect(AREA_MIN.parkMid).toBeGreaterThan(AREA_MIN.parkClose);
   });
 
   it("brings local streets in with the neighborhood, not the city", () => {
@@ -256,9 +244,10 @@ describe("label and debris reduction in the GeoJSON", () => {
     );
   });
 
-  it("drops measurable slivers but keeps every real footprint", () => {
+  it("keeps raw footprints as data but only orientation-scale green space in presentation", () => {
     const geo = buildShowcaseGeoJson(chicagoModel(4));
     expect(geo.buildings.features.length).toBeGreaterThan(5000);
-    expect(geo.parks.features.length).toBeGreaterThan(1000);
+    expect(geo.parks.features.length).toBeGreaterThan(0);
+    expect(geo.parks.features.length).toBeLessThan(500);
   });
 });

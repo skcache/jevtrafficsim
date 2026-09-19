@@ -42,11 +42,11 @@ import { CLOSE_TIER_MINZOOM, MID_TIER_MINZOOM } from "./zoom-grammar";
  * basemap competes with a red incident or an amber congested road.
  */
 export const CHICAGO_PALETTE = {
-  land: "#f6f3ec",
-  water: "#a9c6d8",
-  waterShore: "#e0ecf2",
+  land: "#f7f5f0",
+  water: "#bfd4df",
+  waterShore: "#eaf1f4",
   waterBank: "#8fb3c8",
-  park: "#ccd9c1",
+  park: "#d8e3d2",
   parkEdge: "#bccbae",
   /** Two building tones only, close enough to read as one mass. */
   buildingSmall: "#eae5da",
@@ -59,21 +59,21 @@ export const CHICAGO_PALETTE = {
    * neutral surface per block replaces thousands of individual footprints, so
    * the map reads as roads carving a coherent city instead of unrelated shapes.
    */
-  block: "#e9e4d8",
+  block: "#ece9e1",
   blockEdge: "#ddd6c6",
-  localSurface: "#ffffff",
-  localCasing: "#ded8cc",
-  arterialSurface: "#fffefb",
-  arterialCasing: "#cdc5b4",
+  localSurface: "#fffefa",
+  localCasing: "#e1ddd4",
+  arterialSurface: "#fffdf8",
+  arterialCasing: "#d0cabd",
   /** Highways: near-white surface, a warm grey casing, and WIDTH does the rest. */
-  highwaySurface: "#f4eddd",
-  highwayCasing: "#bcb19e",
-  highwayRail: "#a89d87",
+  highwaySurface: "#f0dfbd",
+  highwayCasing: "#c5ad7f",
+  highwayRail: "#9d8d70",
   highwayShadow: "#5c5242",
-  bridgeSurface: "#fdfaf3",
-  bridgeCasing: "#c8bfad",
+  bridgeSurface: "#fffdf7",
+  bridgeCasing: "#cec5b5",
   bridgeShadow: "#28404f",
-  marking: "#eee8d9",
+  marking: "#f6efe2",
   label: "#46423a",
   labelHalo: "#f8f5ee",
   ref: "#5f5a4e",
@@ -95,26 +95,26 @@ export const MAP_ZOOM = {
   waterBank: 13.6,
   /** City blocks are the urban mass; they arrive before any footprint does. */
   blocks: 11.6,
-  blocksEdge: 14.4,
+  blocksEdge: 17.2,
   /**
    * Buildings: at neighborhood zoom only the prominent masses read as aggregate
    * city weight; every footprint waits for street zoom.
    */
-  buildings: 14.2,
-  buildingsAll: 15.8,
-  buildingsOutline: 16.6,
+  buildings: 16.6,
+  buildingsAll: 17.4,
+  buildingsOutline: 17.9,
   /** Short unnamed stubs earn ink only when the camera is close. */
-  roadsDetail: 16,
+  roadsDetail: 18,
   /** Park edges, like building outlines, are a close-zoom instrument. */
-  parksEdge: 14.6,
-  landmarks: 13.4,
+  parksEdge: 17,
+  landmarks: 16.4,
   /** Local streets arrive with the neighborhood, not with the city. */
   localRoads: 12.8,
   highwayRail: 15,
-  markings: 16.2,
+  markings: 17.2,
   /** Highway refs are the spine and may appear early; street names may not. */
   streetRefs: 12.2,
-  streetNames: 15.2,
+  streetNames: 17.1,
   /** District and landmark labels, with collision doing the decluttering. */
   labels: 11.4,
 } as const;
@@ -125,18 +125,18 @@ export const MAP_ZOOM = {
  * grass sliver waits until the camera is close enough to mean it.
  */
 export const AREA_MIN = {
-  waterFar: 2500,
-  waterMid: 700,
+  waterFar: 12000,
+  waterMid: 5000,
   /**
    * Even at close zoom, water has to be a real body: compactness catches thin
    * wedges, but a small triangle is compact and still reads as a scrap beside
    * calm blocks.
    */
-  waterClose: 500,
-  parkFar: 12000,
-  parkMid: 2500,
+  waterClose: 5000,
+  parkFar: 40000,
+  parkMid: 20000,
   /** The same floor for green: below this it is a garden scrap, not a park. */
-  parkClose: 900,
+  parkClose: 12000,
 } as const;
 
 /** Zoom at which the mid-band area thresholds take over. */
@@ -220,8 +220,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     blocks: { type: "geojson", data: geo.blocks as never },
     water: { type: "geojson", data: geo.water as never },
     parks: { type: "geojson", data: geo.parks as never },
-    buildings: { type: "geojson", data: geo.buildings as never },
-    landmarks: { type: "geojson", data: geo.landmarks as never },
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
@@ -248,23 +246,12 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
           ["linear"],
           ["zoom"],
           MAP_ZOOM.blocks,
-          0.35,
+          0.42,
           13.5,
-          0.75,
-          15.5,
-          0.95,
+          0.62,
+          16.5,
+          0.72,
         ],
-      },
-    },
-    {
-      id: "blocks-edge",
-      type: "line",
-      source: "blocks",
-      minzoom: MAP_ZOOM.blocksEdge,
-      paint: {
-        "line-color": palette.blockEdge,
-        "line-width": zoomWidth(0.4, 0.7, 1),
-        "line-opacity": 0.7,
       },
     },
     {
@@ -285,17 +272,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: { "line-color": palette.waterShore, "line-width": zoomWidth(1.4, 2.4, 4) },
     },
     {
-      id: "water-bank",
-      type: "line",
-      source: "water",
-      minzoom: MAP_ZOOM.waterBank,
-      paint: {
-        "line-color": palette.waterBank,
-        "line-width": zoomWidth(0.5, 1, 1.6),
-        "line-opacity": 0.9,
-      },
-    },
-    {
       id: "parks",
       type: "fill",
       source: "parks",
@@ -303,68 +279,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         "fill-color": palette.park,
         // A 150 m² grass fragment is not geography at city zoom.
         "fill-opacity": areaGate(AREA_MIN.parkFar, AREA_MIN.parkMid, 15.5, AREA_MIN.parkClose),
-      },
-    },
-    {
-      id: "parks-edge",
-      type: "line",
-      source: "parks",
-      minzoom: MAP_ZOOM.parksEdge,
-      paint: { "line-color": palette.parkEdge, "line-width": zoomWidth(0.6, 1, 1.5) },
-    },
-    {
-      id: "landmarks",
-      type: "fill",
-      source: "landmarks",
-      minzoom: MAP_ZOOM.landmarks,
-      paint: { "fill-color": palette.landmark, "fill-opacity": 0.9 },
-    },
-    // Buildings: at neighborhood zoom only the prominent masses read as
-    // aggregate city weight; every ordinary footprint waits for street zoom, so
-    // blocks stay the main urban mass and nothing screams at equal importance.
-    {
-      id: "buildings-prominent",
-      type: "fill",
-      source: "buildings",
-      minzoom: MAP_ZOOM.buildings,
-      filter: ["==", ["get", "prominent"], true],
-      paint: {
-        "fill-color": palette.buildingLarge,
-        "fill-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.buildings, 0.4, 15.5, 0.75],
-      },
-    },
-    {
-      id: "buildings",
-      type: "fill",
-      source: "buildings",
-      minzoom: MAP_ZOOM.buildingsAll,
-      // Meaningful footprints only: below this a building is texture, and a
-      // field of tiny shapes beside calm blocks reads as debris.
-      filter: ["all", ["!=", ["get", "prominent"], true], [">=", ["get", "area"], 250]],
-      paint: {
-        "fill-color": palette.buildingSmall,
-        "fill-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.buildingsAll, 0.55, 16.6, 0.95],
-      },
-    },
-    {
-      id: "buildings-small",
-      type: "fill",
-      source: "buildings",
-      // The rest of the footprints earn ink only at the closest zooms, and
-      // quietly, so nothing competes with the block fabric.
-      minzoom: 17.2,
-      filter: ["all", ["!=", ["get", "prominent"], true], ["<", ["get", "area"], 250]],
-      paint: { "fill-color": palette.buildingSmall, "fill-opacity": 0.55 },
-    },
-    {
-      id: "buildings-outline",
-      type: "line",
-      source: "buildings",
-      minzoom: MAP_ZOOM.buildingsOutline,
-      paint: {
-        "line-color": palette.buildingLine,
-        "line-width": zoomWidth(0.4, 0.6, 0.9),
-        "line-opacity": 0.8,
       },
     },
     // Roads: casing + fill. Local < arterial < highway, and the highway earns
@@ -415,19 +329,19 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       id: "roads-arterial",
       type: "line",
       source: "roads-arterial",
-      paint: { "line-color": palette.arterialSurface, "line-width": roadWidthPx(0, 1.3) },
+      paint: { "line-color": palette.arterialSurface, "line-width": roadWidthPx(0, 1.45) },
     },
     {
       id: "roads-highway-casing",
       type: "line",
       source: "roads-highway",
-      paint: { "line-color": palette.highwayCasing, "line-width": roadWidthPx(2.6, 3.4) },
+      paint: { "line-color": palette.highwayCasing, "line-width": roadWidthPx(2.8, 3.6) },
     },
     {
       id: "roads-highway",
       type: "line",
       source: "roads-highway",
-      paint: { "line-color": palette.highwaySurface, "line-width": roadWidthPx(0, 3.2) },
+      paint: { "line-color": palette.highwaySurface, "line-width": roadWidthPx(0, 3.35) },
     },
     {
       id: "roads-highway-guardrail",
@@ -457,7 +371,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       id: "road-markings-highway",
       type: "line",
       source: "roads-highway",
-      minzoom: 15.4,
+      minzoom: 16.8,
       paint: {
         "line-color": palette.marking,
         "line-width": zoomWidth(0.5, 1, 1.6),

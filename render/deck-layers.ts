@@ -3,23 +3,21 @@
  * overlays, rebuilt each animation frame from the bounded 5 Hz presentation
  * snapshot (interpolated). The GPU draws everything — no DOM per vehicle.
  *
- * Vehicle language (two channels):
- *   body  = class identity (light chips, always legible on roads)
- *   ring  = wait heat (warm outline; dark ink while free-flowing)
- * Bodies are split into five heat-bucket layers drawn coldest-first so a
- * waiting vehicle is never buried under neutral ones.
+ * Presentation rule: the basemap supplies context; simulation state supplies
+ * meaning. Vehicles carry class identity, congestion lives on the road, and
+ * signals communicate right-of-way directly at the stop line.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, LineLayer, PathLayer, PolygonLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { DirectedPathIndexes } from "./map-geometry";
 import { applyLaneOffset } from "./map-geometry";
-import { LANE_WIDTH_M, type MapModel } from "@/cities/map-model";
+import type { MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
-import { widthPxAt } from "./road-presentation";
+import { carriagewayPairs, directionalLanes, laneCentreOffsetMetres, LANE_WIDTH_M, widthMetresForRoad, widthPxAt } from "./road-presentation";
 import {
-  CLOSE_TIER_MINZOOM,
+  SIGNAL_HEAD_MINZOOM,
+  SIGNAL_STATE_MINZOOM,
   VEHICLE_MINZOOM,
-  WAIT_HEAT_MINZOOM,
 } from "./zoom-grammar";
 import { samplePathIndex } from "@/cities/paths";
 import { deriveApproachGroups } from "@/sim/signals";
@@ -27,7 +25,6 @@ import type { RoadId } from "@/sim/types";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 import type { RenderedVehicle } from "./interpolate";
 import { metricToLngLat, type Projection } from "@/cities/map-model";
-import { waitHeatBucket, WAIT_HEAT_COLORS } from "./map-geometry";
 import {
   hatchSegments,
   signalTierOpacity,
@@ -49,40 +46,112 @@ export function toLngLat(projection: Projection, x: number, y: number): LngLat {
   return metricToLngLat(projection, x, y);
 }
 
+export interface SignalArm {
+  /** One representative directed road for a physical approach arm. */
+  readonly roadId: number;
+  /** Travel bearing into the intersection, radians. */
+  readonly bearing: number;
+  /** Centre of this direction's lane group, metres to the right of centreline. */
+  readonly laneOffsetM: number;
+  /** Half-width of the incoming lane group, not the entire two-way road. */
+  readonly halfWidthM: number;
+}
+
 export interface SignalPlanEntry {
   readonly intersectionId: number;
   readonly x: number;
   readonly y: number;
-  /** Mean bearing (radians) of each approach group, in phase order. */
+  /** Mean bearing (radians) of each phase group, in phase order. */
   readonly groupBearings: readonly number[];
-  /**
-   * Incoming road ids per approach group, in phase order. Signal heads are
-   * placed on these real approaches, at their stop lines, rather than at a
-   * single dot in the middle of the junction.
-   */
+  /** Raw simulation roads, preserved for phase semantics/debugging. */
   readonly groupIncoming: readonly (readonly number[])[];
+  /**
+   * Presentation arms for each phase group. Several raw OSM roads that arrive
+   * from effectively the same bearing collapse to one arm, preventing the
+   * black "signal hedgehog" clusters that made intersections unreadable.
+   */
+  readonly groupArms: readonly (readonly SignalArm[])[];
+}
+
+function roadBearing(model: MapModel, roadId: RoadId): number {
+  const road = model.city.roads[roadId];
+  const from = model.city.intersections[road.from];
+  const to = model.city.intersections[road.to];
+  return Math.atan2(to.y - from.y, to.x - from.x);
 }
 
 function meanBearing(model: MapModel, roads: readonly RoadId[]): number {
   let sx = 0;
   let sy = 0;
   for (const roadId of roads) {
-    const road = model.city.roads[roadId];
-    if (!road) {
-      continue;
-    }
-    const from = model.city.intersections[road.from];
-    const to = model.city.intersections[road.to];
-    const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-    sx += (to.x - from.x) / length;
-    sy += (to.y - from.y) / length;
+    const bearing = roadBearing(model, roadId);
+    sx += Math.cos(bearing);
+    sy += Math.sin(bearing);
   }
   return Math.atan2(sy, sx);
+}
+
+const SIGNAL_ARM_MERGE_RAD = (18 * Math.PI) / 180;
+
+function bearingDistance(a: number, b: number): number {
+  const full = Math.PI * 2;
+  const diff = Math.abs(a - b) % full;
+  return Math.min(diff, full - diff);
+}
+
+function presentationArms(
+  model: MapModel,
+  roads: readonly RoadId[],
+  pairs: ReturnType<typeof carriagewayPairs>,
+): SignalArm[] {
+  const candidates = roads
+    .filter((roadId) => !!model.city.roads[roadId])
+    .map((roadId) => {
+      const lanes = directionalLanes(model, roadId);
+      return {
+        roadId,
+        bearing: roadBearing(model, roadId),
+        laneOffsetM: laneCentreOffsetMetres(model, roadId, pairs),
+        halfWidthM: Math.max(1.5, (lanes * LANE_WIDTH_M) / 2),
+        carriagewayWidthM: widthMetresForRoad(model, roadId, pairs),
+        lanes,
+      };
+    })
+    .sort((a, b) => a.bearing - b.bearing || a.roadId - b.roadId);
+
+  const clusters: typeof candidates[] = [];
+  for (const candidate of candidates) {
+    const target = clusters.find((cluster) =>
+      cluster.some((member) => bearingDistance(member.bearing, candidate.bearing) <= SIGNAL_ARM_MERGE_RAD),
+    );
+    if (target) {
+      target.push(candidate);
+    } else {
+      clusters.push([candidate]);
+    }
+  }
+
+  return clusters
+    .map((cluster) =>
+      [...cluster].sort(
+        (a, b) =>
+          b.carriagewayWidthM - a.carriagewayWidthM ||
+          b.lanes - a.lanes ||
+          a.roadId - b.roadId,
+      )[0],
+    )
+    .map(({ roadId, bearing, laneOffsetM, halfWidthM }) => ({
+      roadId,
+      bearing,
+      laneOffsetM,
+      halfWidthM,
+    }));
 }
 
 /** Precomputed per-intersection phase geometry (built once per compiled scale). */
 export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> {
   const plans = new Map<number, SignalPlanEntry>();
+  const pairs = carriagewayPairs(model);
   for (const intersection of model.city.intersections) {
     if (intersection.control !== "signal") {
       continue;
@@ -94,19 +163,20 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
       y: intersection.y,
       groupBearings: groups.map((roads) => meanBearing(model, roads)),
       groupIncoming: groups.map((roads) => [...roads]),
+      groupArms: groups.map((roads) => presentationArms(model, roads, pairs)),
     });
   }
   return plans;
 }
 
-/** Stop line sits this far before the junction, on the real approach. */
+/** State gate sits this far before the junction, on the real approach. */
 const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
 
-/**
- * Zoom at which the full three-lamp housing is legible. Below it the sprite is
- * drawn a little smaller, because the individual lamps stop being separable.
- */
-const SIGNAL_FULL_HOUSING_MINZOOM = 16.8;
+const SIGNAL_GATE_COLORS: Record<SignalSpriteId, [number, number, number, number]> = {
+  "signal-red": [188, 63, 52, 235],
+  "signal-yellow": [207, 146, 45, 235],
+  "signal-green": [55, 137, 83, 235],
+};
 
 /* ------------------------------------------------------------------ */
 /* Congestion                                                          */
@@ -163,16 +233,19 @@ export function buildCongestionLayers(
  * never sampled out, because that is the information the frame is carrying.
  */
 export function vehicleSampleRatio(zoom: number): number {
-  if (zoom >= 16) {
+  if (zoom >= 16.8) {
     return 1;
   }
-  if (zoom >= 15) {
-    return 0.6;
+  if (zoom >= 16) {
+    return 0.72;
   }
-  if (zoom >= 14) {
-    return 0.25;
+  if (zoom >= 15.2) {
+    return 0.42;
   }
-  return 0.08;
+  if (zoom >= VEHICLE_MINZOOM) {
+    return 0.18;
+  }
+  return 0;
 }
 
 /** Stable hash, so the same vehicle is drawn or hidden frame after frame. */
@@ -238,36 +311,9 @@ export function buildVehicleLayers(
       }),
     );
   }
-  // Wait state: a thin outline on a blocked vehicle, close zoom only. No halo,
-  // no pulsing, no recoloured body — the road-level congestion overlay is the
-  // macro signal, and this is a whisper for the one vehicle you are watching.
-  if (zoom >= WAIT_HEAT_MINZOOM) {
-    const waiting = visible.filter((vehicle) => vehicle.blockedWaitMs > 0);
-    if (waiting.length > 0) {
-      layers.push(
-        new ScatterplotLayer<RenderedVehicle>({
-          id: "vehicle-wait-outline",
-          data: waiting,
-          getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-          getRadius: (vehicle) => iconSizeForLengthPx(vehicle.type, lengthPx(vehicle.type)) * 0.42,
-          radiusUnits: "pixels",
-          stroked: true,
-          filled: false,
-          getLineColor: (vehicle) => {
-            const bucket = waitHeatBucket(vehicle.blockedWaitMs);
-            const [r, g, b] = WAIT_HEAT_COLORS[Math.min(bucket, WAIT_HEAT_COLORS.length - 1)];
-            return [r, g, b, bucket >= 4 ? 150 : 90];
-          },
-          getLineWidth: 1,
-          lineWidthUnits: "pixels",
-          pickable: false,
-          updateTriggers: {
-            getLineColor: waiting.map((vehicle) => vehicle.blockedWaitMs).join(","),
-          },
-        }),
-      );
-    }
-  }
+  // Waiting is encoded by queue position and the road-level congestion layer.
+  // No circles, halos or heat rings are drawn around vehicles: those made the
+  // fleet read like debug particles instead of cars, trucks and bicycles.
   return layers;
 }
 
@@ -289,7 +335,7 @@ export function buildSignalLayers(
   // nothing at all: a city-wide field of coloured dots is debug state, and
   // congestion is carried by the road overlay instead. There is never a glyph
   // in the middle of a junction — heads sit on the real approaches.
-  if (!snapshot || zoom < CLOSE_TIER_MINZOOM) {
+  if (!snapshot || zoom < SIGNAL_STATE_MINZOOM) {
     return [];
   }
   const opacity = signalTierOpacity(zoom);
@@ -298,11 +344,10 @@ export function buildSignalLayers(
     position: LngLat;
     /** Which signal sprite this approach shows: its state, or red if not active. */
     sprite: SignalSpriteId;
-    /** Bearing of the approach, so the housing faces the traffic it controls. */
-    bearing: number;
   }
   interface Bar {
     path: LngLat[];
+    sprite: SignalSpriteId;
   }
   const heads: Head[] = [];
   const bars: Bar[] = [];
@@ -315,40 +360,46 @@ export function buildSignalLayers(
     const groupCount = plan.groupIncoming.length;
     const activeGroup =
       signal.stage === "all-red" ? -1 : ((signal.phaseIndex % groupCount) + groupCount) % groupCount;
-    plan.groupIncoming.forEach((roads, groupIndex) => {
-      // The active group shows its own lamp; every other approach reads red.
+    plan.groupArms.forEach((arms, groupIndex) => {
+      // The coloured gate is the primary signal language: state is painted
+      // directly at the stop line, so the user does not have to decode a tiny
+      // roadside object. Physical housings are progressive close-zoom detail.
       const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
-      for (const roadId of roads) {
-        const index = indexes[roadId];
-        const road = model.city.roads[roadId];
-        if (!index || !road || index.total < SIGNAL_STOP_BAR_OFFSET_M + 1) {
+      for (const arm of arms) {
+        const index = indexes[arm.roadId];
+        if (!index || index.total < SIGNAL_STOP_BAR_OFFSET_M + 1) {
           continue;
         }
         const stopProgress = index.total - SIGNAL_STOP_BAR_OFFSET_M;
         const sample = samplePathIndex(index, stopProgress);
-        const halfWidth = Math.max(1.4, (road.lanes * LANE_WIDTH_M) / 2);
-        // Stop bar across this approach, sized to the approach's own lanes.
+        const laneCenter = applyLaneOffset(sample, arm.laneOffsetM);
         const nx = -Math.sin(sample.heading);
         const ny = Math.cos(sample.heading);
         bars.push({
+          sprite,
           path: [
-            toLngLat(projection, sample.x - nx * halfWidth, sample.y - ny * halfWidth),
-            toLngLat(projection, sample.x + nx * halfWidth, sample.y + ny * halfWidth),
+            toLngLat(
+              projection,
+              laneCenter.x - nx * arm.halfWidthM,
+              laneCenter.y - ny * arm.halfWidthM,
+            ),
+            toLngLat(
+              projection,
+              laneCenter.x + nx * arm.halfWidthM,
+              laneCenter.y + ny * arm.halfWidthM,
+            ),
           ],
         });
-        // The head itself: kerbside of the approach, just before the stop line,
-        // so it reads as roadside infrastructure beside the approach rather than
-        // floating in the junction. (The synthetic crosswalk line that used to
-        // draw here is gone: we do not know where the crossings actually are.)
-        const headSample = applyLaneOffset(
-          samplePathIndex(index, Math.max(0, stopProgress - 2.2)),
-          halfWidth + 0.9,
-        );
-        heads.push({
-          position: toLngLat(projection, headSample.x, headSample.y),
-          sprite,
-          bearing: sample.heading,
-        });
+        if (zoom >= SIGNAL_HEAD_MINZOOM) {
+          const headSample = applyLaneOffset(
+            samplePathIndex(index, Math.max(0, stopProgress - 2.4)),
+            arm.laneOffsetM + arm.halfWidthM + 1.2,
+          );
+          heads.push({
+            position: toLngLat(projection, headSample.x, headSample.y),
+            sprite,
+          });
+        }
       }
     });
   }
@@ -357,14 +408,16 @@ export function buildSignalLayers(
   if (bars.length > 0) {
     layers.push(
       new PathLayer<Bar>({
-        id: "signals-stopbars",
+        id: "signals-state-gates",
         data: bars,
         getPath: (bar) => bar.path,
-        // Stop bars sit on a near-white road surface, so they read as a dark
-        // neutral line rather than a white one that disappears into the casing.
-        getColor: [120, 112, 98, Math.round(190 * opacity)],
+        getColor: (bar) => {
+          const [r, g, b, a] = SIGNAL_GATE_COLORS[bar.sprite];
+          return [r, g, b, Math.round(a * opacity)];
+        },
         getWidth: 3,
         widthUnits: "pixels",
+        capRounded: true,
         pickable: false,
       }),
     );
@@ -385,15 +438,15 @@ export function buildSignalLayers(
         iconMapping: sprites.mapping,
         getIcon: (head) => head.sprite,
         getPosition: (head) => head.position,
-        // The housing is portrait, so rotating by the approach bearing turns
-        // the lamp row across the road and the face meets the traffic.
-        getSize: signalIconSizeForHousingPx(
-          zoom >= SIGNAL_FULL_HOUSING_MINZOOM ? 11 : 9,
-        ),
-        getAngle: (head) => (head.bearing * 180) / Math.PI,
+        // The state gate already communicates approach direction. The housing
+        // is therefore screen-aligned like a map annotation, which keeps the
+        // familiar red/yellow/green stack instantly recognizable at any street
+        // angle instead of turning into a tiny rotated black dash.
+        getSize: signalIconSizeForHousingPx(zoom >= 17.8 ? 15 : 13),
+        getAngle: 0,
         opacity,
         sizeUnits: "pixels",
-        billboard: false,
+        billboard: true,
         pickable: false,
       }),
     );
@@ -479,7 +532,8 @@ export function buildIncidentLayers(
       closedRoundels.push(toLngLat(projection, mid[0], mid[1]));
       const already = plates.some((plate) => plate.label.startsWith(name));
       if (!already) {
-        plates.push({ id: `bridge-${name}`, kind: "bridge-closed", x: mid[0], y: mid[1], label: `${name} closed` });
+        const closureLabel = name.length > 28 ? "Road closed" : `${name} closed`;
+        plates.push({ id: `bridge-${name}`, kind: "bridge-closed", x: mid[0], y: mid[1], label: closureLabel });
       }
     } else {
       closedPaths.push(converted);
@@ -547,8 +601,8 @@ export function buildIncidentLayers(
         id: "closed-roads",
         data: closedPaths,
         getPath: (path) => path,
-        getColor: [200, 64, 44, 210],
-        getWidth: 9,
+        getColor: [176, 57, 43, 175],
+        getWidth: 5,
         widthUnits: "pixels",
         capRounded: true,
         pickable: false,
@@ -570,8 +624,8 @@ export function buildIncidentLayers(
         id: "closed-bridges",
         data: closedBridgePaths,
         getPath: (path) => path,
-        getColor: [176, 57, 43, 235],
-        getWidth: 12,
+        getColor: [176, 57, 43, 195],
+        getWidth: 7,
         widthUnits: "pixels",
         capRounded: true,
         pickable: false,
@@ -584,13 +638,13 @@ export function buildIncidentLayers(
         id: "closed-roundels",
         data: closedRoundels,
         getPosition: (position) => position,
-        getRadius: 6,
+        getRadius: 4,
         radiusUnits: "pixels",
         getFillColor: [255, 253, 249, 250],
         stroked: true,
         getLineColor: [176, 57, 43, 250],
         lineWidthUnits: "pixels",
-        getLineWidth: 2.5,
+        getLineWidth: 1.5,
         pickable: false,
       }),
     );
@@ -607,7 +661,7 @@ export function buildIncidentLayers(
         getPosition: (center) => center.position,
         // Sized to read at neighborhood zoom: a 4 px dot vanished into the
         // basemap, and an incident marker nobody can see is not a marker.
-        getRadius: 6.5,
+        getRadius: 5,
         radiusUnits: "pixels",
         filled: true,
         getFillColor: [176, 126, 68, 240],
@@ -635,7 +689,7 @@ export function buildIncidentLayers(
         id: "crash-markers",
         data: crashMarkers,
         getPosition: (marker) => marker.position,
-        getRadius: 8,
+        getRadius: 6,
         radiusUnits: "pixels",
         getFillColor: [176, 57, 43, 245],
         stroked: true,

@@ -10,10 +10,9 @@
  * bounded 5 Hz presentation snapshots, interpolated to display rate in one
  * rAF loop.
  *
- * Presentation grammar: a warm printed city. Land, water, parks, district
- * tints and three road classes carry the hierarchy; buildings gain a long
- * shadow at street zoom; labels follow a rank ladder and incidents surface
- * their own plates. React renders this component once per scale; nothing here
+ * Presentation grammar: muted city context under explicit simulation state.
+ * Blocks, water, major parks and road hierarchy orient the user; vehicles,
+ * right-of-way gates, congestion and incidents carry the experiment. React renders this component once per scale; nothing here
  * rerenders per frame. No simulation logic on this thread.
  */
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -40,11 +39,9 @@ import {
 import { roadPressure } from "@/render/congestion";
 import {
   boundsLngLat as cameraBoundsLngLat,
-  centralBounds,
   FIT_PADDING,
   networkBounds,
   presetPose,
-  PRESET_PADDING,
 } from "@/render/camera-presets";
 import { buildChicagoStyle } from "@/render/chicago-style";
 import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
@@ -268,10 +265,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
 
     const handle: MapHandle = {
       flyToCentral: (options) => {
-        map.fitBounds(cameraBoundsLngLat(initialModel, centralBounds(initialModel)), {
-          padding: PRESET_PADDING,
-          duration: options?.immediate ? 0 : 1500,
-          maxZoom: 17.4,
+        // Enter City should immediately demonstrate the PRODUCT: roughly
+        // four-to-seven blocks, legible vehicle classes and signal state. A
+        // generic downtown fit was technically geographic but too zoomed out
+        // to explain why this is a traffic simulator.
+        const street = presetPose("street");
+        map.easeTo({
+          center: [street.center[0], street.center[1]],
+          zoom: street.zoom,
+          duration: options?.immediate ? 0 : 1350,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
@@ -415,9 +417,14 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
-        const layers: Layer[] = trafficHiddenRef.current
+        const layers: Layer[] = trafficHiddenRef.current || !liveRef.current
           ? []
           : [
+              // Road pressure is the macro layer and belongs BELOW the things
+              // the user is actually inspecting. Landing/configuration stays
+              // deliberately traffic-free; simulation state appears only after
+              // Enter City so the first live frame has a clear semantic shift.
+              ...congestion,
               ...buildVehicleLayers(
                 projection,
                 settled,
@@ -434,12 +441,13 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 signalSpritesRef.current,
               ),
               ...incidents.layers,
-              ...congestion,
             ];
         overlayRef.current?.setProps({ layers });
-        platesRef.current = incidents.extras.plates;
-        crashRef.current = incidents.extras.crash;
-        syncPlates(incidents.extras.plates);
+        const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
+        const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
+        platesRef.current = visiblePlates;
+        crashRef.current = showDynamicMapState ? incidents.extras.crash : null;
+        syncPlates(visiblePlates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];
           for (const vehicle of settled) {
@@ -503,14 +511,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         source?.setData(data as never);
       };
       setData("land", current.land);
+      setData("blocks", current.blocks);
       setData("water", current.water);
       setData("parks", current.parks);
-      setData("buildings", current.buildings);
       setData("roads-local", current.roadsLocal);
+      setData("roads-detail", current.roadsDetail);
       setData("roads-arterial", current.roadsArterial);
       setData("roads-highway", current.roadsHighway);
       setData("bridges", current.bridges);
-      setData("landmarks", current.landmarks);
+      setData("labels", current.labels);
+      setData("street-labels", current.streetLabels);
     };
     if (map.isStyleLoaded()) {
       apply();
