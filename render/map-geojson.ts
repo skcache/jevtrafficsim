@@ -133,7 +133,8 @@ const AREA_SLIVER_COMPACTNESS = 0.12;
  * fragments are valid OSM data but visual noise here, so only geography large
  * enough to orient the traffic view reaches presentation.
  */
-const PRESENTATION_WATER_MIN_AREA_M2 = 5_000;
+const PRESENTATION_WATER_MIN_AREA_M2 = 2_500;
+const PRESENTATION_WATER_COMPACTNESS = 0.08;
 const PRESENTATION_PARK_MIN_AREA_M2 = 12_000;
 const PRESENTATION_PARK_COMPACTNESS = 0.16;
 
@@ -211,9 +212,11 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
         if (entry.kind === "lake" || entry.kind === "river" || entry.rings.length > 1) {
           return true;
         }
+        const outer = entry.rings[0];
         return (
           entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
-          compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS
+          outer.length >= 6 &&
+          compactnessOf(outer) >= PRESENTATION_WATER_COMPACTNESS
         );
       })
       .map((entry, index) =>
