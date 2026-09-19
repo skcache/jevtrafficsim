@@ -22,33 +22,35 @@ import type { VehicleType } from "@/sim/types";
  * without becoming dots, and the body still fits inside a 1-lane casing.
  */
 export const VEHICLE_BASE_LENGTHS: Record<VehicleType, number> = {
-  car: 12,
-  truck: 18,
-  bicycle: 7,
+  car: 14,
+  truck: 21,
+  bicycle: 9,
 };
 
-const FAR_SCALE = 0.58; // 7 px car at city zoom — a chip, never sub-pixel noise
+const FAR_SCALE = 0.72;
 const MID_SCALE = 1;
-const CLOSE_SCALE = 1.06; // ~12.7 px car at maximum zoom
+const CLOSE_SCALE = 1.12;
 
 /**
- * Zoom → sprite scale. Three bands (city / district / street) with smooth
- * ramps: below 15.2 a chip, 15.2-16.2 to full size, then gently larger.
+ * Zoom → sprite scale. Vehicles do not exist at city zoom at all. Once the
+ * camera is close enough to inspect traffic, class identity matters more than
+ * cartographic literalism: a bike, car and truck must be distinguishable in a
+ * glance, so the glyphs are intentionally a touch larger than map-scale truth.
  */
 export function vehicleSizeScale(zoom: number): number {
   if (!Number.isFinite(zoom)) {
     return MID_SCALE;
   }
-  if (zoom <= 15.2) {
+  if (zoom <= 14.4) {
     return FAR_SCALE;
   }
-  if (zoom <= 16.2) {
-    return FAR_SCALE + ((zoom - 15.2) / 1) * (MID_SCALE - FAR_SCALE);
+  if (zoom <= 16) {
+    return FAR_SCALE + ((zoom - 14.4) / 1.6) * (MID_SCALE - FAR_SCALE);
   }
-  if (zoom >= 19.5) {
+  if (zoom >= 18.2) {
     return CLOSE_SCALE;
   }
-  return MID_SCALE + ((zoom - 16.2) / 3.3) * (CLOSE_SCALE - MID_SCALE);
+  return MID_SCALE + ((zoom - 16) / 2.2) * (CLOSE_SCALE - MID_SCALE);
 }
 
 export function vehicleLengthPx(type: VehicleType, zoom: number): number {
@@ -59,23 +61,18 @@ export function vehicleLengthPx(type: VehicleType, zoom: number): number {
 /* Signals                                                             */
 /* ------------------------------------------------------------------ */
 
-export type SignalTier = "hidden" | "far" | "mid" | "close";
+export type SignalTier = "hidden" | "mid" | "close";
 
 /**
- * Zoom tiers with generous fade bands (never a hard cut): city view keeps a
- * small dot, district view a disc plus the active axis, street view a head.
+ * Signals are not decoration. They appear only when the camera is close enough
+ * for the user to reason about an intersection. Mid zoom shows the state gate;
+ * close zoom may add the physical three-lamp head.
  */
 export function signalTier(zoom: number): SignalTier {
-  if (!Number.isFinite(zoom) || zoom < 13.0) {
+  if (!Number.isFinite(zoom) || zoom < 15.8) {
     return "hidden";
   }
-  if (zoom < 14.6) {
-    return "far";
-  }
-  if (zoom < 16.4) {
-    return "mid";
-  }
-  return "close";
+  return zoom < 17 ? "mid" : "close";
 }
 
 /** 0..1 opacity for the tier, ramped over its first 0.6 zoom of existence. */
@@ -84,8 +81,8 @@ export function signalTierOpacity(zoom: number): number {
   if (tier === "hidden") {
     return 0;
   }
-  const start = tier === "far" ? 13.0 : tier === "mid" ? 14.6 : 16.4;
-  return Math.min(1, Math.max(0, (zoom - start) / 0.6));
+  const start = tier === "mid" ? 15.8 : 17;
+  return Math.min(1, Math.max(0, (zoom - start) / 0.4));
 }
 
 /* ------------------------------------------------------------------ */
