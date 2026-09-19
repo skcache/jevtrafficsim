@@ -220,8 +220,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     blocks: { type: "geojson", data: geo.blocks as never },
     water: { type: "geojson", data: geo.water as never },
     parks: { type: "geojson", data: geo.parks as never },
-    buildings: { type: "geojson", data: geo.buildings as never },
-    landmarks: { type: "geojson", data: geo.landmarks as never },
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
@@ -283,9 +281,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         "fill-opacity": areaGate(AREA_MIN.parkFar, AREA_MIN.parkMid, 15.5, AREA_MIN.parkClose),
       },
     },
-    // Buildings: at neighborhood zoom only the prominent masses read as
-    // aggregate city weight; every ordinary footprint waits for street zoom, so
-    // blocks stay the main urban mass and nothing screams at equal importance.
     // Roads: casing + fill. Local < arterial < highway, and the highway earns
     // its rank from width and structure rather than from a louder colour.
     {
