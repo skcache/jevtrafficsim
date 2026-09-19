@@ -155,12 +155,24 @@ describe("Chicago GeoJSON", () => {
     }
   });
 
-  it("includes the river and the lakefront water", () => {
+  it("includes the Chicago River and lakefront as semantic geography", () => {
     const geo = buildShowcaseGeoJson(chicagoModel(4));
     expect(geo.water.features.length).toBeGreaterThan(0);
-    // Water polygons must be a meaningful share of the frame.
+
+    // Presentation simplification is allowed to reduce vertex count. What must
+    // never disappear is the geography that orients Chicago itself.
+    const kinds = new Set(geo.water.features.map((feature) => String(feature.properties.kind)));
+    expect(kinds.has("river")).toBe(true);
+    expect(kinds.has("lake")).toBe(true);
+
     const points = geo.water.features.flatMap((feature) => feature.geometry.coordinates[0]);
-    expect(points.length).toBeGreaterThan(100);
+    expect(points.length).toBeGreaterThan(40);
+    const lons = points.map(([lon]) => lon);
+    const lats = points.map(([, lat]) => lat);
+    // River + lakefront must span a material part of the Metro frame, not one
+    // surviving decorative basin.
+    expect(Math.max(...lons) - Math.min(...lons)).toBeGreaterThan(0.01);
+    expect(Math.max(...lats) - Math.min(...lats)).toBeGreaterThan(0.01);
   });
 
   it("is deterministic", () => {
