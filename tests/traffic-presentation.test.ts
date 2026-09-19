@@ -94,6 +94,20 @@ const rendered = (id: number, blockedWaitMs = 0): RenderedVehicle => ({
 });
 
 describe("vehicle zoom strategy", () => {
+  it("never adds a per-vehicle wait halo layer", () => {
+    const fleet = [rendered(1, 9000), rendered(2, 0)];
+    const layers = buildVehicleLayers(chicagoModel(2).projection, fleet, {
+      atlas: "data:image/png;base64,",
+      mapping: {
+        car: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+        truck: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+        bicycle: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+      },
+    }, 17);
+    expect(layers.some((layer) => layer.id === "vehicle-wait-outline")).toBe(false);
+  });
+
+
   it("draws nothing at city zoom", () => {
     const fleet = Array.from({ length: 40 }, (_, index) => rendered(index));
     expect(buildVehicleLayers(chicagoModel(2).projection, fleet, null as never, VEHICLE_MINZOOM - 0.1)).toEqual([]);
@@ -118,10 +132,11 @@ describe("vehicle zoom strategy", () => {
     }
   });
 
-  it("thins with distance and is complete at close zoom", () => {
+  it("thins with distance and is complete only at true close zoom", () => {
     expect(vehicleSampleRatio(13.5)).toBeLessThan(vehicleSampleRatio(14.5));
     expect(vehicleSampleRatio(14.5)).toBeLessThan(vehicleSampleRatio(15.5));
-    expect(vehicleSampleRatio(16.5)).toBe(1);
+    expect(vehicleSampleRatio(15.5)).toBeLessThan(vehicleSampleRatio(16.5));
+    expect(vehicleSampleRatio(16.8)).toBe(1);
   });
 });
 
