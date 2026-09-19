@@ -72,7 +72,7 @@ export function signalTier(zoom: number): SignalTier {
   if (!Number.isFinite(zoom) || zoom < 15.8) {
     return "hidden";
   }
-  return zoom < 17 ? "mid" : "close";
+  return zoom < 16.5 ? "mid" : "close";
 }
 
 /** 0..1 opacity for the tier, ramped over its first 0.6 zoom of existence. */
@@ -81,7 +81,7 @@ export function signalTierOpacity(zoom: number): number {
   if (tier === "hidden") {
     return 0;
   }
-  const start = tier === "mid" ? 15.8 : 17;
+  const start = tier === "mid" ? 15.8 : 16.5;
   return Math.min(1, Math.max(0, (zoom - start) / 0.4));
 }
 
