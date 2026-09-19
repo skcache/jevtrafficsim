@@ -30,7 +30,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import { metricToLngLat, type MapModel } from "@/cities/map-model";
 import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
-import { packQueues } from "@/render/queue-packing";
+import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   carriagewayPairs,
   laneCentreOffsetMetres,
@@ -386,12 +386,22 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             })
           : [];
         // Presentation-only queue packing: same simulation state, same pixels.
+        const signalClamped = buffer.current
+          ? clampVehiclesAtSignals(
+              buffer.model.city,
+              buffer.paths,
+              laneOffsets,
+              interpolated,
+              (id) => progress.get(id) ?? 0,
+              buffer.current.signals,
+            )
+          : [];
         const vehicles = buffer.current
           ? packQueues(
               buffer.model.city,
               buffer.paths,
               laneOffsets,
-              interpolated,
+              signalClamped,
               (id) => progress.get(id) ?? 0,
             )
           : [];
