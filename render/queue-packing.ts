@@ -33,6 +33,8 @@ import {
   stopLineSetbackMetres,
 } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
+import type { PresentationSignal } from "@/worker/presentation-snapshot";
+import { deriveApproachGroups } from "@/sim/signals";
 
 /**
  * Queued means the authoritative rank says so (`>= 0`; the renderer uses -1 for
@@ -41,6 +43,86 @@ import type { City } from "@/sim/types";
  */
 export function isQueued(vehicle: RenderedVehicle): boolean {
   return vehicle.queueRank >= 0;
+}
+
+
+/**
+ * Clamp vehicles to the rendered stop line when their incoming signal does not
+ * currently permit that approach. The simulation's control point lives at the
+ * graph node (road end), but presentation has a physical stop line several
+ * metres upstream. Without this clamp a moving car can visibly enter the
+ * intersection for one snapshot before the simulation flips it to queued.
+ */
+export function clampVehiclesAtSignals(
+  city: City,
+  indexes: DirectedPathIndexes,
+  laneOffsets: readonly number[],
+  vehicles: readonly RenderedVehicle[],
+  progressOf: (vehicleId: number) => number,
+  signals: readonly PresentationSignal[],
+): RenderedVehicle[] {
+  const signalByIntersection = new Map(signals.map((signal) => [signal.intersectionId, signal]));
+  const groupCache = new Map<number, readonly (readonly number[])[]>();
+
+  return vehicles.map((vehicle) => {
+    if (vehicle.roadId === null) {
+      return vehicle;
+    }
+    const road = city.roads[vehicle.roadId];
+    const index = indexes[vehicle.roadId];
+    if (!road || !index) {
+      return vehicle;
+    }
+    const signal = signalByIntersection.get(road.to);
+    if (!signal) {
+      return vehicle;
+    }
+
+    let groups = groupCache.get(road.to);
+    if (!groups) {
+      groups = deriveApproachGroups(city, road.to);
+      groupCache.set(road.to, groups);
+    }
+    const groupIndex = groups.findIndex((group) => group.includes(vehicle.roadId!));
+    if (groupIndex < 0 || groups.length === 0) {
+      return vehicle;
+    }
+    const activeGroup = ((signal.phaseIndex % groups.length) + groups.length) % groups.length;
+    const approachPermitted =
+      signal.stage !== "all-red" &&
+      groupIndex === activeGroup &&
+      (signal.stage === "green" || signal.stage === "yellow");
+    if (approachPermitted) {
+      return vehicle;
+    }
+
+    const bodyLength = VEHICLE_LENGTH_M[vehicle.type] ?? VEHICLE_LENGTH_M.car;
+    const stopProgress = Math.max(
+      0,
+      Math.min(
+        road.length,
+        index.total -
+          stopLineSetbackMetres(road.lanes) -
+          bodyLength / 2 -
+          STOP_LINE_CLEARANCE_M,
+      ),
+    );
+    const currentProgress = Math.max(0, progressOf(vehicle.id));
+    if (currentProgress <= stopProgress) {
+      return vehicle;
+    }
+
+    const sample = applyLaneOffset(
+      samplePathIndex(index, stopProgress),
+      laneOffsets[vehicle.roadId] ?? 0,
+    );
+    return {
+      ...vehicle,
+      x: sample.x,
+      y: sample.y,
+      headingRadians: sample.heading,
+    };
+  });
 }
 
 /**
