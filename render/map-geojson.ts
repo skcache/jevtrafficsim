@@ -203,11 +203,19 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.water
-      .filter(
-        (entry) =>
+      .filter((entry) => {
+        // The Chicago River is intentionally long and thin, so compactness is
+        // the wrong metric for the major water that actually orients the city.
+        // Keep named semantic water and polygons with islands/holes; only apply
+        // debris filtering to generic extracted water fragments.
+        if (entry.kind === "lake" || entry.kind === "river" || entry.rings.length > 1) {
+          return true;
+        }
+        return (
           entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
-          compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS,
-      )
+          compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS
+        );
+      })
       .map((entry, index) =>
       polygonFeature(projection, entry.rings, {
         id: `water-${index}`,
