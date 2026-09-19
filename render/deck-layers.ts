@@ -13,7 +13,7 @@ import type { DirectedPathIndexes } from "./map-geometry";
 import { applyLaneOffset } from "./map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
-import { carriagewayPairs, widthMetresForRoad, widthPxAt } from "./road-presentation";
+import { carriagewayPairs, directionalLanes, laneCentreOffsetMetres, LANE_WIDTH_M, widthMetresForRoad, widthPxAt } from "./road-presentation";
 import {
   SIGNAL_HEAD_MINZOOM,
   SIGNAL_STATE_MINZOOM,
@@ -51,7 +51,9 @@ export interface SignalArm {
   readonly roadId: number;
   /** Travel bearing into the intersection, radians. */
   readonly bearing: number;
-  /** Half of the physical carriageway width, metres. */
+  /** Centre of this direction's lane group, metres to the right of centreline. */
+  readonly laneOffsetM: number;
+  /** Half-width of the incoming lane group, not the entire two-way road. */
   readonly halfWidthM: number;
 }
 
@@ -104,12 +106,17 @@ function presentationArms(
 ): SignalArm[] {
   const candidates = roads
     .filter((roadId) => !!model.city.roads[roadId])
-    .map((roadId) => ({
-      roadId,
-      bearing: roadBearing(model, roadId),
-      halfWidthM: Math.max(1.6, widthMetresForRoad(model, roadId, pairs) / 2),
-      lanes: model.city.roads[roadId].lanes,
-    }))
+    .map((roadId) => {
+      const lanes = directionalLanes(model, roadId);
+      return {
+        roadId,
+        bearing: roadBearing(model, roadId),
+        laneOffsetM: laneCentreOffsetMetres(model, roadId, pairs),
+        halfWidthM: Math.max(1.5, (lanes * LANE_WIDTH_M) / 2),
+        carriagewayWidthM: widthMetresForRoad(model, roadId, pairs),
+        lanes,
+      };
+    })
     .sort((a, b) => a.bearing - b.bearing || a.roadId - b.roadId);
 
   const clusters: typeof candidates[] = [];
@@ -128,12 +135,17 @@ function presentationArms(
     .map((cluster) =>
       [...cluster].sort(
         (a, b) =>
-          b.halfWidthM - a.halfWidthM ||
+          b.carriagewayWidthM - a.carriagewayWidthM ||
           b.lanes - a.lanes ||
           a.roadId - b.roadId,
       )[0],
     )
-    .map(({ roadId, bearing, halfWidthM }) => ({ roadId, bearing, halfWidthM }));
+    .map(({ roadId, bearing, laneOffsetM, halfWidthM }) => ({
+      roadId,
+      bearing,
+      laneOffsetM,
+      halfWidthM,
+    }));
 }
 
 /** Precomputed per-intersection phase geometry (built once per compiled scale). */
@@ -360,19 +372,28 @@ export function buildSignalLayers(
         }
         const stopProgress = index.total - SIGNAL_STOP_BAR_OFFSET_M;
         const sample = samplePathIndex(index, stopProgress);
+        const laneCenter = applyLaneOffset(sample, arm.laneOffsetM);
         const nx = -Math.sin(sample.heading);
         const ny = Math.cos(sample.heading);
         bars.push({
           sprite,
           path: [
-            toLngLat(projection, sample.x - nx * arm.halfWidthM, sample.y - ny * arm.halfWidthM),
-            toLngLat(projection, sample.x + nx * arm.halfWidthM, sample.y + ny * arm.halfWidthM),
+            toLngLat(
+              projection,
+              laneCenter.x - nx * arm.halfWidthM,
+              laneCenter.y - ny * arm.halfWidthM,
+            ),
+            toLngLat(
+              projection,
+              laneCenter.x + nx * arm.halfWidthM,
+              laneCenter.y + ny * arm.halfWidthM,
+            ),
           ],
         });
         if (zoom >= SIGNAL_HEAD_MINZOOM) {
           const headSample = applyLaneOffset(
             samplePathIndex(index, Math.max(0, stopProgress - 2.4)),
-            arm.halfWidthM + 1.2,
+            arm.laneOffsetM + arm.halfWidthM + 1.2,
           );
           heads.push({
             position: toLngLat(projection, headSample.x, headSample.y),
