@@ -332,8 +332,6 @@ export function buildSignalLayers(
     position: LngLat;
     /** Which signal sprite this approach shows: its state, or red if not active. */
     sprite: SignalSpriteId;
-    /** Bearing of the approach, so the housing faces the traffic it controls. */
-    bearing: number;
   }
   interface Bar {
     path: LngLat[];
@@ -379,7 +377,6 @@ export function buildSignalLayers(
           heads.push({
             position: toLngLat(projection, headSample.x, headSample.y),
             sprite,
-            bearing: sample.heading,
           });
         }
       }
@@ -420,13 +417,15 @@ export function buildSignalLayers(
         iconMapping: sprites.mapping,
         getIcon: (head) => head.sprite,
         getPosition: (head) => head.position,
-        // The housing is portrait, so rotating by the approach bearing turns
-        // the lamp row across the road and the face meets the traffic.
-        getSize: signalIconSizeForHousingPx(zoom >= 17.8 ? 12 : 10),
-        getAngle: (head) => (head.bearing * 180) / Math.PI,
+        // The state gate already communicates approach direction. The housing
+        // is therefore screen-aligned like a map annotation, which keeps the
+        // familiar red/yellow/green stack instantly recognizable at any street
+        // angle instead of turning into a tiny rotated black dash.
+        getSize: signalIconSizeForHousingPx(zoom >= 17.8 ? 15 : 13),
+        getAngle: 0,
         opacity,
         sizeUnits: "pixels",
-        billboard: false,
+        billboard: true,
         pickable: false,
       }),
     );
