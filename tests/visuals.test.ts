@@ -31,8 +31,19 @@ describe("vehicle sizing", () => {
     expect(vehicleSizeScale(13)).toBeCloseTo(0.58, 5);
     expect(vehicleSizeScale(15.2)).toBeCloseTo(0.58, 5);
     expect(vehicleSizeScale(16.2)).toBeCloseTo(1, 5);
-    expect(vehicleSizeScale(19.5)).toBeCloseTo(1.32, 5);
-    expect(vehicleSizeScale(21)).toBeCloseTo(1.32, 5);
+    expect(vehicleSizeScale(19.5)).toBeCloseTo(1.06, 5);
+    expect(vehicleSizeScale(21)).toBeCloseTo(1.06, 5);
+    // Close-zoom glyph sizes land inside the product targets: car 10-13 px,
+    // truck 16-20 px, bicycle 6-8 px.
+    const car = vehicleLengthPx("car", 19.5);
+    const truck = vehicleLengthPx("truck", 19.5);
+    const bicycle = vehicleLengthPx("bicycle", 19.5);
+    expect(car).toBeGreaterThanOrEqual(10);
+    expect(car).toBeLessThanOrEqual(13);
+    expect(truck).toBeGreaterThanOrEqual(16);
+    expect(truck).toBeLessThanOrEqual(20);
+    expect(bicycle).toBeGreaterThanOrEqual(6);
+    expect(bicycle).toBeLessThanOrEqual(8);
   });
 
   it("never shrinks as zoom increases", () => {
@@ -51,7 +62,7 @@ describe("vehicle sizing", () => {
     expect(vehicleLengthPx("car", 14)).toBeCloseTo(6.96, 2);
     expect(vehicleLengthPx("car", 16.2)).toBe(12);
     expect(vehicleLengthPx("truck", 16.2)).toBe(18);
-    expect(vehicleLengthPx("bicycle", 16.2)).toBe(8);
+    expect(vehicleLengthPx("bicycle", 16.2)).toBe(7);
   });
 
   it("thickens the ring and adds a halo as a vehicle waits", () => {

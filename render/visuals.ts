@@ -26,15 +26,20 @@ export const VEHICLE_BODY_COLORS: Record<VehicleType, [number, number, number]> 
 export const VEHICLE_OUTLINE_COLOR: [number, number, number, number] = [38, 32, 26, 150];
 
 /** Reference sprite length per class at the mid band (px). */
+/**
+ * Base glyph lengths in pixels at mid zoom. With the close-zoom scale below
+ * these land at car ~12.7, truck ~19, bicycle ~7.4 px: readable class identity
+ * without becoming dots, and the body still fits inside a 1-lane casing.
+ */
 export const VEHICLE_BASE_LENGTHS: Record<VehicleType, number> = {
   car: 12,
   truck: 18,
-  bicycle: 8,
+  bicycle: 7,
 };
 
 const FAR_SCALE = 0.58; // 7 px car at city zoom — a chip, never sub-pixel noise
 const MID_SCALE = 1;
-const CLOSE_SCALE = 1.32; // 16 px car at maximum zoom
+const CLOSE_SCALE = 1.06; // ~12.7 px car at maximum zoom
 
 /**
  * Zoom → sprite scale. Three bands (city / district / street) with smooth

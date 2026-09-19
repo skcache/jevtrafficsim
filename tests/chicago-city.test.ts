@@ -9,13 +9,14 @@ import { describe, expect, it } from "vitest";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import { CHICAGO_SCALES, CHICAGO_VENUES, chicagoScaleForSize, nearestIntersectionTo } from "@/cities/chicago";
-import { metricToLngLat } from "@/cities/map-model";
+import { metricToLngLat, pointInPolygon } from "@/cities/map-model";
+import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { createEngine, queueIncident, stepEngine, takeSnapshot } from "@/sim/engine";
 import { findRoute } from "@/sim/astar";
 import { generateDemand } from "@/sim/demand";
 import { checkTrafficInvariants } from "@/sim/traffic";
 import { buildCityPartition, validatePartition } from "@/sim/regions";
-import { chicagoAsset, chicagoModel } from "./chicago-support";
+import { chicagoAsset, chicagoFeatures, chicagoModel } from "./chicago-support";
 
 const ALL_SCALES = [0, 1, 2, 3, 4];
 /**
@@ -230,6 +231,15 @@ describe("Chicago road semantics", () => {
     // different layer.
     const asset = chicagoAsset(4);
     const byId = new Map(asset.intersections.map((entry) => [entry.id, entry]));
+    // Layer of each node, from its own incident roads. Chicago has genuinely
+    // stacked streets (Upper and Lower Wacker, Upper and Lower Stetson), so a
+    // near miss only matters when both are on the same level.
+    const nodeLayer = new Map<number, number>();
+    for (const road of asset.roads) {
+      const layer = road.layer ?? 0;
+      nodeLayer.set(road.from, Math.min(nodeLayer.get(road.from) ?? layer, layer));
+      nodeLayer.set(road.to, Math.min(nodeLayer.get(road.to) ?? layer, layer));
+    }
     const grid = new Map<string, number[]>();
     const cell = 50;
     const key = (x: number, y: number) => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
@@ -256,6 +266,9 @@ describe("Chicago road semantics", () => {
               const other = byId.get(id)!;
               if (Math.hypot(other.x - x, other.y - y) > 2.5) {
                 continue;
+              }
+              if ((nodeLayer.get(id) ?? 0) !== (road.layer ?? 0)) {
+                continue; // stacked streets are grade-separated by definition
               }
               // The other node's roads must be connected to this road, or the
               // node would be a visual crossing the importer invented.
@@ -451,6 +464,113 @@ describe("Chicago engine compatibility", () => {
       expect(cursor).toBe(to);
       // Deterministic: the same OD pair routes identically.
       expect(JSON.stringify(findRoute(city, from, to))).toBe(JSON.stringify(route));
+    }
+  });
+
+  it("anchors every road endpoint exactly on its intersection", () => {
+    // Consolidation used to rewire logical endpoints while leaving the polyline
+    // at the dropped OSM node, so a rendered road could end up to the
+    // consolidation tolerance away from its junction.
+    for (const scale of ALL_SCALES) {
+      const model = chicagoModel(scale);
+      let worst = 0;
+      for (const road of model.city.roads) {
+        const path = model.directedPaths[road.id];
+        expect(path, `road ${road.id} path`).not.toBeNull();
+        if (!path) {
+          continue;
+        }
+        const from = model.city.intersections[road.from];
+        const to = model.city.intersections[road.to];
+        const start = path[0];
+        const end = path[path.length - 1];
+        worst = Math.max(
+          worst,
+          Math.hypot(start[0] - from.x, start[1] - from.y),
+          Math.hypot(end[0] - to.x, end[1] - to.y),
+        );
+      }
+      expect(worst, `scale ${scale} worst endpoint gap (m)`).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it("keeps every scale strongly connected", () => {
+    // The public showcase keeps only the largest strongly connected component,
+    // so every intersection must be reachable from every other one.
+    for (const scale of ALL_SCALES) {
+      const model = chicagoModel(scale);
+      const total = model.city.intersections.length;
+      const reach = (reverse: boolean) => {
+        const seen = new Set<number>([0]);
+        const queue = [0];
+        while (queue.length > 0) {
+          const current = queue.shift()!;
+          const roads = reverse
+            ? model.city.intersections[current].incoming
+            : model.city.intersections[current].outgoing;
+          for (const roadId of roads) {
+            const next = reverse ? model.city.roads[roadId].from : model.city.roads[roadId].to;
+            if (!seen.has(next)) {
+              seen.add(next);
+              queue.push(next);
+            }
+          }
+        }
+        return seen.size;
+      };
+      // Forward + backward reachability from one node == strong connectivity.
+      expect(reach(false), `scale ${scale} forward reach`).toBe(total);
+      expect(reach(true), `scale ${scale} backward reach`).toBe(total);
+    }
+  });
+
+  it("keeps polygon holes through the model and into MapLibre", () => {
+    const model = chicagoModel(4);
+    const holedBuildings = model.buildings.filter((building) => building.rings.length > 1);
+    const holedWater = model.water.filter((entry) => entry.rings.length > 1);
+    expect(holedBuildings.length, "buildings with courtyards").toBeGreaterThan(0);
+    expect(holedWater.length, "water with islands").toBeGreaterThan(0);
+    const geo = buildShowcaseGeoJson(model);
+    expect(geo.buildings.features.some((feature) => feature.geometry.coordinates.length > 1)).toBe(
+      true,
+    );
+    expect(geo.water.features.some((feature) => feature.geometry.coordinates.length > 1)).toBe(
+      true,
+    );
+  });
+
+  it("identifies water-crossing bridges geographically", () => {
+    for (const scale of [2, 3, 4]) {
+      const model = chicagoModel(scale);
+      const asset = chicagoAsset(scale);
+      expect(model.waterCrossingBridges.length, `scale ${scale} water crossings`).toBeGreaterThan(
+        0,
+      );
+      for (const crossing of model.waterCrossingBridges) {
+        const road = asset.roads[crossing.roadId];
+        expect(road.bridge, `target ${crossing.roadId} must be a bridge`).toBe(true);
+        const inWater = model.water.some(
+          (entry) =>
+            pointInPolygon(crossing.at, entry.rings[0]) &&
+            !entry.rings.slice(1).some((hole) => pointInPolygon(crossing.at, hole)),
+        );
+        expect(inWater, `crossing ${crossing.groupId} midpoint must be in water`).toBe(true);
+      }
+    }
+  });
+
+  it("has no duplicate building identity or geometry in the frozen asset", () => {
+    const features = chicagoFeatures().buildings.features;
+    expect(features.length).toBeGreaterThan(1000);
+    const identities = new Set<string>();
+    const geometries = new Set<string>();
+    for (const feature of features) {
+      const id = `${String(feature.properties.osmId)}#${String(feature.properties.part)}`;
+      expect(identities.has(id), `duplicate building identity ${id}`).toBe(false);
+      identities.add(id);
+      const geometry = JSON.stringify(feature.geometry);
+      expect(geometries.has(geometry), "duplicate building geometry").toBe(false);
+      geometries.add(geometry);
     }
   });
 

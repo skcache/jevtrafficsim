@@ -85,17 +85,68 @@ describe("Chicago GeoJSON", () => {
     expect(curved.length).toBeGreaterThan(model.streets.length * 0.3);
   });
 
-  it("labels real Chicago places", () => {
+  it("labels real Chicago places as symbol features", () => {
     const geo = buildShowcaseGeoJson(chicagoModel(4));
-    const names = geo.labels.map((label) => label.name);
+    const names = geo.labels.features.map((feature) => feature.properties.name);
     expect(names).toContain("The Loop");
     expect(names).toContain("United Center");
     expect(names).toContain("Soldier Field");
     expect(names).toContain("Grant Park");
-    // Labels only exist inside the extent.
-    for (const label of geo.labels) {
-      expect(label.at[0]).toBeLessThan(-87.5);
-      expect(label.at[1]).toBeGreaterThan(41.8);
+    // Labels only exist inside the extent, and every one carries a priority.
+    for (const feature of geo.labels.features) {
+      const [lon, lat] = feature.geometry.coordinates;
+      expect(lon).toBeLessThan(-87.5);
+      expect(lat).toBeGreaterThan(41.8);
+      expect(Number.isFinite(feature.properties.rank as number)).toBe(true);
+    }
+    // Priority order: landmarks outrank districts (lower sort key wins).
+    const landmark = geo.labels.features.find(
+      (feature) => feature.properties.kind === "landmark",
+    )!;
+    const district = geo.labels.features.find((feature) => feature.properties.kind === "district")!;
+    expect(landmark.properties.rank as number).toBeLessThan(district.properties.rank as number);
+  });
+
+  it("carries real street and highway names for line labels", () => {
+    const geo = buildShowcaseGeoJson(chicagoModel(4));
+    expect(geo.streetLabels.features.length).toBeGreaterThan(50);
+    const names = new Set(geo.streetLabels.features.map((feature) => feature.properties.name));
+    // Real Chicago names, never invented ones.
+    expect([...names].some((name) => String(name).includes("Michigan"))).toBe(true);
+    for (const feature of geo.streetLabels.features) {
+      expect(String(feature.properties.name).length).toBeGreaterThan(2);
+      expect(feature.geometry.coordinates.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("sizes roads from their own lanes, not one fixed width", () => {
+    const geo = buildShowcaseGeoJson(chicagoModel(4));
+    const widths = new Set<number>();
+    for (const collection of [geo.roadsLocal, geo.roadsArterial, geo.roadsHighway]) {
+      for (const feature of collection.features) {
+        const widthM = feature.properties.widthM as number;
+        expect(widthM).toBeGreaterThan(3);
+        expect(widthM).toBeLessThan(40);
+        widths.add(Math.round(widthM * 10));
+      }
+    }
+    // A one-lane residential street and a multi-lane arterial must differ.
+    expect(widths.size).toBeGreaterThan(3);
+  });
+
+  it("keeps bridges inside their own road class", () => {
+    const geo = buildShowcaseGeoJson(chicagoModel(4));
+    const highwayBridges = geo.bridges.features.filter(
+      (feature) => feature.properties.osmClass === "motorway",
+    );
+    expect(highwayBridges.length).toBeGreaterThan(0);
+    // The same piece is also in the highway collection: a motorway bridge
+    // renders with motorway hierarchy.
+    const highwayIds = new Set(
+      geo.roadsHighway.features.map((feature) => feature.properties.streetId),
+    );
+    for (const bridge of highwayBridges) {
+      expect(highwayIds.has(bridge.properties.streetId)).toBe(true);
     }
   });
 

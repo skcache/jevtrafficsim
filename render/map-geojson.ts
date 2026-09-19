@@ -8,6 +8,7 @@
  * Framework-free and deterministic.
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
+import { pointInPolygon } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
 
 export type LngLat = readonly [number, number];
@@ -64,10 +65,15 @@ function closedRing(projection: Projection, points: readonly Point[]): LngLat[] 
 
 function polygonFeature(
   projection: Projection,
-  points: readonly Point[],
+  rings: readonly (readonly Point[])[],
   properties: Record<string, string | number | boolean>,
 ): Feature<PolygonGeometry> {
-  return { type: "Feature", properties, geometry: { type: "Polygon", coordinates: [closedRing(projection, points)] } };
+  return {
+    type: "Feature",
+    properties,
+    // Outer ring first, then holes: MapLibre renders inner rings as cut-outs.
+    geometry: { type: "Polygon", coordinates: rings.map((ring) => closedRing(projection, ring)) },
+  };
 }
 
 function pointFeature(
@@ -102,20 +108,6 @@ export interface ShowcaseLabels {
 }
 
 /** Ray-cast point-in-polygon (deterministic, no dependencies). */
-function pointInPolygon(point: readonly [number, number], polygon: readonly Point[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const [xi, yi] = polygon[i];
-    const [xj, yj] = polygon[j];
-    if (yi > point[1] !== yj > point[1]) {
-      const x = ((xj - xi) * (point[1] - yi)) / (yj - yi) + xi;
-      if (point[0] < x) {
-        inside = !inside;
-      }
-    }
-  }
-  return inside;
-}
 
 /**
  * Crude inward offset: scales the polygon about its centroid so canopy blobs
@@ -145,7 +137,9 @@ export interface ShowcaseGeoJson {
   readonly roadsHighway: FeatureCollection<LineGeometry>;
   readonly bridges: FeatureCollection<LineGeometry>;
   readonly landmarks: FeatureCollection<PolygonGeometry>;
-  readonly labels: readonly ShowcaseLabels[];
+  readonly labels: FeatureCollection<PointGeometry>;
+  /** Real street/highway names, line-placed at neighborhood zoom. */
+  readonly streetLabels: FeatureCollection<LineGeometry>;
   /** Ordered layer ids for the MapLibre style. */
   readonly layerOrder: readonly string[];
 }
@@ -158,10 +152,12 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       polygonFeature(
         projection,
         [
-          [model.bounds.minX, model.bounds.minY],
-          [model.bounds.maxX, model.bounds.minY],
-          [model.bounds.maxX, model.bounds.maxY],
-          [model.bounds.minX, model.bounds.maxY],
+          [
+            [model.bounds.minX, model.bounds.minY],
+            [model.bounds.maxX, model.bounds.minY],
+            [model.bounds.maxX, model.bounds.maxY],
+            [model.bounds.minX, model.bounds.maxY],
+          ],
         ],
         { kind: "land" },
       ),
@@ -170,21 +166,33 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const districts: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.districts.map((district) =>
-      polygonFeature(projection, district.polygon, { id: district.id, name: district.name, kind: district.kind }),
+      polygonFeature(projection, district.rings, { id: district.id, name: district.name, kind: district.kind }),
     ),
   };
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.water.map((polygon, index) => polygonFeature(projection, polygon, { id: `water-${index}` })),
+    features: model.water.map((entry, index) =>
+      polygonFeature(projection, entry.rings, {
+        id: `water-${index}`,
+        kind: entry.kind,
+        areaM2: Math.round(entry.areaM2),
+      }),
+    ),
   };
   const parks: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.parks.map((polygon, index) => polygonFeature(projection, polygon, { id: `park-${index}` })),
+    features: model.parks.map((entry, index) =>
+      polygonFeature(projection, entry.rings, {
+        id: `park-${index}`,
+        kind: entry.kind,
+        areaM2: Math.round(entry.areaM2),
+      }),
+    ),
   };
   // Canopy: deterministic groves inside park polygons (a grid with a fixed
   // pattern), so parks read as planted ground rather than flat green squares.
   const canopyFeatures: Feature<PointGeometry>[] = [];
-  for (const polygon of model.parks) {
+  for (const polygon of model.parks.map((entry) => entry.rings[0])) {
     const xs = polygon.map(([x]) => x);
     const ys = polygon.map(([, y]) => y);
     const step = 26;
@@ -211,13 +219,14 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     type: "FeatureCollection",
     features: model.buildings.map((building) => {
       // Shoelace area (m²) drives the three building tones in the map style.
+      const outerRing = building.rings[0];
       let area = 0;
-      for (let i = 0, j = building.polygon.length - 1; i < building.polygon.length; j = i, i += 1) {
-        const [xi, yi] = building.polygon[i];
-        const [xj, yj] = building.polygon[j];
+      for (let i = 0, j = outerRing.length - 1; i < outerRing.length; j = i, i += 1) {
+        const [xi, yi] = outerRing[i];
+        const [xj, yj] = outerRing[j];
         area += xj * yi - xi * yj;
       }
-      return polygonFeature(projection, building.polygon, {
+      return polygonFeature(projection, building.rings, {
         district: building.district,
         prominent: building.prominent,
         area: Math.round(Math.abs(area) / 2),
@@ -240,15 +249,30 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       kind: piece.kind,
       district: piece.district,
       name: piece.bridge?.name ?? "",
+      // Physical metadata for the style: width in metres, class, structure.
+      widthM: piece.widthM,
+      lanesTotal: piece.lanesTotal,
+      osmClass: piece.osmClass,
+      bridge: piece.bridgeStructure,
+      tunnel: piece.tunnel,
+      layer: piece.layer,
+      oneway: piece.oneway,
     });
-    if (piece.kind === "bridge") {
-      bridge.push(feature);
-    } else if (piece.kind === "highway") {
+    // Hierarchy follows the OSM class, never "it is a bridge": a motorway
+    // bridge stays a motorway on screen.
+    if (piece.osmClass === "motorway" || piece.osmClass === "trunk" || piece.osmClass.endsWith("_link")) {
       highway.push(feature);
-    } else if (piece.kind === "arterial") {
+    } else if (
+      piece.osmClass === "primary" ||
+      piece.osmClass === "secondary" ||
+      piece.osmClass === "tertiary"
+    ) {
       arterial.push(feature);
     } else {
       local.push(feature);
+    }
+    if (piece.bridgeStructure) {
+      bridge.push(feature);
     }
   }
   return {
@@ -265,15 +289,44 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     landmarks: {
       type: "FeatureCollection",
       features: model.landmarks.map((landmark) =>
-        polygonFeature(projection, landmark.polygon, { id: landmark.id, name: landmark.name, kind: landmark.kind }),
+        polygonFeature(projection, landmark.rings, { id: landmark.id, name: landmark.name, kind: landmark.kind }),
       ),
     },
-    labels: model.labels.map((label) => ({
-      name: label.name,
-      at: toLngLat(projection, label.at),
-      rank: label.rank,
-      kind: label.kind,
-    })),
+    labels: {
+      type: "FeatureCollection",
+      // Symbol-layer labels: MapLibre's collision engine places these, so they
+      // never stack on each other or across traffic the way DOM markers did.
+      features: model.labels.map((label) =>
+        pointFeature(projection, label.at, {
+          name: label.name,
+          // Priority order: 1 landmark, 2 district, 3 highway ref, 4 arterial.
+          rank: label.kind === "landmark" ? label.rank : label.rank + 2,
+          kind: label.kind,
+        }),
+      ),
+    },
+    // Real Chicago street and highway names, line-placed and limited to the
+    // roads that carry a name worth reading at neighborhood zoom.
+    streetLabels: {
+      type: "FeatureCollection",
+      features: model.streets
+        .filter(
+          (piece) =>
+            piece.name !== undefined &&
+            (piece.osmClass === "motorway" ||
+              piece.osmClass === "trunk" ||
+              piece.osmClass === "primary" ||
+              piece.osmClass === "secondary"),
+        )
+        .map((piece) =>
+          lineFeature(projection, piece.points, {
+            name: piece.name ?? "",
+            ref: piece.ref ?? "",
+            osmClass: piece.osmClass,
+            rank: piece.osmClass === "motorway" || piece.osmClass === "trunk" ? 3 : 4,
+          }),
+        ),
+    },
     layerOrder: [
       "land",
       "district-tint",

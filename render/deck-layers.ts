@@ -11,7 +11,13 @@
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, LineLayer, PathLayer, PolygonLayer, ScatterplotLayer } from "@deck.gl/layers";
-import type { MapModel } from "@/cities/map-model";
+import type { DirectedPathIndexes } from "./map-geometry";
+import { applyLaneOffset } from "./map-geometry";
+import { LANE_WIDTH_M, type MapModel } from "@/cities/map-model";
+import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
+import { widthPxAt } from "./road-presentation";
+import { CLOSE_TIER_MINZOOM, CROSSWALK_MINZOOM, WAIT_HEAT_MINZOOM } from "./zoom-grammar";
+import { samplePathIndex } from "@/cities/paths";
 import { deriveApproachGroups } from "@/sim/signals";
 import type { RoadId } from "@/sim/types";
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
@@ -22,10 +28,7 @@ import {
   egressArrows,
   groupByHeatBucket,
   hatchSegments,
-  signalAxisReachMetres,
-  signalTier,
   signalTierOpacity,
-  stopBarGeometry,
   VEHICLE_BODY_COLORS,
   VEHICLE_OUTLINE_COLOR,
   ringScaleForZoom,
@@ -49,6 +52,12 @@ export interface SignalPlanEntry {
   readonly y: number;
   /** Mean bearing (radians) of each approach group, in phase order. */
   readonly groupBearings: readonly number[];
+  /**
+   * Incoming road ids per approach group, in phase order. Signal heads are
+   * placed on these real approaches, at their stop lines, rather than at a
+   * single dot in the middle of the junction.
+   */
+  readonly groupIncoming: readonly (readonly number[])[];
 }
 
 function meanBearing(model: MapModel, roads: readonly RoadId[]): number {
@@ -81,16 +90,64 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
       x: intersection.x,
       y: intersection.y,
       groupBearings: groups.map((roads) => meanBearing(model, roads)),
+      groupIncoming: groups.map((roads) => [...roads]),
     });
   }
   return plans;
 }
+
+/** Stop line sits this far before the junction, on the real approach. */
+const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
 
 const SIGNAL_COLORS = {
   green: [47, 138, 85, 235] as const,
   yellow: [201, 138, 43, 235] as const,
   "all-red": [178, 58, 44, 235] as const,
 };
+
+/* ------------------------------------------------------------------ */
+/* Congestion                                                          */
+/* ------------------------------------------------------------------ */
+
+export interface CongestionRoad {
+  readonly roadId: number;
+  readonly path: readonly LngLat[];
+  /** Physical width in metres, so the overlay matches the road it covers. */
+  readonly widthM: number;
+}
+
+/**
+ * Far/mid-zoom congestion: only roads under real pressure are drawn, at their
+ * own physical width, in restrained amber/orange/red. This is what replaces
+ * per-vehicle detail when the camera pulls back.
+ */
+export function buildCongestionLayers(
+  roads: readonly CongestionRoad[],
+  pressure: readonly RoadPressure[],
+  zoom: number,
+): Layer[] {
+  if (pressure.length === 0) {
+    return [];
+  }
+  const byId = new Map(roads.map((road) => [road.roadId, road]));
+  const data = pressure
+    .map((entry) => ({ entry, road: byId.get(entry.roadId) }))
+    .filter((item): item is { entry: RoadPressure; road: CongestionRoad } => !!item.road?.path.length);
+  if (data.length === 0) {
+    return [];
+  }
+  return [
+    new PathLayer<(typeof data)[number]>({
+      id: "road-congestion",
+      data,
+      getPath: (item) => item.road.path as unknown as LngLat[],
+      getColor: (item) => [...CONGESTION_COLORS[item.entry.level]],
+      getWidth: (item) => Math.max(1.4, widthPxAt(zoom, item.road.widthM)),
+      widthUnits: "pixels",
+      pickable: false,
+    }),
+  ];
+}
 
 /* ------------------------------------------------------------------ */
 /* Vehicles                                                            */
@@ -105,10 +162,16 @@ export function buildVehicleLayers(
   if (vehicles.length === 0) {
     return [];
   }
+  // Wait heat is a close-zoom instrument. Further out, individual heat rings
+  // read as coloured confetti, and the road-level congestion overlay carries
+  // the same information far better.
+  const heatVisible = zoom >= WAIT_HEAT_MINZOOM;
   // Glow first: the most patient vehicles get a soft warm bloom underneath.
   const halos = new IconLayer<RenderedVehicle>({
     id: "vehicle-halos",
-    data: vehicles.filter((vehicle) => vehicleHaloExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) > 0),
+    data: heatVisible
+      ? vehicles.filter((vehicle) => vehicleHaloExtraPx(waitHeatBucket(vehicle.blockedWaitMs)) > 0)
+      : [],
     iconAtlas: icons.atlas,
     iconMapping: icons.mapping,
     getIcon: (vehicle) => vehicle.type,
@@ -175,156 +238,118 @@ export function buildVehicleLayers(
 /* Signals                                                             */
 /* ------------------------------------------------------------------ */
 
-interface SignalEntry {
-  intersectionId: number;
-  position: LngLat;
-  x: number;
-  y: number;
-  color: readonly [number, number, number, number];
-  bearing: number | null;
-  phaseIndex: number;
-}
 
 export function buildSignalLayers(
   projection: Projection,
+  model: MapModel,
   snapshot: PresentationSnapshot | null,
   plans: Map<number, SignalPlanEntry>,
+  indexes: DirectedPathIndexes,
   zoom: number,
 ): Layer[] {
-  const tier = signalTier(zoom);
-  if (!snapshot || tier === "hidden") {
+  // Signals are a street-zoom instrument. At far and mid zoom this returns
+  // nothing at all: a city-wide field of coloured dots is debug state, and
+  // congestion is carried by the road overlay instead. There is never a glyph
+  // in the middle of a junction — heads sit on the real approaches.
+  if (!snapshot || zoom < CLOSE_TIER_MINZOOM) {
     return [];
   }
   const opacity = signalTierOpacity(zoom);
-  const entries: SignalEntry[] = [];
+  const crosswalks = zoom >= CROSSWALK_MINZOOM;
+
+  interface Head {
+    position: LngLat;
+    color: readonly [number, number, number, number];
+  }
+  interface Bar {
+    path: LngLat[];
+  }
+  const heads: Head[] = [];
+  const bars: Bar[] = [];
+
   for (const signal of snapshot.signals) {
     const plan = plans.get(signal.intersectionId);
-    if (!plan) {
+    if (!plan || plan.groupIncoming.length === 0) {
       continue;
     }
-    const base = SIGNAL_COLORS[signal.stage];
-    const bearing =
-      signal.stage !== "all-red" && plan.groupBearings.length > 0
-        ? plan.groupBearings[signal.phaseIndex % plan.groupBearings.length]
-        : null;
-    entries.push({
-      intersectionId: signal.intersectionId,
-      position: toLngLat(projection, plan.x, plan.y),
-      x: plan.x,
-      y: plan.y,
-      color: [base[0], base[1], base[2], Math.round(base[3] * opacity)],
-      bearing,
-      phaseIndex: signal.phaseIndex,
+    const groupCount = plan.groupIncoming.length;
+    const activeGroup =
+      signal.stage === "all-red" ? -1 : ((signal.phaseIndex % groupCount) + groupCount) % groupCount;
+    plan.groupIncoming.forEach((roads, groupIndex) => {
+      // The active group shows its own colour; every other approach reads red.
+      const base = groupIndex === activeGroup ? SIGNAL_COLORS[signal.stage] : SIGNAL_COLORS["all-red"];
+      const color = [base[0], base[1], base[2], Math.round(base[3] * opacity)] as const;
+      for (const roadId of roads) {
+        const index = indexes[roadId];
+        const road = model.city.roads[roadId];
+        if (!index || !road || index.total < SIGNAL_STOP_BAR_OFFSET_M + 1) {
+          continue;
+        }
+        const stopProgress = index.total - SIGNAL_STOP_BAR_OFFSET_M;
+        const sample = samplePathIndex(index, stopProgress);
+        const halfWidth = Math.max(1.4, (road.lanes * LANE_WIDTH_M) / 2);
+        // Stop bar across this approach, sized to the approach's own lanes.
+        const nx = -Math.sin(sample.heading);
+        const ny = Math.cos(sample.heading);
+        bars.push({
+          path: [
+            toLngLat(projection, sample.x - nx * halfWidth, sample.y - ny * halfWidth),
+            toLngLat(projection, sample.x + nx * halfWidth, sample.y + ny * halfWidth),
+          ],
+        });
+        if (crosswalks) {
+          const offset = SIGNAL_STOP_BAR_OFFSET_M + 1.4;
+          const walkProgress = Math.max(0, index.total - offset);
+          const walk = samplePathIndex(index, walkProgress);
+          bars.push({
+            path: [
+              toLngLat(projection, walk.x - nx * halfWidth, walk.y - ny * halfWidth),
+              toLngLat(projection, walk.x + nx * halfWidth, walk.y + ny * halfWidth),
+            ],
+          });
+        }
+        // The head itself: kerbside of the approach, just before the stop line.
+        const headSample = applyLaneOffset(
+          samplePathIndex(index, Math.max(0, stopProgress - 1.5)),
+          halfWidth + 1.2,
+        );
+        heads.push({
+          position: toLngLat(projection, headSample.x, headSample.y),
+          color,
+        });
+      }
     });
   }
 
   const layers: Layer[] = [];
-  if (tier === "far") {
+  if (bars.length > 0) {
     layers.push(
-      new ScatterplotLayer<SignalEntry>({
-        id: "signals-dot",
-        data: entries,
-        getPosition: (entry) => entry.position,
+      new PathLayer<Bar>({
+        id: "signals-stopbars",
+        data: bars,
+        getPath: (bar) => bar.path,
+        // Stop bars sit on a near-white road surface, so they read as a dark
+        // neutral line rather than a white one that disappears into the casing.
+        getColor: [120, 112, 98, Math.round(190 * opacity)],
+        getWidth: crosswalks ? 2 : 3,
+        widthUnits: "pixels",
+        pickable: false,
+      }),
+    );
+  }
+  if (heads.length > 0) {
+    layers.push(
+      new ScatterplotLayer<Head>({
+        id: "signals-heads",
+        data: heads,
+        getPosition: (head) => head.position,
         getRadius: 3.2,
         radiusUnits: "pixels",
-        getFillColor: (entry) => [...entry.color],
+        getFillColor: (head) => [...head.color],
         pickable: false,
       }),
     );
-    return layers;
   }
-
-  // Mid and close: active-axis bar (the phase, made readable).
-  const reach = signalAxisReachMetres(tier);
-  const axes = entries.filter((entry) => entry.bearing !== null);
-  layers.push(
-    new LineLayer<SignalEntry>({
-      id: "signals-axis",
-      data: axes,
-      getSourcePosition: (entry) => toLngLat(projection, entry.x, entry.y),
-      getTargetPosition: (entry) =>
-        toLngLat(projection, 
-          entry.x + Math.cos(entry.bearing!) * reach,
-          entry.y + Math.sin(entry.bearing!) * reach,
-        ),
-      getColor: (entry) => [...entry.color],
-      getWidth: tier === "close" ? 6 : 4,
-      widthUnits: "pixels",
-      pickable: false,
-    }),
-  );
-
-  if (tier === "mid") {
-    layers.push(
-      new ScatterplotLayer<SignalEntry>({
-        id: "signals-disc",
-        data: entries,
-        getPosition: (entry) => entry.position,
-        getRadius: 5.4,
-        radiusUnits: "pixels",
-        getFillColor: (entry) => [...entry.color],
-        stroked: true,
-        getLineColor: [255, 255, 255, Math.round(200 * opacity)],
-        lineWidthUnits: "pixels",
-        getLineWidth: 1.5,
-        pickable: false,
-      }),
-    );
-    return layers;
-  }
-
-  // Close: stop bar + crosswalk ticks + a lit lamp at the approach end.
-  interface StopBar {
-    path: LngLat[];
-  }
-  const stopBars: StopBar[] = [];
-  const lamps: { position: LngLat; color: readonly [number, number, number, number] }[] = [];
-  for (const entry of entries) {
-    if (entry.bearing === null) {
-      continue;
-    }
-    const geometry = stopBarGeometry([entry.x, entry.y], entry.bearing + Math.PI);
-    stopBars.push({ path: geometry.bar.map(([x, y]) => toLngLat(projection, x, y)) });
-    for (const tick of geometry.crosswalk) {
-      stopBars.push({ path: tick.map(([x, y]) => toLngLat(projection, x, y)) });
-    }
-    lamps.push({
-      position: toLngLat(projection, 
-        entry.x + Math.cos(entry.bearing) * (reach - 6),
-        entry.y + Math.sin(entry.bearing) * (reach - 6),
-      ),
-      color: [...entry.color],
-    });
-  }
-  layers.push(
-    new PathLayer<StopBar>({
-      id: "signals-stopbars",
-      data: stopBars,
-      getPath: (bar) => bar.path,
-      getColor: [255, 255, 255, Math.round(245 * opacity)],
-      getWidth: 3,
-      widthUnits: "pixels",
-      pickable: false,
-    }),
-    new ScatterplotLayer<(typeof lamps)[number]>({
-      id: "signals-lamps",
-      data: lamps,
-      getPosition: (lamp) => lamp.position,
-      getRadius: 4,
-      radiusUnits: "pixels",
-      getFillColor: (lamp) => [...lamp.color],
-      pickable: false,
-    }),
-    new ScatterplotLayer<SignalEntry>({
-      id: "signals-base-close",
-      data: entries,
-      getPosition: (entry) => entry.position,
-      getRadius: 6,
-      radiusUnits: "pixels",
-      getFillColor: [33, 29, 24, Math.round(210 * opacity)],
-      pickable: false,
-    }),
-  );
   return layers;
 }
 
@@ -523,13 +548,16 @@ export function buildIncidentLayers(
         id: "event-rings",
         data: eventCenters,
         getPosition: (center) => center.position,
-        getRadius: 30 + pulse * 26,
+        // A restrained venue pulse: a small warm ring breathing outward, not a
+        // giant coloured circle over the neighborhood. The traffic emerging on
+        // the surrounding streets is what should read.
+        getRadius: 13 + pulse * 9,
         radiusUnits: "pixels",
         stroked: true,
         filled: false,
-        getLineColor: [111, 102, 232, Math.round(200 - pulse * 120)],
+        getLineColor: [186, 132, 74, Math.round(150 - pulse * 95)],
         lineWidthUnits: "pixels",
-        getLineWidth: 2,
+        getLineWidth: 1.6,
         pickable: false,
       }),
       new LineLayer<{ source: LngLat; target: LngLat }>({

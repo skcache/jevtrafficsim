@@ -32,9 +32,19 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
+import { packQueues } from "@/render/queue-packing";
+import {
+  carriagewayPairs,
+  laneCentreOffsetMetres,
+  widthMetresForRoad,
+} from "@/render/road-presentation";
+import { roadPressure } from "@/render/congestion";
+import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
 import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/map-geojson";
 import {
+  buildCongestionLayers,
   buildIncidentLayers,
+  type CongestionRoad,
   buildSignalLayers,
   buildSignalPlans,
   buildVehicleLayers,
@@ -98,7 +108,7 @@ function presentationBounds(model: MapModel) {
     include(intersection.x, intersection.y);
   }
   for (const district of model.districts) {
-    for (const [x, y] of district.polygon) {
+    for (const [x, y] of district.rings[0]) {
       include(x, y);
     }
   }
@@ -123,7 +133,130 @@ function boundsLngLat(
 const zoomWidth = (zFar: number, zMid: number, zClose: number) =>
   ["interpolate", ["linear"], ["zoom"], 13, zFar, 16, zMid, 19.5, zClose] as unknown as number;
 
+/**
+ * Data-driven road width: a feature's physical width in metres converted to
+ * pixels at the current zoom. metresPerPixel is `K / 2^zoom`, so pixels are
+ * `widthM * 2^zoom / K` — one expression, exact at every zoom, no per-zoom
+ * constants. A legibility floor keeps minor streets visible when zoomed out.
+ */
+const METRES_PER_PIXEL_AT_Z0 = 156543.03392 * Math.cos((41.881 * Math.PI) / 180);
+
+/**
+ * Data-driven road width: a feature's physical width in metres, converted to
+ * pixels at the current zoom.
+ *
+ * MapLibre only allows a `zoom` expression as the input of a top-level
+ * `interpolate`/`step`, so the physical conversion is written as an exponential
+ * interpolation with base 2 — which is exactly how metres-per-pixel behaves
+ * (`K / 2^zoom`) — and each stop carries the per-feature data expression. The
+ * legibility floor is folded into the stops for the same reason.
+ */
+function physicalWidth(extraPx = 0): number {
+  const at = (zoom: number) => {
+    const pixels: unknown[] = [
+      "/",
+      ["*", ["get", "widthM"], 2 ** zoom],
+      METRES_PER_PIXEL_AT_Z0,
+    ];
+    const withExtra = extraPx > 0 ? ["+", pixels, extraPx] : pixels;
+    return ["max", FLOOR_PX[zoom], withExtra];
+  };
+  return [
+    "interpolate",
+    ["exponential", 2],
+    ["zoom"],
+    9,
+    at(9),
+    11,
+    at(11),
+    13,
+    at(13),
+    15,
+    at(15),
+    17,
+    at(17),
+  ] as unknown as number;
+}
+
+/** Legibility floor per zoom stop: minor streets stay visible when zoomed out. */
+const FLOOR_PX: Record<number, number> = { 9: 0.7, 11: 1.0, 13: 1.3, 15: 1.6, 17: 1.8 };
+
 function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
+  const labelLayers: LayerSpecification[] = [
+    // Geographic labels go through MapLibre's collision engine, so they never
+    // stack on each other or across traffic the way DOM markers did.
+    {
+      id: "labels",
+      type: "symbol",
+      source: "labels",
+      minzoom: 10.2,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Open Sans Semibold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 10.2, 10.5, 14, 12.5, 17, 14],
+        "text-allow-overlap": false,
+        "text-padding": 8,
+        "text-variable-anchor": ["center", "top", "bottom", "left", "right"],
+        "text-radial-offset": 0.6,
+        "symbol-sort-key": ["get", "rank"],
+        "symbol-z-order": "source",
+      },
+      paint: {
+        "text-color": "#3a352c",
+        "text-halo-color": "#faf7f0",
+        "text-halo-width": 1.3,
+        "text-halo-blur": 0.4,
+      },
+    },
+    // Highway refs first (they are the city's spine), then major street names.
+    {
+      id: "street-refs",
+      type: "symbol",
+      source: "street-labels",
+      minzoom: 11.6,
+      filter: [
+        "all",
+        ["!=", ["get", "ref"], ""],
+        ["in", ["get", "osmClass"], ["literal", ["motorway", "trunk"]]],
+      ],
+      layout: {
+        "text-field": ["get", "ref"],
+        "text-font": ["Open Sans Semibold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 11.6, 10, 15, 12],
+        "symbol-placement": "line",
+        "text-allow-overlap": false,
+        "text-padding": 12,
+        "symbol-sort-key": ["get", "rank"],
+      },
+      paint: {
+        "text-color": "#6a5a3a",
+        "text-halo-color": "#fdf8ee",
+        "text-halo-width": 1.4,
+      },
+    },
+    {
+      id: "street-names",
+      type: "symbol",
+      source: "street-labels",
+      minzoom: 14.4,
+      filter: ["all", ["!=", ["get", "name"], ""], [">=", ["get", "rank"], 4]],
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 14.4, 10, 17, 11.5],
+        "symbol-placement": "line",
+        "text-allow-overlap": false,
+        "text-padding": 10,
+        "symbol-sort-key": ["get", "rank"],
+      },
+      paint: {
+        "text-color": "#5c5648",
+        "text-halo-color": "#fffdf7",
+        "text-halo-width": 1.2,
+      },
+    },
+  ];
+
   const sources: StyleSpecification["sources"] = {
     land: { type: "geojson", data: geo.land as never },
     districts: { type: "geojson", data: geo.districts as never },
@@ -131,6 +264,8 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
     parks: { type: "geojson", data: geo.parks as never },
     "park-canopy": { type: "geojson", data: geo.parkCanopy as never },
     buildings: { type: "geojson", data: geo.buildings as never },
+    labels: { type: "geojson", data: geo.labels as never },
+    "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
     "roads-arterial": { type: "geojson", data: geo.roadsArterial as never },
     "roads-highway": { type: "geojson", data: geo.roadsHighway as never },
@@ -186,7 +321,25 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       source: "water",
       paint: { "line-color": "#93b7c9", "line-width": zoomWidth(0.5, 1, 1.6) },
     },
-    { id: "parks", type: "fill", source: "parks", paint: { "fill-color": "#cfe0c0" } },
+    {
+      id: "parks",
+      type: "fill",
+      source: "parks",
+      paint: {
+        "fill-color": "#cfe0c0",
+        // Meaningful green space reads stronger than a grass sliver, and the
+        // gap widens as the camera comes down.
+        "fill-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          11,
+          ["match", ["get", "kind"], "major", 0.85, 0.25],
+          14,
+          ["match", ["get", "kind"], "major", 1, 0.6],
+        ],
+      },
+    },
     {
       id: "parks-edge",
       type: "line",
@@ -218,7 +371,9 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       id: "buildings",
       type: "fill",
       source: "buildings",
-      minzoom: 13.2,
+      // Far out, buildings are mass and fade hard; at neighborhood zoom the real
+      // footprints read, and street zoom keeps them subordinate to the roads.
+      minzoom: 12.4,
       paint: {
         // Tone steps are calibrated to the compiled footprints (median 5 100 m²,
         // warehouses 30 000 m²): small blocks stay pale, big masses read dark.
@@ -293,7 +448,7 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       source: "roads-local",
       paint: {
         "line-color": "#dcd6c8",
-        "line-width": zoomWidth(2, 5, 8),
+        "line-width": physicalWidth(1.6),
         "line-opacity": ["interpolate", ["linear"], ["zoom"], 12.6, 0, 13.4, 1],
       },
     },
@@ -303,7 +458,7 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       source: "roads-local",
       paint: {
         "line-color": "#ffffff",
-        "line-width": zoomWidth(1.2, 3.6, 6.4),
+        "line-width": physicalWidth(),
         "line-opacity": ["interpolate", ["linear"], ["zoom"], 12.6, 0, 13.4, 1],
       },
     },
@@ -311,13 +466,13 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       id: "roads-arterial-casing",
       type: "line",
       source: "roads-arterial",
-      paint: { "line-color": "#d3cbb8", "line-width": zoomWidth(4.5, 9.5, 15) },
+      paint: { "line-color": "#d3cbb8", "line-width": physicalWidth(2.0) },
     },
     {
       id: "roads-arterial",
       type: "line",
       source: "roads-arterial",
-      paint: { "line-color": "#fffdf7", "line-width": zoomWidth(3.2, 7.4, 12) },
+      paint: { "line-color": "#fffdf7", "line-width": physicalWidth() },
     },
     {
       id: "roads-highway-shadow",
@@ -326,7 +481,7 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: {
         "line-color": "#5c5242",
         "line-opacity": 0.1,
-        "line-width": zoomWidth(8, 17, 24),
+        "line-width": physicalWidth(2.6),
         "line-translate": [1.5, 2],
       },
     },
@@ -334,13 +489,13 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       id: "roads-highway-casing",
       type: "line",
       source: "roads-highway",
-      paint: { "line-color": "#d9a85c", "line-width": zoomWidth(8, 17, 24) },
+      paint: { "line-color": "#d9a85c", "line-width": physicalWidth(2.6) },
     },
     {
       id: "roads-highway",
       type: "line",
       source: "roads-highway",
-      paint: { "line-color": "#f8ce8b", "line-width": zoomWidth(6.4, 14.4, 20.5) },
+      paint: { "line-color": "#f8ce8b", "line-width": physicalWidth() },
     },
     {
       id: "roads-highway-guardrail",
@@ -402,22 +557,17 @@ function buildStyle(geo: ShowcaseGeoJson): StyleSpecification {
       },
     },
   ];
-  return { version: 8, name: "jev-showcase", sources, layers };
+  return {
+    version: 8,
+    name: "jev-showcase",
+    // Local glyphs: no external font CDN, works offline like the rest of the map.
+    glyphs: "/fonts/{fontstack}/{range}.pbf",
+    sources,
+    // Labels draw last, above roads and buildings.
+    layers: [...layers, ...labelLayers],
+  };
 }
 
-/** Label ladder: rank 1 districts early, rank 3 late, landmarks at street zoom. */
-function labelVisible(kind: string, rank: number, zoom: number): boolean {
-  if (kind === "landmark") {
-    return zoom >= 16;
-  }
-  if (rank <= 1) {
-    return zoom >= 13.2;
-  }
-  if (rank === 2) {
-    return zoom >= 14.6;
-  }
-  return zoom >= 15.6;
-}
 
 export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -425,6 +575,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const overlayRef = useRef<MapLibreOverlay | null>(null);
   const zoomRef = useRef(16);
   const iconsRef = useRef<VehicleIconSet | null>(null);
+  /** Per-road lane-centre offsets in metres for the current model. */
+  const laneOffsetsRef = useRef<number[] | null>(null);
+  /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
+  const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   const liveRef = useRef(live);
   useEffect(() => {
     liveRef.current = live;
@@ -461,6 +615,24 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   useEffect(() => {
     modelRef.current = model;
     geoRef.current = geo;
+    if (model) {
+      const pairs = carriagewayPairs(model);
+      laneOffsetsRef.current = model.city.roads.map((road) =>
+        laneCentreOffsetMetres(model, road.id, pairs),
+      );
+      // Lng/lat paths for the far-zoom congestion overlay: converted once per
+      // model, so the per-frame cost is only the pressure walk over vehicles.
+      congestionRoadsRef.current = model.city.roads.map((road) => ({
+        roadId: road.id,
+        path: (model.directedPaths[road.id] ?? []).map(([x, y]) =>
+          metricToLngLat(model.projection, x, y),
+        ),
+        widthM: widthMetresForRoad(model, road.id, pairs),
+      }));
+    } else {
+      laneOffsetsRef.current = null;
+      congestionRoadsRef.current = [];
+    }
     plansRef.current = signalPlans;
   }, [model, geo, signalPlans]);
 
@@ -473,8 +645,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       return;
     }
     const projection = initialModel.projection;
-    // Captured non-null for the closures below (TS drops ref narrowing there).
-    const labels = initialGeo.labels;
     configureMapLibreWorker();
     const map = new MapLibreMap({
       container,
@@ -506,41 +676,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       });
     }
 
-    // District / landmark labels: sparse DOM markers on a rank ladder.
-    let markers: Marker[] = [];
-    function updateLabelVisibility() {
-      const zoom = zoomRef.current;
-      markers.forEach((marker, index) => {
-        const label = labels[index];
-        const visible = labelVisible(label.kind, label.rank, zoom);
-        marker.getElement().style.opacity = visible ? "1" : "0";
-      });
-    }
-    function rebuildLabels() {
-      markers.forEach((marker) => marker.remove());
-      markers = labels.map((label) => {
-        const element = document.createElement("div");
-        element.className =
-          label.kind === "landmark" ? "jev-label jev-label-landmark" : "jev-label";
-        if (label.kind === "landmark") {
-          const dot = document.createElement("span");
-          dot.textContent = "●";
-          dot.style.fontSize = "5px";
-          dot.style.verticalAlign = "middle";
-          dot.style.marginRight = "4px";
-          dot.style.opacity = "0.55";
-          element.appendChild(dot);
-        }
-        element.appendChild(document.createTextNode(label.name));
-        element.style.opacity = "0";
-        return new Marker({ element, anchor: "center" })
-          .setLngLat(label.at as [number, number])
-          .addTo(map);
-      });
-      updateLabelVisibility();
-    }
-
-    // Incident plates: created and destroyed as incidents come and go.
     const plates = new Map<string, Marker>();
     let plateKey = "";
     function syncPlates(entries: IncidentExtras["plates"]) {
@@ -577,7 +712,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
 
     const onZoom = () => {
       zoomRef.current = map.getZoom();
-      updateLabelVisibility();
     };
     map.on("zoom", onZoom);
 
@@ -608,7 +742,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     };
 
     map.on("load", () => {
-      rebuildLabels();
       // Landing shows the whole city; Enter City flies into Central.
       map.fitBounds(boundsLngLat(projection, presentationBounds(initialModel)), {
         padding: 72,
@@ -631,8 +764,38 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       const activeMap = mapRef.current;
       if (buffer && activeMap && buffer.model && buffer.paths) {
         const alpha = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
+        const progress = new Map<number, number>();
+        if (buffer.current) {
+          for (const vehicle of buffer.current.vehicles) {
+            progress.set(vehicle.id, vehicle.progress);
+          }
+        }
+        const laneOffsets = laneOffsetsRef.current ?? [];
+        const congestion =
+          zoomRef.current < CLOSE_TIER_MINZOOM && buffer.current
+            ? buildCongestionLayers(
+                congestionRoadsRef.current ?? [],
+                roadPressure(buffer.current),
+                zoomRef.current,
+              )
+            : [];
+        const interpolated = buffer.current
+          ? interpolateVehicles(buffer.paths, buffer.previous, buffer.current, alpha, {
+              nowMs: now,
+              receivedAtMs: buffer.currentReceivedAtMs,
+              laneOffsets,
+              city: buffer.model.city,
+            })
+          : [];
+        // Presentation-only queue packing: same simulation state, same pixels.
         const vehicles = buffer.current
-          ? interpolateVehicles(buffer.paths, buffer.previous, buffer.current, alpha)
+          ? packQueues(
+              buffer.model.city,
+              buffer.paths,
+              laneOffsets,
+              interpolated,
+              (id) => progress.get(id) ?? 0,
+            )
           : [];
         const incidents = buildIncidentLayers(buffer.current, buffer.model, now);
         const layers: Layer[] = [
@@ -642,8 +805,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             iconsRef.current ?? createVehicleIcons() ?? EMPTY_ICONS,
             zoomRef.current,
           ),
-          ...buildSignalLayers(projection, buffer.current, plansRef.current ?? new Map(), zoomRef.current),
+          ...buildSignalLayers(
+            projection,
+            buffer.model,
+            buffer.current,
+            plansRef.current ?? new Map(),
+            buffer.paths,
+            zoomRef.current,
+          ),
           ...incidents.layers,
+          ...congestion,
         ];
         overlayRef.current?.setProps({ layers });
         syncPlates(incidents.extras.plates);
@@ -685,7 +856,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     return () => {
       cancelAnimationFrame(raf);
       map.off("zoom", onZoom);
-      markers.forEach((marker) => marker.remove());
       plates.forEach((marker) => marker.remove());
       overlayRef.current = null;
       mapRef.current = null;

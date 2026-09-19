@@ -77,6 +77,10 @@ SCALE_BBOXES: dict[str, tuple[float, float, float, float]] = {
 #: Scale name -> the sim's CitySize value (the browser's five sizes).
 SCALE_SIZES = ["small", "small-medium", "medium", "medium-large", "large"]
 
+#: Buildings smaller than this (square metres, measured in the metric frame)
+#: are sheds, kiosks and stair enclosures. Kept explicit and central.
+BUILDING_MIN_AREA_M2 = 150.0
+
 #: Plausibility band for parsed speed limits (11-162 km/h). Values outside are
 #: treated as missing so the class default applies.
 MIN_SPEED_MPS = 3.0
@@ -199,7 +203,8 @@ def configure_osmnx() -> None:
     ]
     ox.settings.useful_tags_way = [
         "osmid", "highway", "name", "ref", "oneway", "lanes", "lanes:forward",
-        "lanes:backward", "maxspeed", "bridge", "tunnel", "layer", "junction",
+        "lanes:backward", "lanes:both_ways", "maxspeed", "bridge", "tunnel", "layer",
+        "junction",
         "access", "service",
     ]
 
@@ -286,8 +291,12 @@ def parse_speed_mps(raw) -> float | None:
     return metres_per_second
 
 
-def parse_lanes(raw, fallback: int) -> int:
-    """OSM `lanes` -> sane positive integer, clamped to [1, 8]."""
+def parse_lanes(raw, fallback: int | None = None) -> int | None:
+    """OSM lane tag -> sane positive integer clamped to [1, 8], or `fallback`.
+
+    Passing no fallback returns None for absent/malformed values, which lets
+    callers distinguish "the source said nothing" from "the source said 1".
+    """
     text = norm(raw)
     if text is None:
         return fallback
@@ -315,6 +324,110 @@ def control_of(node_attrs: dict) -> str | None:
         # signal / stop / uncontrolled, and yield belongs with stop.
         return "stop"
     return None
+
+
+def lane_diagnostics(data: dict) -> dict:
+    """Raw lane tags for diagnostics, emitted only when the source had them."""
+    diagnostics: dict[str, object] = {}
+    for key, field in (
+        ("lanes", "lanesRaw"),
+        ("lanes:forward", "lanesForwardRaw"),
+        ("lanes:backward", "lanesBackwardRaw"),
+        ("lanes:both_ways", "lanesBothWaysRaw"),
+    ):
+        value = norm(data.get(key))
+        if value is not None:
+            diagnostics[field] = value
+    if data.get("reversed"):
+        diagnostics["reversed"] = True
+    return diagnostics
+
+
+def is_oneway(data: dict) -> bool:
+    """OSM one-way semantics for a directed edge."""
+    return (norm(data.get("oneway")) or "no").lower() in {"yes", "true", "1", "-1"}
+
+
+def split_two_way_lanes(total: int, both_ways: int) -> tuple[int, int]:
+    """Split a two-way `lanes` total into (forward, backward) through lanes.
+
+    `lanes` on a two-way way is the TOTAL for both directions, so handing it to
+    each direction would double the road. `lanes:both_ways` (normally a shared
+    centre turn lane) is removed first; the remainder splits with the odd lane
+    going to the way's forward direction — the usual US striping default when
+    the source does not say. The split is exact: 3 lanes become 2 + 1, never
+    2 + 2.
+    """
+    through = max(1, total - max(0, both_ways))
+    forward = (through + 1) // 2
+    return forward, through - forward
+
+
+def directional_lanes(data: dict, oneway: bool, osm_class: str) -> int:
+    """Lane count for ONE directed edge, from OSM lane semantics.
+
+    Direction comes from OSMnx's `reversed` attribute, which is True when the
+    edge runs against the source way's drawing order (osmnx/graph.py sets it
+    while building the graph). `lanes:forward`/`lanes:backward` are relative to
+    the way as drawn, so they map straight onto `reversed`.
+
+    Node ids are never consulted: numeric node ordering carries no directional
+    meaning, and using it silently swapped forward/backward lane counts.
+    """
+    total = parse_lanes(data.get("lanes"))
+    forward = parse_lanes(data.get("lanes:forward"))
+    backward = parse_lanes(data.get("lanes:backward"))
+    both_ways = parse_lanes(data.get("lanes:both_ways")) or 0
+    reversed_edge = bool(data.get("reversed"))
+    fallback = LANES_FALLBACK.get(osm_class, 1)
+
+    if oneway:
+        # On a one-way way `lanes` IS the directional count.
+        directional = backward if reversed_edge else forward
+        if directional is not None:
+            return max(1, min(8, directional))
+        if total is not None:
+            return max(1, min(8, total))
+        return max(1, min(8, fallback))
+
+    # Two-way: directional tags win when present.
+    directional = backward if reversed_edge else forward
+    if directional is not None:
+        return max(1, min(8, directional))
+    if total is not None:
+        forward_lanes, backward_lanes = split_two_way_lanes(total, both_ways)
+        return max(1, min(8, backward_lanes if reversed_edge else forward_lanes))
+    return max(1, min(8, fallback))
+
+
+def metric_area_m2(geometry) -> float:
+    """Polygon area in square metres, via the documented Chicago metric frame.
+
+    Degrees are never multiplied by a magic constant: every ring is projected
+    through `to_metric` (the same local equirectangular frame the simulation
+    uses) and measured with the shoelace formula. Inner rings are subtracted, so
+    a courtyard building is not counted as solid floor plate.
+    """
+
+    def ring_area(ring) -> float:
+        points = [to_metric(lon, lat) for lon, lat in ring.coords]
+        if len(points) < 3:
+            return 0.0
+        total = 0.0
+        for index in range(len(points)):
+            x1, y1 = points[index]
+            x2, y2 = points[(index + 1) % len(points)]
+            total += x1 * y2 - x2 * y1
+        return abs(total) / 2.0
+
+    if geometry.geom_type == "Polygon":
+        area = ring_area(geometry.exterior)
+        for hole in geometry.interiors:
+            area -= ring_area(hole)
+        return max(0.0, area)
+    if geometry.geom_type == "MultiPolygon":
+        return sum(metric_area_m2(part) for part in geometry.geoms)
+    return 0.0
 
 
 def capacity_of(lanes: int, length_m: float) -> int:
@@ -626,11 +739,37 @@ def consolidate_pass(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 
     consolidated = nx.MultiDiGraph()
     consolidated.graph.update(graph.graph)
+
+    # One deterministic position per merged junction. A controlled member wins
+    # (the signal or stop sign must sit where the real control is); otherwise
+    # the mean of the merged members. Every incident road is re-anchored exactly
+    # to this point below, so a rendered road can never end up detached from the
+    # junction it belongs to by up to the consolidation tolerance.
+    position: dict[int, tuple[float, float]] = {}
     for root, group in members.items():
         attrs = dict(graph.nodes[root])
         best = max(group, key=lambda member: control_rank(graph.nodes[member]))
         attrs["highway"] = graph.nodes[best].get("highway")
+        if len(group) == 1 or control_rank(graph.nodes[best]) > 0:
+            x = float(graph.nodes[best]["x"])
+            y = float(graph.nodes[best]["y"])
+        else:
+            x = sum(float(graph.nodes[member]["x"]) for member in group) / len(group)
+            y = sum(float(graph.nodes[member]["y"]) for member in group) / len(group)
+        x = round(x, COORD_DECIMALS)
+        y = round(y, COORD_DECIMALS)
+        attrs["x"] = x
+        attrs["y"] = y
+        position[root] = (x, y)
         consolidated.add_node(root, **attrs)
+
+    def reanchor(coords: list[tuple[float, float]]) -> tuple[list[tuple[float, float]], float]:
+        """Metric length of an adjusted geometry (the graph itself is lng/lat)."""
+        metric = [to_metric(lon, lat) for lon, lat in coords]
+        total = sum(
+            math.dist(metric[index], metric[index + 1]) for index in range(len(metric) - 1)
+        )
+        return coords, total
 
     seen: set[tuple[int, int, int]] = set()
     for u, v, key, data in graph.edges(keys=True, data=True):
@@ -640,7 +779,26 @@ def consolidate_pass(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
         if (ru, rv, key) in seen:
             key = max(seen_key for _a, _b, seen_key in seen if (_a, _b) == (ru, rv)) + 1
         seen.add((ru, rv, key))
-        consolidated.add_edge(ru, rv, key=key, **dict(data))
+        edge = dict(data)
+        geometry = edge.get("geometry")
+        if geometry is not None:
+            # Re-anchor whenever an endpoint is not already exactly on the
+            # junction it belongs to. Testing the actual distance (rather than
+            # "did this node move in this pass") matters because a later pass can
+            # move a representative that an earlier pass already anchored to.
+            coords = list(geometry.coords)
+            moved = False
+            if math.dist(coords[0], position[ru]) > 1e-9:
+                coords[0] = position[ru]
+                moved = True
+            if math.dist(coords[-1], position[rv]) > 1e-9:
+                coords[-1] = position[rv]
+                moved = True
+            if moved:
+                coords, length = reanchor(coords)
+                edge["geometry"] = LineString(coords)
+                edge["length"] = length
+        consolidated.add_edge(ru, rv, key=key, **edge)
     return consolidated
 
 
@@ -818,24 +976,18 @@ def compile_scale(
             # minimal length rather than dropping the edge and stranding a node.
             length = 0.5
 
-        forward_lanes = norm(data.get("lanes:forward"))
-        backward_lanes = norm(data.get("lanes:backward"))
-        base_lanes = parse_lanes(data.get("lanes"), LANES_FALLBACK.get(osm_class, 1))
-        lanes = parse_lanes(
-            forward_lanes if u == min(u, v) else backward_lanes,
-            base_lanes,
-        )
         speed = parse_speed_mps(data.get("maxspeed")) or SPEED_FALLBACK_MPS.get(osm_class, 8.0)
         bridge = is_truthy(data.get("bridge"))
         kind = "bridge" if bridge else KIND_BY_CLASS.get(osm_class, "local")
-        capacity = capacity_of(lanes, length)
         road_id = len(roads)
         roundabout_edge = is_roundabout_edge(data)
-        oneway = (norm(data.get("oneway")) or "no").lower() in {"yes", "true", "1", "-1"}
+        oneway = is_oneway(data)
         if roundabout_edge:
             # OSM convention: a roundabout ring is one-way even when the way has
             # no explicit oneway tag. Ring direction must never be invented.
             oneway = True
+        lanes = directional_lanes(data, oneway, osm_class)
+        capacity = capacity_of(lanes, length)
         emitted_pairs.add((u, v))
         roads.append(
             {
@@ -848,6 +1000,9 @@ def compile_scale(
                 "ref": norm(data.get("ref")),
                 "oneway": oneway,
                 "lanes": lanes,
+                # Raw source tags only when present: diagnostics without paying
+                # four null fields on every road in the shipped asset.
+                **lane_diagnostics(data),
                 "speedMps": round(speed, 2),
                 "capacity": capacity,
                 "lengthM": length,
@@ -943,7 +1098,25 @@ def compile_scale(
         for node, _attrs in ordered_nodes
         if node not in emitted_incoming or node not in emitted_outgoing
     }
-    if stranded and _depth < 4:
+    # Strongly connected core: the public showcase must be routing-safe, so the
+    # simulation graph keeps only the largest strongly connected component of
+    # the emitted directed graph. Every remaining intersection is then reachable
+    # from every other one, and demand can always find a route.
+    core_graph = nx.DiGraph()
+    core_graph.add_nodes_from(node for node, _attrs in ordered_nodes)
+    for road in roads:
+        core_graph.add_edge(road["from"], road["to"])
+    if core_graph.number_of_nodes() > 0:
+        largest = max(nx.strongly_connected_components(core_graph), key=len)
+        if len(largest) < core_graph.number_of_nodes():
+            outside = {
+                node
+                for node, _attrs in ordered_nodes
+                if index_of[node] not in largest
+            }
+            stranded |= outside
+
+    if stranded and _depth < 12:
         print(f"    · {scale}: dropping {len(stranded)} stranded intersection(s)")
         return compile_scale(graph, scale, exclude | frozenset(stranded), _depth + 1)
 
@@ -1037,6 +1210,8 @@ def extract_features(bbox, out_dir: Path) -> dict:
 
     print("· buildings (tiled)")
     building_features = []
+    building_areas: list[float] = []
+    seen_buildings: set[str] = set()
     for tile in tiles(bbox, 3, 3):
         for attempt in range(3):
             try:
@@ -1048,24 +1223,58 @@ def extract_features(bbox, out_dir: Path) -> dict:
         else:
             print("    tile skipped after retries")
             continue
-        for geometry, row in zip(buildings.geometry, buildings.itertuples()):
-            area = geometry.area * 1.2e9 if geometry.geom_type == "Polygon" else 0.0
-            if area < 150:  # sheds and kiosks; real blocks are far larger
+        for row in buildings.itertuples():
+            geometry = getattr(row, "geometry", None)
+            if geometry is None or geometry.is_empty:
                 continue
+            # Only areas are footprints: Overpass also returns points for
+            # node-tagged buildings, which carry no usable geometry.
+            if geometry.geom_type not in ("Polygon", "MultiPolygon"):
+                continue
+            # Deduplicate by GEOMETRY, not by element id. Two things produce
+            # repeats here: a building spanning two tiles is returned by both,
+            # and OSM frequently maps one building as both a way and a
+            # multipolygon relation. Both arrive with identical coordinates, so
+            # a canonical geometry key removes them, while the distinct parts of
+            # one multipolygon building (different geometry) survive.
+            geometry_key = json.dumps(round_coords(geometry, 6), sort_keys=True)
+            if geometry_key in seen_buildings:
+                continue
+            seen_buildings.add(geometry_key)
+            element, osm_id = row.Index if isinstance(row.Index, tuple) else ("way", row.Index)
+            area = metric_area_m2(geometry)
+            if area < BUILDING_MIN_AREA_M2:
+                continue
+            part_index = 0
             for clipped in clip_and_round([geometry], clip_box, 1.5, COORD_DECIMALS):
                 for part in round_coords(clipped, COORD_DECIMALS):
+                    building_areas.append(area)
                     building_features.append(
                         {
                             "type": "Feature",
                             "properties": {
+                                "osmId": str(osm_id) if osm_id is not None else None,
+                                "osmElement": element,
+                                # Distinct parts of one multipolygon building.
+                                "part": part_index,
                                 "name": norm(getattr(row, "name", None)),
                                 "levels": norm(getattr(row, "building_levels", None)),
-                                "area": int(area),
+                                "area": int(round(area)),
                             },
                             "geometry": part,
                         }
                     )
+                    part_index += 1
     stats["buildings"] = len(building_features)
+    if building_areas:
+        ordered_areas = sorted(building_areas)
+        stats["buildingAreaM2"] = {
+            "min": int(ordered_areas[0]),
+            "p25": int(ordered_areas[len(ordered_areas) // 4]),
+            "median": int(ordered_areas[len(ordered_areas) // 2]),
+            "p75": int(ordered_areas[(3 * len(ordered_areas)) // 4]),
+            "max": int(ordered_areas[-1]),
+        }
 
     print("· water")
     water = ox.features_from_bbox(

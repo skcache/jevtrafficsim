@@ -23,7 +23,9 @@ import type {
 } from "@/sim/types";
 import type { Point } from "./paths";
 import {
+  carriagewayWidthMetres,
   lngLatToMetric,
+  pointInPolygon,
   pointsBounds,
   type BuildingFootprint,
   type Bounds,
@@ -31,6 +33,9 @@ import {
   type MapLabel,
   type MapLandmark,
   type MapModel,
+  type PolygonFeature,
+  type PolygonRings,
+  type WaterCrossingBridge,
   type Projection,
   type StreetPiece,
 } from "./map-model";
@@ -162,6 +167,94 @@ export interface ChicagoAsset {
  * carriageways join the same two junctions by different streets, and pairing
  * those would draw one street's line over the other's and report its length.
  */
+/**
+ * Minimum length of a bridge path that must lie inside water for the crossing
+ * to count. The Chicago River is 60-90 m wide downtown, so a real crossing
+ * clears this easily while a viaduct merely touching a bank does not.
+ */
+const MIN_WATER_CROSSING_M = 20;
+
+/**
+ * Walk a road path at a fixed step and measure the part inside any water ring.
+ * Point sampling keeps this dependency-free and deterministic; the step is
+ * small enough that a 20 m threshold is exact to a couple of metres.
+ */
+function pathInsideWater(
+  points: readonly (readonly number[])[],
+  water: readonly PolygonRings[],
+): { length: number; midpoint: Point; entersAndExits: boolean } {
+  const step = 2;
+  let length = 0;
+  let first: Point | null = null;
+  let last: Point | null = null;
+  let sawOutsideBefore = false;
+  let sawInside = false;
+  let sawOutsideAfter = false;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const [x1, y1] = points[index];
+    const [x2, y2] = points[index + 1];
+    const span = Math.hypot(x2 - x1, y2 - y1);
+    const steps = Math.max(1, Math.ceil(span / step));
+    for (let s = 0; s <= steps; s += 1) {
+      if (index > 0 && s === 0) {
+        continue; // shared vertex, already counted
+      }
+      const t = s / steps;
+      const point: Point = [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+      const inWater = water.some(
+        (rings) => pointInPolygon(point, rings[0]) && !rings.slice(1).some((hole) => pointInPolygon(point, hole)),
+      );
+      if (inWater) {
+        length += span / steps;
+        sawInside = true;
+        if (!first) {
+          first = point;
+        }
+        last = point;
+      } else if (!sawInside) {
+        sawOutsideBefore = true;
+      } else {
+        sawOutsideAfter = true;
+      }
+    }
+  }
+  const midpoint: Point = first && last ? [(first[0] + last[0]) / 2, (first[1] + last[1]) / 2] : [0, 0];
+  return { length, midpoint, entersAndExits: sawInside && sawOutsideBefore && sawOutsideAfter };
+}
+
+/**
+ * Physical metadata for one rendered carriageway, derived from the directed
+ * roads that share it. This is what the map style reads to size a road, so the
+ * width on screen comes from the same lane counts the simulation uses.
+ */
+function piecePhysicals(
+  roads: readonly ChicagoRoadRecord[],
+  primary: ChicagoRoadRecord,
+): {
+  osmClass: string;
+  lanesTotal: number;
+  widthM: number;
+  bridgeStructure: boolean;
+  tunnel: boolean;
+  layer: number;
+  oneway: boolean;
+} {
+  const lanesTotal = roads.reduce((sum, road) => sum + Math.max(1, road.lanes), 0);
+  const isRamp = primary.kind === "highway" && primary.lanes <= 1;
+  return {
+    osmClass: primary.osmClass,
+    ...(primary.name ? { name: primary.name } : {}),
+    ...(primary.ref ? { ref: primary.ref } : {}),
+    lanesTotal,
+    widthM: carriagewayWidthMetres(lanesTotal, isRamp),
+    bridgeStructure: roads.some((road) => road.bridge),
+    tunnel: roads.some((road) => road.tunnel),
+    layer: Math.min(...roads.map((road) => road.layer ?? 0)),
+    oneway: roads.every((road) => road.oneway),
+  };
+}
+
 function sameCarriageway(a: ChicagoRoadRecord, b: ChicagoRoadRecord): boolean {
   const longest = Math.max(a.lengthM, b.lengthM);
   if (longest <= 0) {
@@ -219,7 +312,7 @@ export interface ChicagoFeatures {
 /* Compilation                                                         */
 /* ------------------------------------------------------------------ */
 
-function polygonToMetric(
+function ringToMetric(
   projection: Projection,
   coordinates: readonly (readonly number[])[],
 ): Point[] {
@@ -234,19 +327,27 @@ function polygonToMetric(
   return points;
 }
 
+/** Every polygon part of a feature, each as outer ring + holes (metric). */
 function polygonsOf(
   projection: Projection,
   feature: GeoJsonPolygonFeature,
-): Point[][] {
-  if (feature.geometry.type === "Polygon") {
-    const ring = feature.geometry.coordinates[0];
-    return ring ? [polygonToMetric(projection, ring)] : [];
-  }
-  const polygons: Point[][] = [];
-  for (const polygon of feature.geometry.coordinates) {
-    const ring = polygon[0];
-    if (ring) {
-      polygons.push(polygonToMetric(projection, ring));
+): PolygonRings[] {
+  const parts =
+    feature.geometry.type === "Polygon"
+      ? [feature.geometry.coordinates]
+      : feature.geometry.coordinates;
+  const polygons: PolygonRings[] = [];
+  for (const rings of parts) {
+    const metric: Point[][] = [];
+    for (const ring of rings) {
+      const points = ringToMetric(projection, ring);
+      // A hole needs three distinct points to be meaningful.
+      if (points.length >= (metric.length === 0 ? 4 : 3)) {
+        metric.push(points);
+      }
+    }
+    if (metric.length > 0) {
+      polygons.push(metric);
     }
   }
   return polygons;
@@ -378,6 +479,7 @@ export function compileChicagoCity(
       points: firstPoints,
       length: first.lengthM,
       roadIds: [...partners].sort((a, b) => a - b),
+      ...piecePhysicals(partners.map((id) => asset.roads[id]), first),
     });
     // A diverging counterpart (one-way pair / dual carriageway) becomes its own
     // piece so the map shows the street it actually runs on.
@@ -392,6 +494,7 @@ export function compileChicagoCity(
         points: other.points.map(([x, y]) => [x, y] as Point),
         length: other.lengthM,
         roadIds: [otherId],
+        ...piecePhysicals([other], other),
       });
     }
   }
@@ -413,48 +516,84 @@ export function compileChicagoCity(
   const buildings: BuildingFootprint[] = [];
   for (const feature of features.buildings.features) {
     const area = typeof feature.properties.area === "number" ? feature.properties.area : 0;
-    for (const polygon of polygonsOf(projection, feature)) {
-      if (polygon.length < 4 || !withinBounds(bounds, polygon)) {
+    for (const rings of polygonsOf(projection, feature)) {
+      const outer = rings[0];
+      if (outer.length < 4 || !withinBounds(bounds, outer)) {
         continue;
       }
       buildings.push({
         district: "",
-        polygon,
-        prominent: area >= 3000 || ringArea(polygon) >= 3000,
+        rings,
+        prominent: area >= 3000 || ringArea(outer) >= 3000,
       });
     }
   }
 
-  const water: Point[][] = [];
+  const water: PolygonFeature[] = [];
   for (const feature of features.water.features) {
-    for (const polygon of polygonsOf(projection, feature)) {
-      if (polygon.length >= 4) {
-        water.push(polygon);
+    for (const rings of polygonsOf(projection, feature)) {
+      if (rings[0].length < 4) {
+        continue;
       }
+      const areaM2 = ringArea(rings[0]);
+      // Rank by geometry, not by source tags: the lake dwarfs the river, and
+      // the river dwarfs a fountain. Nothing here needs a hardcoded id.
+      const kind = areaM2 >= 400_000 ? "lake" : areaM2 >= 4_000 ? "river" : "water";
+      water.push({ rings, areaM2, kind });
     }
   }
 
-  const parks: Point[][] = [];
+  const parks: PolygonFeature[] = [];
   for (const feature of features.parks.features) {
-    for (const polygon of polygonsOf(projection, feature)) {
-      if (polygon.length >= 4 && withinBounds(bounds, polygon)) {
-        parks.push(polygon);
+    for (const rings of polygonsOf(projection, feature)) {
+      if (rings[0].length < 4 || !withinBounds(bounds, rings[0])) {
+        continue;
       }
+      const areaM2 = ringArea(rings[0]);
+      parks.push({ rings, areaM2, kind: areaM2 >= 20_000 ? "major" : "minor" });
     }
   }
 
   const landmarks: MapLandmark[] = [];
   for (const feature of features.landmarks.features) {
     const name = typeof feature.properties.name === "string" ? feature.properties.name : "Venue";
-    for (const polygon of polygonsOf(projection, feature)) {
-      if (polygon.length >= 4 && withinBounds(bounds, polygon)) {
+    for (const rings of polygonsOf(projection, feature)) {
+      if (rings[0].length >= 4 && withinBounds(bounds, rings[0])) {
         landmarks.push({
           id: `${name}-${landmarks.length}`,
           name,
           kind: "stadium",
-          polygon,
+          rings,
         });
       }
+    }
+  }
+
+  // Bridge groups that genuinely cross extracted water. Classification is
+  // geographic: the bridge path is walked in the metric frame and the portion
+  // lying inside a water polygon is measured. Named bridges only break ties.
+  const waterCrossingBridges: WaterCrossingBridge[] = [];
+  for (const bridge of [...asset.bridges].sort((a, b) => a.id - b.id)) {
+    let best: { roadId: number; at: Point; inside: number } | null = null;
+    for (const roadId of bridge.roadIds) {
+      const road = asset.roads[roadId];
+      if (!road) {
+        continue;
+      }
+      const inside = pathInsideWater(road.points, water.map((entry) => entry.rings));
+      if (inside.length >= MIN_WATER_CROSSING_M && inside.entersAndExits) {
+        if (!best || inside.length > best.inside) {
+          best = { roadId, at: inside.midpoint, inside: inside.length };
+        }
+      }
+    }
+    if (best) {
+      waterCrossingBridges.push({
+        groupId: bridge.id,
+        roadId: best.roadId,
+        name: bridge.name ?? "",
+        at: best.at,
+      });
     }
   }
 
@@ -479,11 +618,13 @@ export function compileChicagoCity(
         id: `r${row * cols + col}`,
         name: "",
         kind: "outer",
-        polygon: [
-          [Math.max(x0, bounds.minX), Math.max(y0, bounds.minY)],
-          [Math.min(x1, bounds.maxX), Math.max(y0, bounds.minY)],
-          [Math.min(x1, bounds.maxX), Math.min(y1, bounds.maxY)],
-          [Math.max(x0, bounds.minX), Math.min(y1, bounds.maxY)],
+        rings: [
+          [
+            [Math.max(x0, bounds.minX), Math.max(y0, bounds.minY)],
+            [Math.min(x1, bounds.maxX), Math.max(y0, bounds.minY)],
+            [Math.min(x1, bounds.maxX), Math.min(y1, bounds.maxY)],
+            [Math.max(x0, bounds.minX), Math.min(y1, bounds.maxY)],
+          ],
         ],
       });
     }
@@ -508,6 +649,7 @@ export function compileChicagoCity(
     buildings,
     water,
     parks,
+    waterCrossingBridges,
     districts,
     landmarks,
     labels,

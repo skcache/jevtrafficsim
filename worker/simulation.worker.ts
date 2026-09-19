@@ -14,6 +14,7 @@
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
+import type { WaterCrossingBridge } from "@/cities/map-model";
 import {
   CHICAGO_SCALE_LABELS,
   CHICAGO_VENUES,
@@ -67,6 +68,10 @@ interface WorkerState {
   snapshotSequence: number;
   /** Intersection ids of the stadium venues, for event-release targeting. */
   venues: number[];
+  /** Water-crossing bridge groups, for bridge-closed targeting. */
+  waterCrossingBridges: readonly WaterCrossingBridge[];
+  /** Rotates through the water crossings deterministically. */
+  bridgeTurn: number;
   /** Rotates through the venues deterministically as events fire. */
   venueTurn: number;
   /** Guards against overlapping async builds (fast scale switching). */
@@ -83,6 +88,8 @@ const state: WorkerState = {
   timer: null,
   snapshotSequence: 0,
   venues: [],
+  waterCrossingBridges: [],
+  bridgeTurn: 0,
   venueTurn: 0,
   buildToken: 0,
 };
@@ -168,6 +175,8 @@ async function buildRun(config: RunConfig): Promise<void> {
   state.incidentSeed = incidentSeed;
   state.snapshotSequence = 0;
   state.venueTurn = 0;
+  state.bridgeTurn = 0;
+  state.waterCrossingBridges = model.waterCrossingBridges;
   state.venues = CHICAGO_VENUES.map((venue) =>
     nearestIntersectionTo(model, venue.lon, venue.lat),
   ).filter((id): id is number => id !== null);
@@ -294,16 +303,26 @@ function handleCommand(command: WorkerCommand): void {
       }
       // Interactive injection through the Task-10 seam: atMs defaults to the
       // current simulation time; it activates on the next incident phase.
-      // An event release targets a real venue (United Center / Soldier Field)
-      // so the crowd pours out of the stadium, not a random interchange.
+      //
+      // Two Chicago-specific targets ride along, both deterministic and both
+      // through the existing seam — the incident lifecycle itself is unchanged:
+      //  * event release targets a real venue (United Center / Soldier Field)
+      //    so the crowd pours out of the stadium, not a random interchange;
+      //  * bridge closed targets a bridge group that actually crosses water, so
+      //    the hero control never closes a highway viaduct over land.
       const center =
         command.kind === "event-release" && state.venues.length > 0
           ? state.venues[state.venueTurn++ % state.venues.length]
           : undefined;
-      queueIncident(
-        state.engine,
-        center === undefined ? { kind: command.kind } : { kind: command.kind, centerIntersectionId: center },
-      );
+      const bridgeTarget =
+        command.kind === "bridge-closed" && state.waterCrossingBridges.length > 0
+          ? state.waterCrossingBridges[state.bridgeTurn++ % state.waterCrossingBridges.length]
+          : undefined;
+      queueIncident(state.engine, {
+        kind: command.kind,
+        ...(center === undefined ? {} : { centerIntersectionId: center }),
+        ...(bridgeTarget === undefined ? {} : { targetRoadId: bridgeTarget.roadId }),
+      });
       postSnapshot(); // immediate feedback frame (pending marker)
       return;
     }
