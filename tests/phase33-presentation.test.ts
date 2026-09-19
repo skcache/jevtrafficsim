@@ -28,8 +28,8 @@ describe("road presentation hierarchy", () => {
     expect(roadPresentationClass({ osmClass: "motorway_link", length: 40 })).toBe("primary");
     expect(roadPresentationClass({ osmClass: "trunk_link", length: 30 })).toBe("primary");
     // A surface-street link is a turn channel, not an expressway ramp.
-    expect(roadPresentationClass({ osmClass: "secondary_link", length: 80 })).toBe("hidden");
-    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("hidden");
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 30 })).toBe("hidden");
+    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("secondary");
     // Long or grade-separated surface links are real road geometry. Hiding one
     // would leave a vehicle floating with no road under it.
     expect(roadPresentationClass({ osmClass: "secondary_link", length: 180 })).toBe("secondary");
@@ -101,9 +101,11 @@ describe("road presentation hierarchy", () => {
       ...metroGeo.roadsArterial.features,
       ...metroGeo.roadsHighway.features,
     ];
+    // Only junction-scale links disappear. Longer/structural surface links stay
+    // visible so a live vehicle never floats without roadway support.
     expect(
       visible.some((feature) => String(feature.properties.osmClass) === "secondary_link"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("gives bridge material only to pieces that cross water", () => {
