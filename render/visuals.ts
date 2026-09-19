@@ -89,30 +89,34 @@ export function signalTierOpacity(zoom: number): number {
  * arbitrary pixel sizes. It stays subordinate to the road at neighborhood
  * zoom and becomes explicit at street zoom.
  */
-export function signalGateWidthPx(zoom: number): number {
+function zoomProgress(zoom: number, start: number, end: number): number {
   if (!Number.isFinite(zoom)) {
-    return 3.5;
+    return 0.5;
   }
-  const t = Math.min(1, Math.max(0, (zoom - SIGNAL_STATE_MINZOOM) / 3.2));
-  return 3.25 + t * 2.25;
+  const t = Math.min(1, Math.max(0, (zoom - start) / (end - start)));
+  // Smoothstep avoids a mechanical linear feel while remaining deterministic.
+  return t * t * (3 - 2 * t);
 }
 
-/** A same-path neutral keyline behind the coloured gate, never a second bar. */
+export function signalGateWidthPx(zoom: number): number {
+  const t = zoomProgress(zoom, SIGNAL_STATE_MINZOOM, 19.6);
+  return 3.1 + t * 3.4;
+}
+
+/** A same-path dark keyline behind the coloured gate, never a second bar. */
 export function signalGateBackingWidthPx(zoom: number): number {
-  return signalGateWidthPx(zoom) + 2.25;
+  return signalGateWidthPx(zoom) + 2;
 }
 
 /**
- * Physical traffic-light housing height. The old 13/15 px step function made
- * the head look like a black dash at every zoom. This grows smoothly from a
- * recognizable 16 px head to 28 px at maximum street inspection.
+ * Physical traffic-light housing height. This is deliberately more aggressive
+ * than vehicle scaling: the lamp is interaction state, not literal map scale.
+ * It starts compact at neighborhood zoom and becomes unmistakable when the user
+ * zooms in to inspect a junction.
  */
 export function signalHeadHeightPx(zoom: number): number {
-  if (!Number.isFinite(zoom)) {
-    return 18;
-  }
-  const t = Math.min(1, Math.max(0, (zoom - SIGNAL_HEAD_MINZOOM) / 3));
-  return 16 + t * 12;
+  const t = zoomProgress(zoom, SIGNAL_HEAD_MINZOOM, 19.8);
+  return 18 + t * 18;
 }
 
 /* ------------------------------------------------------------------ */
