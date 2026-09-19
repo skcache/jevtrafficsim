@@ -82,6 +82,8 @@ describe("signal tiers", () => {
     expect(signalTierOpacity(15.7)).toBe(0);
     expect(signalTierOpacity(15.8)).toBe(0);
     expect(signalTierOpacity(16.2)).toBeCloseTo(1, 5);
+    expect(signalTierOpacity(16.5)).toBeCloseTo(1, 5);
+    expect(signalTierOpacity(17.5)).toBeCloseTo(1, 5);
   });
 });
 
