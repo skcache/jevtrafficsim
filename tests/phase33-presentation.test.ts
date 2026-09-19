@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { isExpresswayClass, roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
-import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
+import { buildSignalLayers, buildSignalPlans, buildVehicleLayers } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
 import { chicagoModel } from "./chicago-support";
@@ -117,6 +117,38 @@ describe("road presentation hierarchy", () => {
       const piece = model.streets.find((entry) => entry.streetId === feature.properties.streetId)!;
       expect(pieceCrossesWater(piece.points, model.water)).toBe(true);
     }
+  });
+});
+
+describe("vehicle presentation stays coherent", () => {
+  it("renders the full active fleet once individual vehicles are visible", () => {
+    const vehicles = Array.from({ length: 24 }, (_, id) => ({
+      id,
+      roadId: 0,
+      type: "car" as const,
+      state: "moving" as const,
+      x: model.city.intersections[0].x,
+      y: model.city.intersections[0].y,
+      headingRadians: 0,
+      blockedWaitMs: 0,
+      fade: 1,
+      queueRank: -1,
+    }));
+    const icons = {
+      atlas: "data:image/png;base64,",
+      mapping: {
+        car: { x: 0, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+        truck: { x: 128, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+        bicycle: { x: 256, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+      },
+    } as never;
+    const layers = buildVehicleLayers(model.projection, vehicles, icons, 16);
+    const car = layers.find((layer) => layer.id === "vehicle-body-car") as unknown as {
+      props: { data: unknown[]; sizeUnits: string; getSize: number };
+    };
+    expect(car.props.data).toHaveLength(vehicles.length);
+    expect(car.props.sizeUnits).toBe("meters");
+    expect(car.props.getSize).toBeGreaterThan(0);
   });
 });
 
