@@ -29,13 +29,11 @@ import {
   hatchSegments,
   signalGateBackingWidthPx,
   signalGateWidthPx,
-  signalHeadHeightPx,
   signalTierOpacity,
   vehicleLengthPx,
 } from "./visuals";
 import { iconSizeForLengthPx } from "./vehicle-sprites";
 import {
-  signalIconSizeForHousingPx,
   signalSpriteForStage,
   type SignalSpriteId,
   type SignalSpriteSet,
@@ -471,13 +469,18 @@ export function buildSignalLayers(
         // is therefore screen-aligned like a map annotation, which keeps the
         // familiar red/yellow/green stack instantly recognizable at any street
         // angle instead of turning into a tiny rotated black dash.
-        getSize: signalIconSizeForHousingPx(signalHeadHeightPx(zoom)),
+        // Use physical/common map scaling rather than a hand-tuned pixel
+        // step. The head grows naturally as the camera descends, while the
+        // legibility caps keep it readable at entry zoom and prevent it from
+        // becoming a billboard at maximum inspection.
+        getSize: 2.2,
         getAngle: 0,
         opacity,
-        sizeUnits: "pixels",
+        sizeUnits: "meters",
+        sizeMinPixels: 18,
+        sizeMaxPixels: 38,
         billboard: true,
         pickable: false,
-        updateTriggers: { getSize: zoom },
       }),
     );
   }
