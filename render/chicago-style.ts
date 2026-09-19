@@ -104,7 +104,7 @@ export const MAP_ZOOM = {
   buildingsAll: 17.4,
   buildingsOutline: 17.9,
   /** Short unnamed stubs earn ink only when the camera is close. */
-  roadsDetail: 18,
+  roadsDetail: 19.2,
   /** Park edges, like building outlines, are a close-zoom instrument. */
   parksEdge: 17,
   landmarks: 16.4,
@@ -286,6 +286,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "roads-local-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-local",
       minzoom: MAP_ZOOM.localRoads,
       paint: {
@@ -297,6 +298,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "roads-local",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-local",
       minzoom: MAP_ZOOM.localRoads,
       paint: {
@@ -313,33 +315,38 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       type: "line",
       source: "roads-detail",
       minzoom: MAP_ZOOM.roadsDetail,
+      layout: { "line-cap": "round", "line-join": "round" },
       paint: {
         "line-color": palette.localSurface,
-        "line-width": roadWidthPx(0.4),
-        "line-opacity": 0.9,
+        "line-width": roadWidthPx(0.2),
+        "line-opacity": 0.6,
       },
     },
     {
       id: "roads-arterial-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
       paint: { "line-color": palette.arterialCasing, "line-width": roadWidthPx(2, 1.35) },
     },
     {
       id: "roads-arterial",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
       paint: { "line-color": palette.arterialSurface, "line-width": roadWidthPx(0, 1.45) },
     },
     {
       id: "roads-highway-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
       paint: { "line-color": palette.highwayCasing, "line-width": roadWidthPx(2.8, 3.6) },
     },
     {
       id: "roads-highway",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
       paint: { "line-color": palette.highwaySurface, "line-width": roadWidthPx(0, 3.35) },
     },
@@ -358,12 +365,14 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "bridges-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
       paint: { "line-color": palette.bridgeCasing, "line-width": zoomWidth(4.4, 9.8, 15.6) },
     },
     {
       id: "bridges",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
       paint: { "line-color": palette.bridgeSurface, "line-width": zoomWidth(3.4, 7.8, 12.6) },
     },
