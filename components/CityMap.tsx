@@ -10,10 +10,9 @@
  * bounded 5 Hz presentation snapshots, interpolated to display rate in one
  * rAF loop.
  *
- * Presentation grammar: a warm printed city. Land, water, parks, district
- * tints and three road classes carry the hierarchy; buildings gain a long
- * shadow at street zoom; labels follow a rank ladder and incidents surface
- * their own plates. React renders this component once per scale; nothing here
+ * Presentation grammar: muted city context under explicit simulation state.
+ * Blocks, water, major parks and road hierarchy orient the user; vehicles,
+ * right-of-way gates, congestion and incidents carry the experiment. React renders this component once per scale; nothing here
  * rerenders per frame. No simulation logic on this thread.
  */
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -40,11 +39,9 @@ import {
 import { roadPressure } from "@/render/congestion";
 import {
   boundsLngLat as cameraBoundsLngLat,
-  centralBounds,
   FIT_PADDING,
   networkBounds,
   presetPose,
-  PRESET_PADDING,
 } from "@/render/camera-presets";
 import { buildChicagoStyle } from "@/render/chicago-style";
 import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
@@ -268,10 +265,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
 
     const handle: MapHandle = {
       flyToCentral: (options) => {
-        map.fitBounds(cameraBoundsLngLat(initialModel, centralBounds(initialModel)), {
-          padding: PRESET_PADDING,
-          duration: options?.immediate ? 0 : 1500,
-          maxZoom: 17.4,
+        // Enter City should immediately demonstrate the PRODUCT: roughly
+        // four-to-seven blocks, legible vehicle classes and signal state. A
+        // generic downtown fit was technically geographic but too zoomed out
+        // to explain why this is a traffic simulator.
+        const street = presetPose("street");
+        map.easeTo({
+          center: [street.center[0], street.center[1]],
+          zoom: street.zoom,
+          duration: options?.immediate ? 0 : 1350,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
