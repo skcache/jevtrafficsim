@@ -6,7 +6,13 @@
 import { describe, expect, it } from "vitest";
 import { angleDelta, interpolateVehicles, lerpAngle, positionForRoad } from "@/render/interpolate";
 import { packQueues } from "@/render/queue-packing";
-import { LANE_WIDTH_M, QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
+import {
+  LANE_WIDTH_M,
+  QUEUE_GAP_M,
+  STOP_LINE_CLEARANCE_M,
+  VEHICLE_LENGTH_M,
+  stopLineSetbackMetres,
+} from "@/render/road-presentation";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import type { City, Road } from "@/sim/types";
@@ -278,13 +284,24 @@ describe("queue packing", () => {
     const packed = packQueues(city, indexes, laneOffsets, rendered, (id) => progress.get(id) ?? 0);
     const sorted = [...packed].sort((a, b) => a.queueRank - b.queueRank);
     expect(sorted.map((vehicle) => vehicle.id)).toEqual([1, 2, 3]);
-    // Spacing uses real class lengths plus the gap.
-    const gapAfterFront = (VEHICLE_LENGTH_M.car + QUEUE_GAP_M);
+    // The front centre sits behind the rendered stop line by half its body
+    // plus clearance, so its nose cannot hang into the intersection.
+    const expectedFront =
+      100 -
+      stopLineSetbackMetres(city.roads[0].lanes) -
+      VEHICLE_LENGTH_M.car / 2 -
+      STOP_LINE_CLEARANCE_M;
+    expect(sorted[0].x).toBeCloseTo(expectedFront, 6);
+
+    // Centre-to-centre queue spacing is half of each adjacent body plus the gap.
+    const gapAfterFront =
+      VEHICLE_LENGTH_M.car / 2 + QUEUE_GAP_M + VEHICLE_LENGTH_M.truck / 2;
     expect(Math.hypot(sorted[1].x - sorted[0].x, sorted[1].y - sorted[0].y)).toBeCloseTo(
       gapAfterFront,
       6,
     );
-    const gapAfterSecond = VEHICLE_LENGTH_M.truck + QUEUE_GAP_M;
+    const gapAfterSecond =
+      VEHICLE_LENGTH_M.truck / 2 + QUEUE_GAP_M + VEHICLE_LENGTH_M.bicycle / 2;
     expect(Math.hypot(sorted[2].x - sorted[1].x, sorted[2].y - sorted[1].y)).toBeCloseTo(
       gapAfterSecond,
       6,
