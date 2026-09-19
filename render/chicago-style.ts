@@ -103,8 +103,6 @@ export const MAP_ZOOM = {
   buildings: 16.6,
   buildingsAll: 17.4,
   buildingsOutline: 17.9,
-  /** Short unnamed stubs earn ink only when the camera is close. */
-  roadsDetail: 19.2,
   /** Park edges, like building outlines, are a close-zoom instrument. */
   parksEdge: 17,
   landmarks: 16.4,
@@ -147,7 +145,14 @@ const AREA_MID_ZOOM = 13.5;
 /* ------------------------------------------------------------------ */
 
 const METRES_PER_PIXEL_AT_Z0 = 156543.03392 * Math.cos((41.881 * Math.PI) / 180);
-const FLOOR_PX: Record<number, number> = { 9: 0.7, 11: 1.0, 13: 1.3, 15: 1.6, 17: 1.8 };
+const FLOOR_PX: Record<number, number> = {
+  9: 0.7,
+  11: 1.0,
+  13: 1.3,
+  15: 1.6,
+  17: 1.8,
+  19.5: 2.0,
+};
 
 /**
  * Data-driven road width: a feature's physical width in metres converted to
@@ -183,6 +188,8 @@ export function roadWidthPx(extraPx = 0, floorScale = 1): number {
     at(15),
     17,
     at(17),
+    19.5,
+    at(19.5),
   ] as unknown as number;
 }
 
@@ -351,14 +358,14 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
-      paint: { "line-color": palette.bridgeCasing, "line-width": zoomWidth(4.4, 9.8, 15.6) },
+      paint: { "line-color": palette.bridgeCasing, "line-width": roadWidthPx(3.2, 1.2) },
     },
     {
       id: "bridges",
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
-      paint: { "line-color": palette.bridgeSurface, "line-width": zoomWidth(3.4, 7.8, 12.6) },
+      paint: { "line-color": palette.bridgeSurface, "line-width": roadWidthPx(0, 1.05) },
     },
     {
       id: "road-markings-highway",
