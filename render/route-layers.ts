@@ -23,40 +23,61 @@ function color(hex: readonly [number, number, number], alpha = 255): [number, nu
 }
 
 /**
- * Casing under core: the casing separates the route from blocks and other
- * roads, the coloured core carries traffic state.
+ * One continuous-looking route band.
+ *
+ * The old casing + core design doubled the visual stroke and, because route
+ * geometry arrives per directed road, round caps stacked into visible circles
+ * at intersections. We now coalesce consecutive roads with the same traffic
+ * class and draw ONE band with butt caps. Traffic can still transition
+ * blue/amber/red, but there is never a second outline colour underneath it.
  */
-export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
-  if (segments.length === 0) {
-    return [];
+interface RouteRun {
+  readonly traffic: RouteSegment["traffic"];
+  readonly path: readonly LngLat[];
+}
+
+export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
+  const runs: Array<{ traffic: RouteSegment["traffic"]; path: LngLat[] }> = [];
+  for (const segment of segments) {
+    const path = segment.path as readonly LngLat[];
+    if (path.length < 2) continue;
+    const previous = runs[runs.length - 1];
+    if (previous && previous.traffic === segment.traffic) {
+      const a = previous.path[previous.path.length - 1];
+      const b = path[0];
+      const joined = Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7;
+      previous.path.push(...(joined ? path.slice(1) : path));
+    } else {
+      runs.push({ traffic: segment.traffic, path: [...path] });
+    }
   }
-  const casing = new PathLayer<RouteSegment>({
-    id: "route-casing",
-    data: segments as RouteSegment[],
-    getPath: (segment) => segment.path as unknown as LngLat[],
-    getColor: [33, 29, 24, Math.round(ROUTE_SCALE.casingOpacity * 255)],
-    getWidth: ROUTE_SCALE.casingWidthM,
-    widthUnits: "meters",
-    widthMinPixels: ROUTE_SCALE.casingMinPixels,
-    widthMaxPixels: ROUTE_SCALE.coreMaxPixels * 2,
-    capRounded: true,
-    jointRounded: true,
-    pickable: false,
-  });
-  const core = new PathLayer<RouteSegment>({
-    id: "route-core",
-    data: segments as RouteSegment[],
-    getPath: (segment) => segment.path as unknown as LngLat[],
-    getColor: (segment) => color(ROUTE_TRAFFIC_COLORS[segment.traffic], Math.round(ROUTE_SCALE.coreOpacity * 255)),
-    getWidth: ROUTE_SCALE.coreWidthM,
-    widthUnits: "meters",
-    widthMinPixels: ROUTE_SCALE.coreMinPixels,
-    widthMaxPixels: ROUTE_SCALE.coreMaxPixels,
-    capRounded: true,
-    jointRounded: true,
-    pickable: false,
-  });
-  return [casing, core];
+  return runs;
+}
+
+export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
+  const runs = buildRouteRuns(segments);
+  if (runs.length === 0) return [];
+  return [
+    new PathLayer<RouteRun>({
+      id: "route-band",
+      data: runs,
+      getPath: (run) => run.path as LngLat[],
+      getColor: (run) =>
+        color(
+          ROUTE_TRAFFIC_COLORS[run.traffic],
+          Math.round(ROUTE_SCALE.opacity * 255),
+        ),
+      getWidth: ROUTE_SCALE.widthM,
+      widthUnits: "meters",
+      widthMinPixels: ROUTE_SCALE.minPixels,
+      widthMaxPixels: ROUTE_SCALE.maxPixels,
+      // Butt caps are intentional: round caps on per-road paths were the
+      // mysterious circles visible at intersections.
+      capRounded: false,
+      jointRounded: true,
+      pickable: false,
+    }),
+  ];
 }
 
 export interface DestinationAnchor {
