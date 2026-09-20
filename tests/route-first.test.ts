@@ -17,7 +17,7 @@ import {
   classifyRoadTraffic,
   classifySnapshotRoads,
 } from "@/render/route-traffic";
-import { buildRouteSegments, trimPathFrom } from "@/render/route-path";
+import { buildRouteSegments, presentationRouteIndex, trimPathFrom } from "@/render/route-path";
 import { buildDestinationLayers, buildRouteLayers, buildRouteRuns } from "@/render/route-layers";
 import { createDestinationSprites } from "@/render/destination-sprite";
 import { ROUTE_SCALE, DESTINATION_SCALE } from "@/render/scale";
@@ -87,6 +87,27 @@ describe("route traffic classification", () => {
 
 describe("route geometry", () => {
   const model = chicagoModel(4);
+
+  it("keeps presentation on the previous road while the visible ego is still crossing", () => {
+    const trip = {
+      tripId: "x",
+      originIntersectionId: 0,
+      destinationIntersectionId: 3,
+      routeRoadIds: [10, 11, 12],
+      routeIndex: 1,
+      tripTimeMs: 0,
+      waitTimeMs: 0,
+      distanceRemainingM: 0,
+      distanceTravelledM: 0,
+      intersectionsCleared: 1,
+      completed: false,
+      estimatedRemainingMs: 0,
+    };
+    expect(presentationRouteIndex(trip, { roadId: 10 })).toBe(0);
+    expect(presentationRouteIndex(trip, { roadId: 11 })).toBe(1);
+    expect(presentationRouteIndex(trip, { roadId: 12 })).toBe(2);
+    expect(presentationRouteIndex(trip, { roadId: 999 })).toBe(1);
+  });
 
   function tripFrame(seed = 42) {
     const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", seed);
