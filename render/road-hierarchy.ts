@@ -73,10 +73,11 @@ export function roadPresentationClass(piece: RoadPresentationInput): RoadPresent
     return "secondary";
   }
   if (osmClass.endsWith("_link")) {
-    // Only genuinely junction-scale at-grade plumbing disappears. Anything
-    // longer must remain visible, otherwise a perfectly valid vehicle can look
-    // detached from the road while traversing it.
-    return piece.length < 45 ? "hidden" : "secondary";
+    // Surface *_link geometry is usually OSM turn/slip plumbing, not a street
+    // a human would identify as a separate road. The old 45 m threshold leaked
+    // block-length pseudo-ramps back into the Loop. Keep only long, NAMED links
+    // as standalone streets; structural links were already preserved above.
+    return piece.name && piece.length > 120 ? "secondary" : "hidden";
   }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
     return "hidden";
