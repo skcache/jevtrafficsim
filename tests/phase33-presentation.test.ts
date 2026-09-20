@@ -302,6 +302,15 @@ describe("product shell contracts", () => {
     expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
   });
 
+  it("shows the citywide traffic system behind the ego challenge", () => {
+    expect(map).toContain("buildNetworkSignalLayers");
+    expect(map).toContain("networkSignalMarkers");
+    expect(map).toContain("buildCongestionLayers");
+    // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
+    // road state even while the camera is close enough to inspect the ego.
+    expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
+  });
+
   it("swaps every presentation source when the city scale changes", () => {
     for (const source of [
       "blocks",
