@@ -300,8 +300,9 @@ describe("authoritative queue packing", () => {
   const model = chicagoModel(2);
   const indexes = buildDirectedPathIndexes(model);
   const laneOffsets = model.city.roads.map(() => 0);
-  // A road long enough to hold a queue; its end is the stop line side.
-  const roadId = model.city.roads.findIndex((road) => road.length > 60);
+  // Keep these rank-order tests on one physical lane. Multi-lane packing has
+  // its own regression test; this block isolates the worker's queue ordering.
+  const roadId = model.city.roads.findIndex((road) => road.length > 60 && road.lanes === 1);
   expect(roadId).toBeGreaterThanOrEqual(0);
   const index = indexes[roadId]!;
   const roadEnd = samplePathIndex(index, index.total);
@@ -391,7 +392,7 @@ describe("authoritative queue packing", () => {
   });
 
   it("orders each road's queue independently", () => {
-    const other = model.city.roads.findIndex((road, id) => id !== roadId && road.length > 40);
+    const other = model.city.roads.findIndex((road, id) => id !== roadId && road.length > 40 && road.lanes === 1);
     expect(other).toBeGreaterThanOrEqual(0);
     const vehicles = [
       queued(11, 1, 30, "car", other),
