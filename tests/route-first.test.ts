@@ -280,5 +280,7 @@ describe("trip HUD", () => {
     expect(view?.completed).toBe(true);
     expect(view?.state).toBe("Arrived");
     expect(view?.rows.find((row) => row.label === "Remaining")?.value).toBe("0 m");
+    // A finished trip has nothing left to estimate.
+    expect(view?.rows.find((row) => row.label === "Est. remaining")?.value).toBe("—");
   });
 });

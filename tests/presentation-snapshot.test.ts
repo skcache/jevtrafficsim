@@ -131,6 +131,8 @@ describe("presentation snapshots", () => {
     runEngine(engine, 1_200);
     const arrived = buildPresentationSnapshot(engine, 5, "loop-circuit");
     expect(arrived.trip?.completed).toBe(true);
+    // Parked at the destination: no stale speed crosses the frame.
+    expect(arrived.ego?.speed).toBe(0);
     expect(arrived.trip?.distanceRemainingM).toBe(0);
     expect(arrived.trip?.distanceTravelledM).toBeCloseTo(12, 5);
     // tripId is the only place a trip name lives; the ego keeps being ordinary.

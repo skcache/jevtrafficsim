@@ -301,7 +301,9 @@ export function buildPresentationSnapshot(
         routeIndex: egoVehicle.routeIndex,
         queueRank: queueRanks.get(egoVehicle.id) ?? null,
         blockedWaitMs: blockedWaitOf(engine, egoVehicle),
-        speed: egoVehicle.speed,
+        // An arrived car is parked: report 0 rather than the speed it was
+        // carrying when it crossed the destination.
+        speed: egoVehicle.state === "arrived" ? 0 : egoVehicle.speed,
       }
     : null;
 

@@ -203,7 +203,10 @@ export function tripHudView(input: TripHudInput): TripHudView | null {
       { label: "Cleared", value: cleared },
       {
         label: "Est. remaining",
-        value: trip.estimatedRemainingMs === null ? "—" : formatDuration(trip.estimatedRemainingMs),
+        value:
+          trip.completed || trip.estimatedRemainingMs === null
+            ? "—"
+            : formatDuration(trip.estimatedRemainingMs),
       },
     ],
   };
