@@ -298,27 +298,34 @@ describe("product shell contracts", () => {
   });
 
   it("shows city traffic during setup without leaking the private challenge route", () => {
-    expect(map).toContain("networkContextLayers");
-    expect(map).toContain("challengeLayers");
+    expect(map).toContain("networkTrafficLayers");
+    expect(map).toContain("networkSignalLayers");
+    expect(map).toContain("routeLayers");
+    expect(map).toContain("challengeTopLayers");
     expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
-    expect(map).toContain("const layers: Layer[] = [...networkContextLayers, ...challengeLayers]");
+    // Traffic/signals exist before live mode; route/ego layers remain gated.
+    expect(map).toContain("...networkTrafficLayers");
+    expect(map).toContain("...networkSignalLayers");
     // Incident plates and route-specific incident chrome still belong only to
     // the live challenge, not the prewarmed setup background.
     expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
   });
 
-  it("shows citywide traffic context without double-painting the ego route", () => {
+  it("shows citywide traffic context without double-painting the visible ego route", () => {
     expect(map).toContain("buildNetworkSignalLayers");
     expect(map).toContain("networkSignalMarkers");
     expect(map).toContain("buildCongestionLayers");
     // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
     // road state even while the camera is close enough to inspect the ego.
     expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
-    // The route already paints its own blue/amber/red state. Citywide pressure
-    // must not peek out around it as a second coloured stroke.
-    expect(map).toContain("!routeRoadIds.has(entry.roadId)");
-    // The tiny neutral signal yields while that intersection is contextual, so
-    // the user sees one control enlarging rather than two stacked glyphs.
+    // The remaining route is one navigation-blue band. Citywide pressure is
+    // suppressed only under those visible segments; roads already driven
+    // immediately rejoin the city traffic layer.
+    expect(map).toContain("new Set(segments.map((segment) => segment.roadId))");
+    expect(map).toContain("!visibleRouteRoadIds.has(entry.roadId)");
+    // Tiny network signals sit above the route until the contextual replacement
+    // takes over, preventing the blue band from hiding proof of the signal net.
+    expect(map.indexOf("...routeLayers")).toBeLessThan(map.indexOf("...networkSignalLayers"));
     expect(map).toContain("!contextualIntersectionIds.has(marker.intersectionId)");
   });
 
