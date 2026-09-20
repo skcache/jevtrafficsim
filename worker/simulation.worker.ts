@@ -14,8 +14,7 @@
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import type { WaterCrossingBridge } from "@/cities/map-model";
-import { CHICAGO_SCALE_LABELS, availableChicagoEventVenues } from "@/cities/chicago";
+import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
@@ -30,11 +29,17 @@ import {
   type EngineState,
   type ScheduledSpawn,
 } from "@/sim/engine";
-import { createRng } from "@/sim/rng";
 import {
   buildPresentationMetrics,
   buildPresentationSnapshot,
 } from "./presentation-snapshot";
+import {
+  buildChallengeIncidentPlan,
+  challengeIncidentFingerprintInput,
+  resolveManualChallengeIncident,
+  type ChallengeIncidentPlan,
+  type ResolvedChallengeIncident,
+} from "./challenge-incidents";
 import {
   LIVE_RUN_HORIZON_MS,
   METRICS_EVERY_TICKS,
@@ -67,14 +72,14 @@ interface WorkerState {
   complete: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   snapshotSequence: number;
-  /** Intersection ids of the stadium venues, for event-release targeting. */
-  venues: number[];
-  /** Water-crossing bridge groups, for bridge-closed targeting. */
-  waterCrossingBridges: readonly WaterCrossingBridge[];
-  /** Rotates through the water crossings deterministically. */
-  bridgeTurn: number;
-  /** Rotates through the venues deterministically as events fire. */
-  venueTurn: number;
+  /** Active frozen Chicago presentation model; needed for route-relevant manual targeting. */
+  model: MapModel | null;
+  /** Controller-neutral automatic challenge plan resolved before the engine starts. */
+  incidentPlan: ChallengeIncidentPlan | null;
+  /** Exact automatic + manual resolved entries, ready for Issue #28 replay. */
+  incidentHistory: ResolvedChallengeIncident[];
+  /** Stable sequence for manual resolution streams. */
+  manualIncidentSequence: number;
   /** Guards against overlapping async builds (fast scale switching). */
   buildToken: number;
 }
@@ -89,10 +94,10 @@ const state: WorkerState = {
   complete: false,
   timer: null,
   snapshotSequence: 0,
-  venues: [],
-  waterCrossingBridges: [],
-  bridgeTurn: 0,
-  venueTurn: 0,
+  model: null,
+  incidentPlan: null,
+  incidentHistory: [],
+  manualIncidentSequence: 0,
   buildToken: 0,
 };
 
@@ -185,33 +190,55 @@ async function buildRun(config: RunConfig): Promise<void> {
   }
   const trip = challenge.trip;
   const spawns: ScheduledSpawn[] = [challenge.spawn, ...background];
-  // Deterministic incident root derived from the run seed: interactive
-  // incidents resolve from it through the engine's existing machinery.
-  const incidentSeed = createRng(config.seed).fork("incidents").seed;
+
+  // Resolve the ENTIRE automatic challenge before a controller executes.
+  // The planner sees only frozen geography + canonical trip + traffic + seed,
+  // so Fixed/Adaptive/Jev receive byte-identical adversity.
+  const incidentPlan = buildChallengeIncidentPlan(
+    model,
+    trip,
+    config.trafficLevel,
+    config.seed,
+  );
   const engine = createEngine({
     city,
     controller: makeController(config.controller),
     spawns,
-    incidents: { seed: incidentSeed, script: [] },
+    incidents: {
+      seed: incidentPlan.incidentSeed,
+      script: [...incidentPlan.entries],
+    },
   });
   state.config = config;
   state.engine = engine;
   state.trip = trip;
+  state.model = model;
   state.scaleIndex = scaleIndex;
-  state.incidentSeed = incidentSeed;
+  state.incidentSeed = incidentPlan.incidentSeed;
+  state.incidentPlan = incidentPlan;
+  state.incidentHistory = incidentPlan.entries.map((entry, id) => ({
+    id,
+    source: "automatic" as const,
+    entry,
+  }));
+  state.manualIncidentSequence = 0;
   state.snapshotSequence = 0;
-  state.venueTurn = 0;
-  state.bridgeTurn = 0;
-  state.waterCrossingBridges = model.waterCrossingBridges;
-  // Only venues actually present in this scale, near real road topology.
-  state.venues = availableChicagoEventVenues(model).map((venue) => venue.intersectionId);
   post({
     type: "READY",
     config,
     scaleIndex,
     scaleLabel: CHICAGO_SCALE_LABELS[scaleIndex] ?? "Medium",
     timeMs: engine.traffic.timeMs,
-    incidentSeed,
+    incidentSeed: incidentPlan.incidentSeed,
+    incidentPlan,
+    incidentHistory: state.incidentHistory.map((incident) => ({
+      ...incident,
+      entry: { ...incident.entry },
+    })),
+    incidentFingerprint: challengeIncidentFingerprintInput(
+      incidentPlan,
+      state.incidentHistory,
+    ),
   });
   postSnapshot();
   postMetrics();
@@ -323,33 +350,88 @@ function handleCommand(command: WorkerCommand): void {
       return;
     }
     case "INCIDENT": {
-      if (!state.engine) {
+      const engine = state.engine;
+      const model = state.model;
+      const plan = state.incidentPlan;
+      if (!engine || !model || !plan) {
         post({ type: "ERROR", message: "cannot INCIDENT before INIT" });
         return;
       }
-      // Interactive injection through the Task-10 seam: atMs defaults to the
-      // current simulation time; it activates on the next incident phase.
-      //
-      // Two Chicago-specific targets ride along, both deterministic and both
-      // through the existing seam — the incident lifecycle itself is unchanged:
-      //  * event release targets a real venue (United Center / Soldier Field)
-      //    so the crowd pours out of the stadium, not a random interchange;
-      //  * bridge closed targets a bridge group that actually crosses water, so
-      //    the hero control never closes a highway viaduct over land.
-      const center =
-        command.kind === "event-release" && state.venues.length > 0
-          ? state.venues[state.venueTurn++ % state.venues.length]
-          : undefined;
-      const bridgeTarget =
-        command.kind === "bridge-closed" && state.waterCrossingBridges.length > 0
-          ? state.waterCrossingBridges[state.bridgeTurn++ % state.waterCrossingBridges.length]
-          : undefined;
-      queueIncident(state.engine, {
+
+      const ego =
+        engine.egoVehicleId === null
+          ? null
+          : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId) ?? null;
+      if (!ego) {
+        post({
+          type: "INCIDENT_RESOLVED",
+          kind: command.kind,
+          queued: false,
+          label: "Trip vehicle is not ready yet",
+          incident: null,
+          incidentHistory: state.incidentHistory.map((incident) => ({
+            ...incident,
+            entry: { ...incident.entry },
+          })),
+          incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
+        });
+        return;
+      }
+
+      // Manual chaos is allowed to follow the LIVE route because the human
+      // asked for adversity in this exact run. Crucially, we immediately record
+      // the concrete target + simulation timestamp so Issue #28 can replay this
+      // exact click under another controller.
+      const resolution = resolveManualChallengeIncident({
+        model,
+        city: engine.city,
         kind: command.kind,
-        ...(center === undefined ? {} : { centerIntersectionId: center }),
-        ...(bridgeTarget === undefined ? {} : { targetRoadId: bridgeTarget.roadId }),
+        atMs: engine.traffic.timeMs,
+        seed: state.incidentSeed,
+        sequence: state.manualIncidentSequence,
+        routeRoadIds: ego.route,
+        routeIndex: ego.routeIndex,
+        egoRoadId: ego.roadId,
+        destinationIntersectionId: ego.destination,
       });
-      postSnapshot(); // immediate feedback frame (pending marker)
+      state.manualIncidentSequence += 1;
+
+      if (!resolution.entry) {
+        post({
+          type: "INCIDENT_RESOLVED",
+          kind: command.kind,
+          queued: false,
+          label: resolution.label,
+          incident: null,
+          incidentHistory: state.incidentHistory.map((incident) => ({
+            ...incident,
+            entry: { ...incident.entry },
+          })),
+          incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
+        });
+        return;
+      }
+
+      const id = queueIncident(engine, resolution.entry);
+      const resolved: ResolvedChallengeIncident = {
+        id,
+        source: "manual",
+        entry: resolution.entry,
+      };
+      state.incidentHistory.push(resolved);
+      post({
+        type: "INCIDENT_RESOLVED",
+        kind: command.kind,
+        queued: true,
+        label: resolution.label,
+        incident: resolved,
+        incidentHistory: state.incidentHistory.map((incident) => ({
+          ...incident,
+          entry: { ...incident.entry },
+        })),
+        incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
+      });
+      postSnapshot();
       return;
     }
   }

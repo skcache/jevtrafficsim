@@ -1,6 +1,7 @@
 /**
- * Route geometry (Issue #25): the ego's CURRENT remaining route as a list of
- * per-road polylines, each tagged with its traffic class.
+ * Route geometry: the ego's CURRENT remaining route as a list of per-road
+ * polylines. Traffic class stays attached for ETA/debug summaries, while the
+ * visible navigation band is intentionally one consistent blue.
  *
  * The geometry comes from the presentation frame's trip payload — which is
  * rebuilt from the vehicle's own route every frame — so an incident reroute
@@ -50,6 +51,35 @@ export function trimPathFrom(points: readonly Point[], fromDistance: number): Po
 }
 
 /**
+ * Presentation route index aligned to the interpolated ego road.
+ *
+ * Worker snapshots advance `trip.routeIndex` atomically, while the visible car
+ * spends part of the 200 ms interpolation interval finishing the previous road.
+ * During that interval presentation must keep using the previous route segment
+ * or the blue band / upcoming control jumps one intersection ahead of the car.
+ */
+export function presentationRouteIndex(
+  trip: PresentationTripProgress,
+  ego: { readonly roadId: RoadId | null } | null,
+): number {
+  const base = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  if (!ego || ego.roadId === null || trip.routeRoadIds.length === 0) {
+    return base;
+  }
+  const candidates = [base - 1, base, base + 1];
+  for (const index of candidates) {
+    if (
+      index >= 0 &&
+      index < trip.routeRoadIds.length &&
+      trip.routeRoadIds[index] === ego.roadId
+    ) {
+      return index;
+    }
+  }
+  return base;
+}
+
+/**
  * Build the remaining-route segments, in driving order.
  *
  * `ego` is the interpolated on-screen car: its progress trims the current road.
@@ -63,7 +93,7 @@ export function buildRouteSegments(
   classes: ReadonlyMap<RoadId, RouteTrafficClass>,
 ): RouteSegment[] {
   const segments: RouteSegment[] = [];
-  const startIndex = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  const startIndex = presentationRouteIndex(trip, ego);
   for (let index = startIndex; index < trip.routeRoadIds.length; index += 1) {
     const roadId = trip.routeRoadIds[index];
     const points = model.directedPaths[roadId];
@@ -86,9 +116,9 @@ export function buildRouteSegments(
 }
 
 /**
- * Distance-weighted share of the remaining route in each traffic class. Used by
- * tests and the HUD's summary line, so both read the same numbers the map
- * paints.
+ * Remaining-route membership by traffic class. This is diagnostic/summary
+ * state; the citywide traffic overlay communicates traffic visually while the
+ * navigation band itself stays one colour.
  */
 export function routeTrafficMix(
   segments: readonly RouteSegment[],

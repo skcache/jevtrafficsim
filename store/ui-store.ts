@@ -118,6 +118,8 @@ export const useUiStore = create<UiState>()((set) => ({
       trip: null,
       egoState: null,
       egoSpeedMps: 0,
+      feedback: null,
+      surgeVisible: false,
     }),
   setRunning: (running) => set({ running }),
   setRunComplete: (runComplete) => set({ runComplete }),

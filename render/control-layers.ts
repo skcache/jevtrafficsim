@@ -29,7 +29,7 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
   }
   const signal = control.signal;
   if (!signal) {
-    return "control-signal-red";
+    return "control-signal-neutral";
   }
   if (signal.stage === "yellow") {
     return "control-signal-yellow";
@@ -41,43 +41,26 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
 }
 
 function sizeFor(control: ContextualControl): number {
-  const metres =
-    control.kind === "signal" ? CONTROL_SCALE.signalHeightM : CONTROL_SCALE.stopHeightM;
-  return control.prominence === "primary"
-    ? metres
-    : metres * CONTROL_SCALE.previewSizeScale;
+  const base =
+    control.kind === "signal"
+      ? CONTROL_SCALE.signalBaseHeightM
+      : CONTROL_SCALE.stopBaseHeightM;
+  const full =
+    control.kind === "signal"
+      ? CONTROL_SCALE.signalHeightM
+      : CONTROL_SCALE.stopHeightM;
+  return base + (full - base) * control.emphasis;
 }
 
-function iconLayer(
-  id: string,
-  controls: readonly ContextualControl[],
-  projection: Projection,
-  sprites: ControlSpriteSet,
-  opacity: number,
-  sizeMinPixels: number,
-): Layer {
-  return new IconLayer<ContextualControl>({
-    id,
-    data: controls as ContextualControl[],
-    iconAtlas: sprites.atlas,
-    iconMapping: sprites.mapping,
-    getIcon: (control) => controlSpriteFor(control),
-    getPosition: (control) => toLngLat(projection, control.x, control.y) as LngLat,
-    getSize: (control) => sizeFor(control),
-    sizeUnits: "meters",
-    sizeMinPixels,
-    sizeMaxPixels: CONTROL_SCALE.maxPixels,
-    // Geographic anchor, screen-facing sign face. Map-space size still controls
-    // zoom scaling; billboarding prevents pitch/tilt from crushing the lamps.
-    billboard: true,
-    opacity,
-    pickable: false,
-  });
+function opacityFor(control: ContextualControl): number {
+  return CONTROL_SCALE.opacityFloor + (1 - CONTROL_SCALE.opacityFloor) * control.emphasis;
 }
 
 /**
- * Build the contextual control layers. `sprites` missing means the atlas could
- * not be rasterised: draw nothing rather than a coloured dot fallback.
+ * One contextual layer. The icon takes over from the quiet network marker at
+ * nearly the same size, then grows continuously as route-distance emphasis
+ * approaches 1. The "primary" flag remains useful for debug/semantics, but no
+ * layer switch creates a visible pop at the primary threshold.
  */
 export function buildControlLayers(
   projection: Projection,
@@ -87,27 +70,24 @@ export function buildControlLayers(
   if (!sprites || controls.length === 0) {
     return [];
   }
-  const primary = controls.filter((control) => control.prominence === "primary");
-  const preview = controls.filter((control) => control.prominence === "preview");
-  const layers: Layer[] = [];
-  if (primary.length > 0) {
-    layers.push(
-      iconLayer("control-primary", primary, projection, sprites, 1, CONTROL_SCALE.minPixels),
-    );
-  }
-  if (preview.length > 0) {
-    layers.push(
-      iconLayer(
-        "control-preview",
-        preview,
-        projection,
-        sprites,
-        CONTROL_SCALE.previewOpacity,
-        CONTROL_SCALE.previewMinPixels,
-      ),
-    );
-  }
-  return layers;
+  return [
+    new IconLayer<ContextualControl>({
+      id: "control-contextual",
+      data: controls as ContextualControl[],
+      iconAtlas: sprites.atlas,
+      iconMapping: sprites.mapping,
+      getIcon: (control) => controlSpriteFor(control),
+      getPosition: (control) => toLngLat(projection, control.x, control.y) as LngLat,
+      getSize: (control) => sizeFor(control),
+      getColor: (control) => [255, 255, 255, Math.round(opacityFor(control) * 255)],
+      sizeUnits: "meters",
+      sizeMinPixels: CONTROL_SCALE.minPixels,
+      sizeMaxPixels: CONTROL_SCALE.maxPixels,
+      billboard: true,
+      opacity: 1,
+      pickable: false,
+    }),
+  ];
 }
 
 /** Pixel floor and cap applied to a layer, for tests and the debug contract. */

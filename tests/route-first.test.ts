@@ -17,8 +17,8 @@ import {
   classifyRoadTraffic,
   classifySnapshotRoads,
 } from "@/render/route-traffic";
-import { buildRouteSegments, trimPathFrom } from "@/render/route-path";
-import { buildDestinationLayers, buildRouteLayers } from "@/render/route-layers";
+import { buildRouteSegments, presentationRouteIndex, trimPathFrom } from "@/render/route-path";
+import { buildDestinationLayers, buildRouteLayers, buildRouteRuns } from "@/render/route-layers";
 import { createDestinationSprites } from "@/render/destination-sprite";
 import { ROUTE_SCALE, DESTINATION_SCALE } from "@/render/scale";
 import { chicagoModel } from "./chicago-support";
@@ -87,6 +87,27 @@ describe("route traffic classification", () => {
 
 describe("route geometry", () => {
   const model = chicagoModel(4);
+
+  it("keeps presentation on the previous road while the visible ego is still crossing", () => {
+    const trip = {
+      tripId: "x",
+      originIntersectionId: 0,
+      destinationIntersectionId: 3,
+      routeRoadIds: [10, 11, 12],
+      routeIndex: 1,
+      tripTimeMs: 0,
+      waitTimeMs: 0,
+      distanceRemainingM: 0,
+      distanceTravelledM: 0,
+      intersectionsCleared: 1,
+      completed: false,
+      estimatedRemainingMs: 0,
+    };
+    expect(presentationRouteIndex(trip, { roadId: 10 })).toBe(0);
+    expect(presentationRouteIndex(trip, { roadId: 11 })).toBe(1);
+    expect(presentationRouteIndex(trip, { roadId: 12 })).toBe(2);
+    expect(presentationRouteIndex(trip, { roadId: 999 })).toBe(1);
+  });
 
   function tripFrame(seed = 42) {
     const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", seed);
@@ -169,16 +190,18 @@ describe("route-first layers", () => {
       },
     ];
     const routeLayers = buildRouteLayers(segments);
-    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-casing", "route-core"]);
-    for (const layer of routeLayers) {
-      const props = (layer as unknown as { props: Record<string, unknown> }).props;
-      expect(props.widthUnits).toBe("meters");
-      expect(props.widthMinPixels).toBeGreaterThan(0);
-      expect(props.widthMaxPixels).toBeGreaterThan(props.widthMinPixels as number);
-    }
-    const core = (routeLayers[1] as unknown as { props: Record<string, unknown> }).props;
-    expect(core.getWidth).toBe(ROUTE_SCALE.coreWidthM);
-    expect(ROUTE_SCALE.casingWidthM).toBeGreaterThan(ROUTE_SCALE.coreWidthM);
+    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-band"]);
+    const route = (routeLayers[0] as unknown as { props: Record<string, unknown> }).props;
+    expect(route.widthUnits).toBe("meters");
+    expect(route.widthMinPixels).toBeGreaterThan(0);
+    expect(route.widthMaxPixels).toBeGreaterThan(route.widthMinPixels as number);
+    expect(route.getWidth).toBe(ROUTE_SCALE.widthM);
+    expect(route.capRounded).toBe(false);
+    expect(route.jointRounded).toBe(false);
+    expect((route.getColor as () => number[])()).toEqual([
+      ...ROUTE_SCALE.color,
+      Math.round(ROUTE_SCALE.opacity * 255),
+    ]);
 
     const sprites = { atlas: "data:,", mapping: { "destination-pin": { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false } } };
     const destLayers = buildDestinationLayers(model.projection, { x: 100, y: 100, completed: false }, sprites);
@@ -187,6 +210,35 @@ describe("route-first layers", () => {
     expect(pin.sizeUnits).toBe("meters");
     expect(pin.getSize).toBe(DESTINATION_SCALE.sizeM);
     expect(pin.sizeMinPixels).toBeGreaterThan(0);
+  });
+
+  it("coalesces the whole contiguous trip into one band even when traffic state changes", () => {
+    const runs = buildRouteRuns([
+      { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
+      { roadId: 2, path: [[1, 1], [2, 1]], traffic: "slowed" },
+      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "congested" },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1], [3, 1]]);
+  });
+
+  it("removes duplicate junction points that can render as circles", () => {
+    const runs = buildRouteRuns([
+      { roadId: 1, path: [[0, 0], [1, 1], [1, 1]], traffic: "free" },
+      { roadId: 2, path: [[1, 1], [1, 1], [2, 1]], traffic: "free" },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1]]);
+  });
+
+  it("never invents a connector across a geometry gap", () => {
+    const runs = buildRouteRuns([
+      { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
+      { roadId: 2, path: [[2, 2], [3, 2]], traffic: "free" },
+    ]);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1]]);
+    expect(runs[1].path).toEqual([[2, 2], [3, 2]]);
   });
 
   it("places the destination pin on the destination intersection", () => {

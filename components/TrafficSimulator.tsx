@@ -29,6 +29,9 @@ import { scaleIndexForSize } from "./ui-model";
 
 interface JevDebugHook {
   config: unknown;
+  incidentPlan: unknown;
+  incidentHistory: unknown[];
+  incidentFingerprint: string | null;
   snapshot: {
     sequence: number;
     timeMs: number;
@@ -59,11 +62,27 @@ function updateDebugHook(event: WorkerEvent): void {
   const target = window as unknown as { __jevDebug?: JevDebugHook };
   const store = useUiStore.getState();
   const hook: JevDebugHook =
-    target.__jevDebug ?? { config: null, snapshot: null, metrics: null, error: null };
+    target.__jevDebug ?? {
+      config: null,
+      incidentPlan: null,
+      incidentHistory: [],
+      incidentFingerprint: null,
+      snapshot: null,
+      metrics: null,
+      error: null,
+    };
   switch (event.type) {
     case "READY":
       hook.config = { ...event.config, scaleIndex: event.scaleIndex, scaleLabel: event.scaleLabel };
+      hook.incidentPlan = event.incidentPlan;
+      hook.incidentHistory = [...event.incidentHistory];
+      hook.incidentFingerprint = event.incidentFingerprint;
       hook.snapshot = null;
+      hook.error = null;
+      break;
+    case "INCIDENT_RESOLVED":
+      hook.incidentHistory = [...event.incidentHistory];
+      hook.incidentFingerprint = event.incidentFingerprint;
       hook.error = null;
       break;
     case "SNAPSHOT": {
@@ -138,11 +157,19 @@ export function TrafficSimulator() {
           void loadChicagoCity(data.scaleIndex).then((model) => {
             setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
           });
-          if (prewarmRef.current) {
-            // Landing preview: live traffic behind the title, no chrome.
+          if (
+            prewarmRef.current &&
+            (store.phase === "landing" || store.phase === "config")
+          ) {
+            // Landing/config preview: live traffic behind the UI, no chrome.
+            // Phase is part of the guard because a preview build can be
+            // superseded by Enter City while Chicago is still loading. In that
+            // race, the surviving READY belongs to the live run and must not
+            // be swallowed by a stale prewarm flag.
             prewarmRef.current = false;
             break;
           }
+          prewarmRef.current = false;
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
           lastScaleRef.current = data.scaleIndex;
@@ -153,6 +180,10 @@ export function TrafficSimulator() {
             // while the onboarding surface fades away.
             mapHandleRef.current?.flyToCentral();
           }
+          break;
+        }
+        case "INCIDENT_RESOLVED": {
+          store.setFeedback(data.label);
           break;
         }
         case "SNAPSHOT": {
@@ -224,6 +255,14 @@ export function TrafficSimulator() {
     },
     [send],
   );
+
+  const previewSetup = useCallback(() => {
+    // Configuration is a live traffic preview, not a static mock. Mark the
+    // next READY as prewarm-only so changing trip/traffic/controller/seed
+    // refreshes the city behind the setup panel without entering the challenge.
+    prewarmRef.current = true;
+    startRun({ citySize: "large" });
+  }, [startRun]);
 
   const enterCity = useCallback(() => {
     const store = useUiStore.getState();
@@ -341,7 +380,7 @@ export function TrafficSimulator() {
           }`}
           aria-hidden="true"
         />
-        <Onboarding onEnterCity={enterCity} />
+        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} />
         <SimChrome
           following={following}
           onFollow={onFollow}

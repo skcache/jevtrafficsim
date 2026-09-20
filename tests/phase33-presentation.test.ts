@@ -158,7 +158,8 @@ describe("ego vehicle presentation stays coherent", () => {
     expect(car.props.data).toHaveLength(1);
     expect(car.props.sizeUnits).toBe("meters");
     expect(car.props.getSize).toBeGreaterThan(0);
-    expect(car.props.sizeMinPixels).toBeLessThan(20);
+    expect(car.props.sizeMinPixels).toBeGreaterThanOrEqual(18);
+    expect(car.props.sizeMinPixels).toBeLessThanOrEqual(24);
   });
 });
 
@@ -296,9 +297,38 @@ describe("product shell contracts", () => {
     expect(map.toLowerCase()).toContain("attribution");
   });
 
-  it("keeps onboarding traffic-free even while the worker is prewarmed", () => {
+  it("shows city traffic during setup without leaking the private challenge route", () => {
+    expect(map).toContain("networkTrafficLayers");
+    expect(map).toContain("networkSignalLayers");
+    expect(map).toContain("routeLayers");
+    expect(map).toContain("challengeTopLayers");
     expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
-    expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
+    // Traffic/signals exist before live mode; route/ego layers remain gated.
+    expect(map).toContain("...networkTrafficLayers");
+    expect(map).toContain("...networkSignalLayers");
+    // Traffic-mode hazards are visible in the prewarmed map too, while verbose
+    // incident plates stay reserved for the live challenge.
+    expect(map).toContain("...incidents.layers");
+    expect(map).toContain("const showIncidentLabels = liveRef.current && !trafficHiddenRef.current");
+    expect(map).toContain("visiblePlates = showIncidentLabels ? incidents.extras.plates : []");
+  });
+
+  it("shows citywide traffic context without double-painting the visible ego route", () => {
+    expect(map).toContain("buildNetworkSignalLayers");
+    expect(map).toContain("networkSignalMarkers");
+    expect(map).toContain("buildCongestionLayers");
+    // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
+    // road state even while the camera is close enough to inspect the ego.
+    expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
+    // The remaining route is one navigation-blue band. Citywide pressure is
+    // suppressed only under those visible segments; roads already driven
+    // immediately rejoin the city traffic layer.
+    expect(map).toContain("new Set(segments.map((segment) => segment.roadId))");
+    expect(map).toContain("!visibleRouteRoadIds.has(entry.roadId)");
+    // Tiny network signals sit above the route until the contextual replacement
+    // takes over, preventing the blue band from hiding proof of the signal net.
+    expect(map.indexOf("...routeLayers")).toBeLessThan(map.indexOf("...networkSignalLayers"));
+    expect(map).toContain("!contextualIntersectionIds.has(marker.intersectionId)");
   });
 
   it("swaps every presentation source when the city scale changes", () => {

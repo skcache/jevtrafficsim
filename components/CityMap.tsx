@@ -29,7 +29,7 @@ import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import { metricToLngLat, type MapModel } from "@/cities/map-model";
-import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
+import { frameAlpha, interpolateEgoRoadProgress, interpolateVehicles } from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   carriagewayPairs,
@@ -44,7 +44,6 @@ import {
   presetPose,
 } from "@/render/camera-presets";
 import { buildChicagoStyle } from "@/render/chicago-style";
-import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
 import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/map-geojson";
 import {
   buildCongestionLayers,
@@ -71,6 +70,7 @@ import {
   type ContextualControl,
 } from "@/render/contextual-controls";
 import { buildControlLayers } from "@/render/control-layers";
+import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
@@ -123,8 +123,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
-  /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
+  /** Per-road lng/lat paths + physical widths, for the whole-city traffic layer. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
+  /** Static low-prominence signal network: citywide system context, no worker payload. */
+  const networkSignalsRef = useRef<NetworkSignalMarker[]>([]);
   /** Latest incident plate positions (metric), for the dev camera helper. */
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
   /** Metric anchor of the active crash, for the dev camera hook. */
@@ -197,9 +199,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         ),
         widthM: widthMetresForRoad(model, road.id, pairs),
       }));
+      networkSignalsRef.current = networkSignalMarkers(model);
     } else {
       laneOffsetsRef.current = null;
       congestionRoadsRef.current = [];
+      networkSignalsRef.current = [];
     }
   }, [model, geo]);
 
@@ -443,20 +447,20 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       if (buffer && activeMap && buffer.model && buffer.paths) {
         const alpha = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
         // One vehicle in the frame now: the ego. Background traffic reaches the
-        // map only as sparse road aggregates.
+        // map only as sparse road aggregates. Route/control presentation uses
+        // the SAME display-time progress as the visible car, otherwise a smooth
+        // car would drag a 5 Hz route/light behind it.
+        const displayEgoProgress = interpolateEgoRoadProgress(
+          buffer.previous,
+          buffer.current,
+          alpha,
+          buffer.paths,
+        );
         const progress = new Map<number, number>();
-        if (buffer.current?.ego) {
-          progress.set(buffer.current.ego.id, buffer.current.ego.progress);
+        if (buffer.current?.ego && displayEgoProgress) {
+          progress.set(buffer.current.ego.id, displayEgoProgress.progress);
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
-        const congestion =
-          !trafficHiddenRef.current && zoomRef.current < CLOSE_TIER_MINZOOM && buffer.current
-            ? buildCongestionLayers(
-                congestionRoadsRef.current ?? [],
-                roadPressure(buffer.current),
-                zoomRef.current,
-              )
-            : [];
         const interpolated = buffer.current
           ? interpolateVehicles(buffer.paths, buffer.previous, buffer.current, alpha, {
               nowMs: now,
@@ -514,9 +518,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             snapshot.trip,
             // Progress comes from the frame's ego (the rendered vehicle carries
             // display geometry only); roadId decides whether to trim.
-            snapshot.ego
-              ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
-              : null,
+            displayEgoProgress,
             classifySnapshotRoads(snapshot),
           );
           const destinationNode = buffer.model.city.intersections[snapshot.trip.destinationIntersectionId];
@@ -529,6 +531,24 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           }
         }
         routeSegmentsRef.current = segments;
+
+        // Whole-city traffic remains visible at every challenge zoom. Hide it
+        // only under the BLUE route that is actually still visible. Roads the
+        // ego already drove immediately return to the city traffic layer rather
+        // than leaving a permanent traffic-free hole behind the car.
+        const visibleRouteRoadIds = liveRef.current
+          ? new Set(segments.map((segment) => segment.roadId))
+          : new Set<number>();
+        const congestion =
+          !trafficHiddenRef.current && buffer.current
+            ? buildCongestionLayers(
+                congestionRoadsRef.current ?? [],
+                roadPressure(buffer.current).filter(
+                  (entry) => !visibleRouteRoadIds.has(entry.roadId),
+                ),
+                zoomRef.current,
+              )
+            : [];
         // Contextual controls, derived from the CURRENT route so a reroute
         // swaps them automatically and a passed control retires at once.
         const controls = deriveContextualControls({
@@ -536,12 +556,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           indexes: buffer.paths,
           laneOffsets,
           trip: snapshot?.trip ?? null,
-          ego: snapshot?.ego
-            ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
-            : null,
+          ego: displayEgoProgress,
           routeControls: snapshot?.routeControls ?? [],
         });
         controlsRef.current = controls;
+        const contextualIntersectionIds = liveRef.current
+          ? new Set(controls.map((control) => control.intersectionId))
+          : new Set<number>();
+        const quietNetworkSignals = networkSignalsRef.current.filter(
+          (marker) => !contextualIntersectionIds.has(marker.intersectionId),
+        );
         routeMixRef.current = routeTrafficMix(segments);
         lastEgoMetricRef.current = egoRendered
           ? { x: egoRendered.x, y: egoRendered.y, headingRadians: egoRendered.headingRadians }
@@ -565,33 +589,65 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
-        const layers: Layer[] = trafficHiddenRef.current || !liveRef.current
+        const networkTrafficLayers: Layer[] = trafficHiddenRef.current
           ? []
           : [
-              // Road pressure is the macro layer and belongs BELOW the things
-              // the user is actually inspecting. Landing/configuration stays
-              // deliberately traffic-free; simulation state appears only after
-              // Enter City so the first live frame has a clear semantic shift.
+              // Traffic mode is visible even before the user enters a trip.
+              // This is deliberate proof that the challenge sits on top of a
+              // live citywide system rather than animating one private route.
               ...congestion,
-              // Route (casing + traffic-coloured core), then the destination
-              // pin, then the one car: ego > route > destination > traffic.
-              ...buildRouteLayers(segments),
-              ...buildDestinationLayers(projection, destination, destSpritesRef.current),
-              ...buildVehicleLayers(
-                projection,
-                settled,
-                iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
-                zoomRef.current,
-              ),
-              // Contextual road controls: only what the ego is about to meet.
-              ...buildControlLayers(projection, controls, controlSpritesRef.current),
+              // Hazards belong to the city traffic system too. Keep their
+              // geographic markers visible during landing/config preview so
+              // the map can show "traffic + incidents" before the ego route
+              // becomes the foreground experience.
               ...incidents.layers,
             ];
+        const networkSignalLayers: Layer[] = trafficHiddenRef.current
+          ? []
+          : buildNetworkSignalLayers(
+              projection,
+              quietNetworkSignals,
+              controlSpritesRef.current,
+              zoomRef.current,
+            );
+        const routeLayers: Layer[] =
+          trafficHiddenRef.current || !liveRef.current
+            ? []
+            : buildRouteLayers(segments);
+        const challengeTopLayers: Layer[] =
+          trafficHiddenRef.current || !liveRef.current
+            ? []
+            : [
+                ...buildDestinationLayers(projection, destination, destSpritesRef.current),
+                ...buildVehicleLayers(
+                  projection,
+                  settled,
+                  iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
+                  zoomRef.current,
+                ),
+                // Contextual controls take over from the tiny network marker as
+                // the ego approaches, then retire back to network scale.
+                ...buildControlLayers(projection, controls, controlSpritesRef.current),
+              ];
+
+        // Layer order is intentional. Traffic + hazards sit on the road network;
+        // the blue route sits above that system; tiny citywide signal
+        // infrastructure remains visible until its contextual replacement takes
+        // over; the ego and relevant live control own the top hierarchy.
+        const layers: Layer[] = [
+          ...networkTrafficLayers,
+          ...routeLayers,
+          ...networkSignalLayers,
+          ...challengeTopLayers,
+        ];
         overlayRef.current?.setProps({ layers });
-        const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
-        const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
+
+        // Keep verbose incident plates out of onboarding so the setup remains
+        // calm, but retain the actual crash/closure/event geometry underneath.
+        const showIncidentLabels = liveRef.current && !trafficHiddenRef.current;
+        const visiblePlates = showIncidentLabels ? incidents.extras.plates : [];
         platesRef.current = visiblePlates;
-        crashRef.current = showDynamicMapState ? incidents.extras.crash : null;
+        crashRef.current = !trafficHiddenRef.current ? incidents.extras.crash : null;
         syncPlates(visiblePlates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];

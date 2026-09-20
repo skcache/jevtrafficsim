@@ -112,6 +112,18 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     [],
   );
 
+  // Worker feedback is authoritative because manual targeting can legitimately
+  // be not-applicable (for example, no safe route-relevant bridge). Keep the
+  // message long enough to read, then clear exactly the message we showed.
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => {
+      const store = useUiStore.getState();
+      if (store.feedback === feedback) store.setFeedback(null);
+    }, FEEDBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
   const fire = (option: IncidentOption) => {
     onIncident(option.kind);
     if (option.kind === "traffic-burst") {
@@ -120,15 +132,13 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
       timers.current.push(window.setTimeout(() => hideSurge(), 6000));
     }
     setArmed(option.kind);
-    useUiStore.getState().setFeedback(`${option.label} queued`);
+    // Do not claim success before the worker has resolved a concrete target.
+    useUiStore.getState().setFeedback(`Finding a route-relevant ${option.label.toLowerCase()}…`);
     timers.current.push(
-      window.setTimeout(() => setArmed((current) => (current === option.kind ? null : current)), ARMED_MS),
-      window.setTimeout(() => {
-        const store = useUiStore.getState();
-        if (store.feedback === `${option.label} queued`) {
-          store.setFeedback(null);
-        }
-      }, FEEDBACK_MS),
+      window.setTimeout(
+        () => setArmed((current) => (current === option.kind ? null : current)),
+        ARMED_MS,
+      ),
     );
   };
 

@@ -31,6 +31,7 @@ import {
 import { samplePathIndex } from "@/cities/paths";
 import { canApproachProceedForPhase, deriveApproachGroups, type SignalStage } from "@/sim/signals";
 import type { IntersectionId, RoadId } from "@/sim/types";
+import { presentationRouteIndex } from "@/render/route-path";
 import type {
   PresentationSignal,
   PresentationTripProgress,
@@ -38,6 +39,7 @@ import type {
 
 export type ControlKind = "signal" | "stop";
 export type ControlProminence = "primary" | "preview";
+export type ControlLifecycle = "upcoming" | "retiring";
 
 export interface ContextualControl {
   readonly intersectionId: IntersectionId;
@@ -51,6 +53,13 @@ export interface ContextualControl {
   readonly bearing: number;
   /** Nearest control is primary inside the primary band; others stay quieter. */
   readonly prominence: ControlProminence;
+  /** Whether the control is ahead of the ego or smoothly returning to network scale. */
+  readonly lifecycle: ControlLifecycle;
+  /**
+   * Continuous 0..1 approach emphasis. The renderer uses this to grow the
+   * contextual control smoothly out of the tiny citywide signal system.
+   */
+  readonly emphasis: number;
   /** Signal state for the ego's own approach, or null for a stop sign. */
   readonly signal: ContextualSignalState | null;
 }
@@ -73,6 +82,8 @@ export const CONTROL_REVEAL = {
   primaryM: 90,
   /** Never more than the nearest plus one quieter control on screen. */
   maxVisible: 2,
+  /** Shrink a cleared control back to network scale over this distance. */
+  retireM: 55,
   /** Gap between the lane-group edge and the control glyph, in metres. */
   kerbGapM: 2.1,
 } as const;
@@ -129,7 +140,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
   }
 
   const controls: ContextualControl[] = [];
-  const startIndex = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  const startIndex = presentationRouteIndex(trip, ego);
   let aheadM = 0;
   for (let index = startIndex; index < trip.routeRoadIds.length; index += 1) {
     const roadId = trip.routeRoadIds[index];
@@ -190,24 +201,116 @@ export function deriveContextualControls(input: ContextualControlInput): Context
       y: placement.y,
       bearing: placement.bearing,
       prominence: "preview",
+      lifecycle: "upcoming",
+      emphasis: 0,
       signal,
     });
   }
 
   controls.sort((a, b) => a.distanceAheadM - b.distanceAheadM);
   // Two controlled intersections can sit unusually close together: the nearest
-  // is primary, AT MOST one second stays quieter. More than that would be a
-  // corridor covered in heads, which is exactly what this issue forbids.
-  return controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => ({
-    ...control,
-    prominence:
-      index === 0 && control.distanceAheadM <= CONTROL_REVEAL.primaryM ? "primary" : "preview",
-  }));
+  // is primary, AT MOST one second stays quieter. Emphasis grows continuously
+  // from the preview boundary to the primary band so the citywide micro-signal
+  // feels like it enlarges as the ego approaches instead of popping in.
+  const upcoming: ContextualControl[] = controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => {
+    const raw =
+      control.distanceAheadM <= CONTROL_REVEAL.primaryM
+        ? 1
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              (CONTROL_REVEAL.previewM - control.distanceAheadM) /
+                (CONTROL_REVEAL.previewM - CONTROL_REVEAL.primaryM),
+            ),
+          );
+    const eased = raw * raw * (3 - 2 * raw);
+    const emphasis = eased * (index === 0 ? 1 : 0.58);
+    const intersection = city.intersections[control.intersectionId];
+
+    // Quiet network signals live at the intersection node. Blend the live
+    // contextual signal from that exact position out to its physical kerbside
+    // control point as emphasis grows. This makes the handoff a real animation,
+    // not "tiny icon disappears here, giant icon appears over there".
+    const x =
+      control.kind === "signal" && intersection
+        ? intersection.x + (control.x - intersection.x) * emphasis
+        : control.x;
+    const y =
+      control.kind === "signal" && intersection
+        ? intersection.y + (control.y - intersection.y) * emphasis
+        : control.y;
+
+    return {
+      ...control,
+      x,
+      y,
+      prominence:
+        index === 0 && control.distanceAheadM <= CONTROL_REVEAL.primaryM
+          ? "primary" as const
+          : "preview" as const,
+      lifecycle: "upcoming" as const,
+      emphasis,
+    };
+  });
+
+  // After the ego crosses a controlled node, keep that control around just
+  // long enough to shrink back to the quiet network size. Once emphasis reaches
+  // zero the ordinary network marker takes over at the same size, so there is
+  // no giant-head -> tiny-head pop.
+  if (
+    startIndex > 0 &&
+    ego.roadId === trip.routeRoadIds[startIndex] &&
+    ego.progress < CONTROL_REVEAL.retireM
+  ) {
+    const previousRoadId = trip.routeRoadIds[startIndex - 1];
+    const previousRoad = city.roads[previousRoadId];
+    const previousIntersection = previousRoad
+      ? city.intersections[previousRoad.to]
+      : undefined;
+    const kind = previousIntersection?.control;
+    if (previousRoad && previousIntersection && (kind === "signal" || kind === "stop")) {
+      const placement = placementFor(
+        model,
+        indexes,
+        previousRoadId,
+        laneOffsets[previousRoadId] ?? 0,
+      );
+      if (placement) {
+        const raw = Math.max(0, 1 - ego.progress / CONTROL_REVEAL.retireM);
+        const eased = raw * raw * (3 - 2 * raw);
+        const x =
+          kind === "signal"
+            ? previousIntersection.x + (placement.x - previousIntersection.x) * eased
+            : placement.x;
+        const y =
+          kind === "signal"
+            ? previousIntersection.y + (placement.y - previousIntersection.y) * eased
+            : placement.y;
+        upcoming.push({
+          intersectionId: previousIntersection.id,
+          kind,
+          distanceAheadM: -ego.progress,
+          x,
+          y,
+          bearing: placement.bearing,
+          prominence: "preview",
+          lifecycle: "retiring",
+          emphasis: eased,
+          // A passed signal no longer needs live route-local state. Neutral is
+          // deliberate: it is becoming part of the background control network.
+          signal: null,
+        });
+      }
+    }
+  }
+
+  return upcoming;
 }
 
 /** The control the ego is about to meet, or null when the road ahead is clear. */
 export function upcomingControl(
   controls: readonly ContextualControl[],
 ): ContextualControl | null {
-  return controls.length > 0 ? controls[0] : null;
+  return controls.find((control) => control.lifecycle === "upcoming") ?? null;
 }

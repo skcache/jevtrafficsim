@@ -63,6 +63,7 @@ export function TripHUD() {
           )}
         </div>
         <div className="mt-0.5 border-t border-hair pt-2">
+          <div className="mb-1 label-micro text-ink-38">City traffic</div>
           <div className="value-num flex items-baseline justify-between text-micro text-ink-38">
             <span>{formatDuration(metrics?.averageWaitTimeMs ?? 0)} avg wait</span>
             <span>{formatPercent(metrics?.gridlockRatio ?? 0)} gridlock</span>

@@ -213,6 +213,11 @@ describe("contextual controls: route distance", () => {
     );
     expect(inside.length).toBe(1);
     expect(inside[0].prominence).toBe("preview");
+    expect(inside[0].emphasis).toBeLessThan(0.1);
+    const node = long.city.intersections[inside[0].intersectionId];
+    // The contextual signal begins exactly where the quiet network marker
+    // lives, then slides toward its kerbside stop-line placement as it grows.
+    expect(Math.hypot(inside[0].x - node.x, inside[0].y - node.y)).toBeLessThan(1);
   });
 
   it("makes the nearest control primary and any second quieter", () => {
@@ -222,21 +227,44 @@ describe("contextual controls: route distance", () => {
     expect(controls[0].prominence).toBe("primary");
     expect(controls[1].prominence).toBe("preview");
     expect(controls[0].distanceAheadM).toBeLessThanOrEqual(CONTROL_REVEAL.primaryM);
+    expect(controls[0].emphasis).toBe(1);
+    expect(controls[1].emphasis).toBeGreaterThanOrEqual(0);
+    expect(controls[1].emphasis).toBeLessThan(1);
   });
 
-  it("retires a control the ego has passed", () => {
+  it("shrinks a passed control back into the background network before retiring it", () => {
     const before = derive(model, [0, 1, 2], 0, { roadId: 0, progress: 95 }, [
       { intersectionId: 1, phaseIndex: 0, stage: "green" },
     ]);
     expect(before.some((control) => control.intersectionId === 1)).toBe(true);
-    // Now on the next road: the node-1 signal is behind the ego and gone.
-    const after = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 5 }, [
-      { intersectionId: 1, phaseIndex: 0, stage: "green" },
+
+    const justPassed = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 5 }, [
       { intersectionId: 2, phaseIndex: 0, stage: "green" },
     ]);
-    expect(after.some((control) => control.intersectionId === 1)).toBe(false);
-    expect(after[0].intersectionId).toBe(2);
-    expect(after[0].distanceAheadM).toBeCloseTo(88, 6);
+    const retiring = justPassed.find((control) => control.intersectionId === 1);
+    expect(retiring?.lifecycle).toBe("retiring");
+    expect(retiring?.distanceAheadM).toBe(-5);
+    expect(retiring?.emphasis).toBeGreaterThan(0.9);
+    expect(controlSpriteFor(retiring!)).toBe("control-signal-neutral");
+    expect(upcomingControl(justPassed)?.intersectionId).toBe(2);
+    expect(upcomingControl(justPassed)?.distanceAheadM).toBeCloseTo(88, 6);
+
+    const farther = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 40 }, [
+      { intersectionId: 2, phaseIndex: 0, stage: "green" },
+    ]);
+    const shrinking = farther.find((control) => control.intersectionId === 1);
+    expect(shrinking?.emphasis).toBeLessThan(retiring?.emphasis ?? 0);
+    const passedNode = model.city.intersections[1];
+    if (retiring && shrinking) {
+      const retiringDistance = Math.hypot(retiring.x - passedNode.x, retiring.y - passedNode.y);
+      const shrinkingDistance = Math.hypot(shrinking.x - passedNode.x, shrinking.y - passedNode.y);
+      expect(shrinkingDistance).toBeLessThan(retiringDistance);
+    }
+
+    const retired = derive(model, [0, 1, 2], 1, { roadId: 1, progress: CONTROL_REVEAL.retireM }, [
+      { intersectionId: 2, phaseIndex: 0, stage: "green" },
+    ]);
+    expect(retired.some((control) => control.intersectionId === 1)).toBe(false);
   });
 
   it("discovers signals only from the remaining route", () => {
@@ -457,24 +485,35 @@ describe("contextual controls: placement and scale", () => {
       ),
     } as never;
     const layers = buildControlLayers(model.projection, controls, sprites);
-    expect(layers.map((layer) => layer.id)).toEqual(["control-primary"]);
+    expect(layers.map((layer) => layer.id)).toEqual(["control-contextual"]);
     const props = (layers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(props.sizeUnits).toBe("meters");
     expect(props.sizeMinPixels).toBe(CONTROL_SCALE.minPixels);
     expect(props.sizeMaxPixels).toBe(CONTROL_SCALE.maxPixels);
-    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBe(CONTROL_SCALE.signalHeightM);
+    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBeCloseTo(
+      CONTROL_SCALE.signalHeightM,
+      6,
+    );
     expect(controlPixelBounds().minPixels).toBeGreaterThan(0);
-    expect(CONTROL_SCALE.minPixels).toBeLessThan(50);
+    expect(CONTROL_SCALE.minPixels).toBeLessThan(12);
     expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
     expect(props.billboard).toBe(true);
 
-    // A preview control draws smaller and quieter.
-    const previewOnly = [{ ...controls[0], prominence: "preview" as const }];
+    // At the reveal boundary the contextual head starts at the same quiet
+    // network scale, then grows continuously instead of popping between layers.
+    const previewOnly = [{ ...controls[0], prominence: "preview" as const, emphasis: 0 }];
     const previewLayers = buildControlLayers(model.projection, previewOnly, sprites);
     const previewProps = (previewLayers[0] as unknown as { props: Record<string, unknown> }).props;
-    expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.previewMinPixels);
-    expect(previewProps.opacity).toBeCloseTo(CONTROL_SCALE.previewOpacity, 5);
-    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeCloseTo(CONTROL_SCALE.signalHeightM * CONTROL_SCALE.previewSizeScale, 6);
+    expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.minPixels);
+    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeCloseTo(
+      CONTROL_SCALE.signalBaseHeightM,
+      6,
+    );
+    const half = { ...previewOnly[0], emphasis: 0.5 };
+    expect((previewProps.getSize as (control: ContextualControl) => number)(half)).toBeCloseTo(
+      (CONTROL_SCALE.signalBaseHeightM + CONTROL_SCALE.signalHeightM) / 2,
+      6,
+    );
   });
 
   it("draws nothing when the atlas is missing", () => {

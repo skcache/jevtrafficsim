@@ -5,13 +5,12 @@
  * Both are world-bound: widths and sizes are in MAP METRES so they grow as the
  * camera descends, with pixel values only as legibility floors and safety caps
  * (see render/scale.ts). The route is painted per road from the centralized
- * classifier, so a rerouted or congested trip repaints immediately and
- * deterministically.
+ * current-route payload, so reroutes repaint immediately. Traffic state is
+ * rendered by the separate citywide traffic layer; the route stays one colour.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Projection } from "@/cities/map-model";
-import { ROUTE_TRAFFIC_COLORS } from "./route-traffic";
 import type { RouteSegment } from "./route-path";
 import { DESTINATION_SCALE, ROUTE_SCALE } from "./scale";
 import type { LngLat } from "./deck-layers";
@@ -23,40 +22,85 @@ function color(hex: readonly [number, number, number], alpha = 255): [number, nu
 }
 
 /**
- * Casing under core: the casing separates the route from blocks and other
- * roads, the coloured core carries traffic state.
+ * One visually continuous route band.
+ *
+ * The route is deliberately ONE colour now. Traffic pressure belongs to the
+ * citywide traffic layer underneath the trip experience; changing the route
+ * stroke itself at every road boundary created visual seams and bulbous
+ * intersection artefacts. We still keep per-road traffic classes in
+ * RouteSegment for ETA/debugging, but the navigation path itself reads as one
+ * coherent object.
  */
-export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
-  if (segments.length === 0) {
-    return [];
+interface RouteRun {
+  readonly path: readonly LngLat[];
+}
+
+const ROUTE_JOIN_EPSILON_DEG = 2e-6;
+
+function sameRoutePoint(a: LngLat, b: LngLat): boolean {
+  return (
+    Math.abs(a[0] - b[0]) <= ROUTE_JOIN_EPSILON_DEG &&
+    Math.abs(a[1] - b[1]) <= ROUTE_JOIN_EPSILON_DEG
+  );
+}
+
+function cleanRoutePath(path: readonly LngLat[]): LngLat[] {
+  const cleaned: LngLat[] = [];
+  for (const point of path) {
+    if (cleaned.length === 0 || !sameRoutePoint(cleaned[cleaned.length - 1], point)) {
+      cleaned.push(point);
+    }
   }
-  const casing = new PathLayer<RouteSegment>({
-    id: "route-casing",
-    data: segments as RouteSegment[],
-    getPath: (segment) => segment.path as unknown as LngLat[],
-    getColor: [33, 29, 24, Math.round(ROUTE_SCALE.casingOpacity * 255)],
-    getWidth: ROUTE_SCALE.casingWidthM,
-    widthUnits: "meters",
-    widthMinPixels: ROUTE_SCALE.casingMinPixels,
-    widthMaxPixels: ROUTE_SCALE.coreMaxPixels * 2,
-    capRounded: true,
-    jointRounded: true,
-    pickable: false,
-  });
-  const core = new PathLayer<RouteSegment>({
-    id: "route-core",
-    data: segments as RouteSegment[],
-    getPath: (segment) => segment.path as unknown as LngLat[],
-    getColor: (segment) => color(ROUTE_TRAFFIC_COLORS[segment.traffic], Math.round(ROUTE_SCALE.coreOpacity * 255)),
-    getWidth: ROUTE_SCALE.coreWidthM,
-    widthUnits: "meters",
-    widthMinPixels: ROUTE_SCALE.coreMinPixels,
-    widthMaxPixels: ROUTE_SCALE.coreMaxPixels,
-    capRounded: true,
-    jointRounded: true,
-    pickable: false,
-  });
-  return [casing, core];
+  return cleaned;
+}
+
+export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
+  const runs: Array<{ path: LngLat[] }> = [];
+  for (const segment of segments) {
+    const path = cleanRoutePath(segment.path as readonly LngLat[]);
+    if (path.length < 2) continue;
+    const previous = runs[runs.length - 1];
+    if (previous && sameRoutePoint(previous.path[previous.path.length - 1], path[0])) {
+      // The junction point exists exactly once. Removing near-duplicate
+      // consecutive points also prevents zero-length vertices from turning
+      // into round/dot artifacts in deck.gl.
+      for (const point of path.slice(1)) {
+        if (!sameRoutePoint(previous.path[previous.path.length - 1], point)) {
+          previous.path.push(point);
+        }
+      }
+      continue;
+    }
+    runs.push({ path });
+  }
+  return runs;
+}
+
+export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
+  const runs = buildRouteRuns(segments);
+  if (runs.length === 0) return [];
+  return [
+    new PathLayer<RouteRun>({
+      id: "route-band",
+      data: runs,
+      getPath: (run) => run.path as LngLat[],
+      getColor: () =>
+        color(
+          ROUTE_SCALE.color,
+          Math.round(ROUTE_SCALE.opacity * 255),
+        ),
+      getWidth: ROUTE_SCALE.widthM,
+      widthUnits: "meters",
+      widthMinPixels: ROUTE_SCALE.minPixels,
+      widthMaxPixels: ROUTE_SCALE.maxPixels,
+      // One run spans contiguous intersections, so there are no stacked
+      // per-road end caps. Square/mitered joins also avoid the round vertex
+      // bulbs that previously looked like mystery circles at intersections.
+      capRounded: false,
+      jointRounded: false,
+      pickable: false,
+    }),
+  ];
 }
 
 export interface DestinationAnchor {

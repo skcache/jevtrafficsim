@@ -16,6 +16,7 @@ import type { Projection } from "@/cities/map-model";
 import { metricToLngLat } from "@/cities/map-model";
 import { hatchSegments } from "./visuals";
 import { iconSizeForLengthUnits } from "./vehicle-sprites";
+import { EGO_SCALE } from "./scale";
 import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
@@ -49,9 +50,15 @@ export function buildCongestionLayers(
   if (pressure.length === 0) {
     return [];
   }
-  const byId = new Map(roads.map((road) => [road.roadId, road]));
+  // Road ids are dense/index-aligned in the compiled Chicago model. Use
+  // direct indexed lookup here: this function runs at display rate and should
+  // not allocate a 5k-entry Map on every animation frame.
   const data = pressure
-    .map((entry) => ({ entry, road: byId.get(entry.roadId) }))
+    .map((entry) => {
+      const candidate = roads[entry.roadId];
+      const road = candidate?.roadId === entry.roadId ? candidate : undefined;
+      return { entry, road };
+    })
     .filter((item): item is { entry: RoadPressure; road: CongestionRoad } => !!item.road?.path.length);
   if (data.length === 0) {
     return [];
@@ -62,10 +69,15 @@ export function buildCongestionLayers(
       data,
       getPath: (item) => item.road.path as unknown as LngLat[],
       getColor: (item) => [...CONGESTION_COLORS[item.entry.level]],
-      getWidth: (item) => item.road.widthM * roadVisualScaleAt(zoom),
+      // Traffic mode is a centre stripe over the authored road, not a second
+      // full-width road surface. This keeps the city readable while making
+      // moving/slow/heavy background traffic visible at every challenge zoom.
+      getWidth: (item) =>
+        Math.max(2.2, Math.min(6.5, item.road.widthM * 0.34)) *
+        roadVisualScaleAt(zoom),
       widthUnits: "meters",
-      widthMinPixels: 1.4,
-      widthMaxPixels: 110,
+      widthMinPixels: 1.25,
+      widthMaxPixels: 28,
       pickable: false,
     }),
   ];
@@ -110,13 +122,16 @@ export function buildVehicleLayers(
         iconMapping: icons.mapping,
         getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        // Physical vehicle size in map metres. The ego grows with camera
-        // descent; pixel bounds are only legibility/safety rails.
-        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * 1.15),
+        // The ego is intentionally oversized enough to track at a glance,
+        // while remaining a map-space object that grows naturally with zoom.
+        getSize: iconSizeForLengthUnits(
+          type,
+          VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale,
+        ),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
         sizeUnits: "meters",
-        sizeMinPixels: type === "bicycle" ? 4 : type === "truck" ? 10 : 7,
-        sizeMaxPixels: type === "bicycle" ? 52 : type === "truck" ? 140 : 96,
+        sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
+        sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],
         billboard: false,
         pickable: false,
       }),

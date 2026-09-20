@@ -11,16 +11,18 @@
  * map-space policy.
  */
 
-/** The route band: a casing that separates it from the basemap, a coloured core. */
+/**
+ * The ego route is ONE clean navigation-blue band. No casing/core double
+ * stroke and no per-road colour switching: both produced seams/bulbous
+ * intersection artifacts and made the route read as multiple objects.
+ */
 export const ROUTE_SCALE = {
-  casingWidthM: 17,
-  coreWidthM: 11,
-  casingMinPixels: 5.5,
-  coreMinPixels: 3.5,
-  coreMaxPixels: 30,
-  /** Opacity of the painted route over the basemap. */
-  casingOpacity: 0.5,
-  coreOpacity: 0.92,
+  /** Navigation blue stays constant; traffic state is a separate city layer. */
+  color: [55, 112, 214] as const,
+  widthM: 13,
+  minPixels: 5,
+  maxPixels: 36,
+  opacity: 0.96,
 } as const;
 
 /** The destination marker: map-anchored, with a pixel floor so it stays findable. */
@@ -60,17 +62,36 @@ export const FOLLOW_SCALE = {
  */
 export const CONTROL_SCALE = {
   /**
-   * World sizes are intentionally exaggerated, but remain the primary scale.
-   * Pixel floors are only enough to keep a control recognizable at follow zoom;
-   * from neighborhood zoom onward the projected metre size takes over.
+   * A contextual control starts at the same physical scale as the quiet
+   * network marker and grows continuously as the ego approaches. This is the
+   * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
    */
-  signalHeightM: 26,
-  stopHeightM: 18,
-  minPixels: 36,
-  previewMinPixels: 26,
-  /** Safety cap at extreme inspection zoom. */
-  maxPixels: 160,
-  /** Preview controls draw at this fraction of their primary world size. */
-  previewSizeScale: 0.8,
-  previewOpacity: 0.72,
+  signalBaseHeightM: 4.8,
+  signalHeightM: 13.5,
+  stopBaseHeightM: 4.4,
+  stopHeightM: 10.5,
+  minPixels: 4,
+  maxPixels: 72,
+  // Match the quiet network marker at emphasis=0, then fade to full strength
+  // as the ego approaches. This makes the handoff visually continuous.
+  opacityFloor: 0.3,
+} as const;
+
+/** Tiny neutral signal heads that prove the whole-city control system exists. */
+export const NETWORK_CONTROL_SCALE = {
+  signalHeightM: 4.8,
+  minPixels: 3.5,
+  maxPixels: 12,
+  opacity: 0.3,
+  minZoom: 12.8,
+} as const;
+
+/**
+ * The ego is intentionally easier to track than a physically exact 4.6 m car,
+ * but remains a map object rather than a fixed-size UI badge.
+ */
+export const EGO_SCALE = {
+  lengthScale: 2.15,
+  minPixelsByClass: { car: 22, truck: 30, bicycle: 14 } as const,
+  maxPixelsByClass: { car: 150, truck: 190, bicycle: 90 } as const,
 } as const;
