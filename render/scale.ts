@@ -11,16 +11,16 @@
  * map-space policy.
  */
 
-/** The route band: a casing that separates it from the basemap, a coloured core. */
+/**
+ * The ego route is ONE clean band. No casing/core double stroke: that produced
+ * bulbous circles where per-road paths met and made the route look like two
+ * unrelated lines. Traffic state may still change the band colour by segment.
+ */
 export const ROUTE_SCALE = {
-  casingWidthM: 17,
-  coreWidthM: 11,
-  casingMinPixels: 5.5,
-  coreMinPixels: 3.5,
-  coreMaxPixels: 30,
-  /** Opacity of the painted route over the basemap. */
-  casingOpacity: 0.5,
-  coreOpacity: 0.92,
+  widthM: 15,
+  minPixels: 5.5,
+  maxPixels: 38,
+  opacity: 0.96,
 } as const;
 
 /** The destination marker: map-anchored, with a pixel floor so it stays findable. */
@@ -60,17 +60,33 @@ export const FOLLOW_SCALE = {
  */
 export const CONTROL_SCALE = {
   /**
-   * World sizes are intentionally exaggerated, but remain the primary scale.
-   * Pixel floors are only enough to keep a control recognizable at follow zoom;
-   * from neighborhood zoom onward the projected metre size takes over.
+   * Contextual controls are deliberately larger than the background system
+   * markers, but no longer billboard-sized. Map metres remain authoritative.
    */
-  signalHeightM: 26,
-  stopHeightM: 18,
-  minPixels: 36,
-  previewMinPixels: 26,
-  /** Safety cap at extreme inspection zoom. */
-  maxPixels: 160,
-  /** Preview controls draw at this fraction of their primary world size. */
-  previewSizeScale: 0.8,
-  previewOpacity: 0.72,
+  signalHeightM: 20,
+  stopHeightM: 15,
+  minPixels: 30,
+  previewMinPixels: 22,
+  maxPixels: 112,
+  previewSizeScale: 0.72,
+  previewOpacity: 0.78,
+} as const;
+
+/** Tiny neutral signal heads that prove the whole-city control system exists. */
+export const NETWORK_CONTROL_SCALE = {
+  signalHeightM: 6,
+  minPixels: 5,
+  maxPixels: 18,
+  opacity: 0.42,
+  minZoom: 13.2,
+} as const;
+
+/**
+ * The ego is intentionally easier to track than a physically exact 4.6 m car,
+ * but remains a map object rather than a fixed-size UI badge.
+ */
+export const EGO_SCALE = {
+  lengthScale: 2.15,
+  minPixelsByClass: { car: 22, truck: 30, bicycle: 14 } as const,
+  maxPixelsByClass: { car: 150, truck: 190, bicycle: 90 } as const,
 } as const;
