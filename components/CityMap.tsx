@@ -461,23 +461,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           progress.set(buffer.current.ego.id, displayEgoProgress.progress);
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
-        // Whole-city traffic remains visible at every challenge zoom. This is
-        // the evidence that the ego is moving through a real traffic system,
-        // not a private route animation: dense/queued roads stay amber/red
-        // even when the camera is close enough to inspect the ego car.
-        const routeRoadIds = liveRef.current
-          ? new Set(buffer.current?.trip?.routeRoadIds ?? [])
-          : new Set<number>();
-        const congestion =
-          !trafficHiddenRef.current && buffer.current
-            ? buildCongestionLayers(
-                congestionRoadsRef.current ?? [],
-                roadPressure(buffer.current).filter(
-                  (entry) => !routeRoadIds.has(entry.roadId),
-                ),
-                zoomRef.current,
-              )
-            : [];
         const interpolated = buffer.current
           ? interpolateVehicles(buffer.paths, buffer.previous, buffer.current, alpha, {
               nowMs: now,
@@ -548,6 +531,24 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           }
         }
         routeSegmentsRef.current = segments;
+
+        // Whole-city traffic remains visible at every challenge zoom. Hide it
+        // only under the BLUE route that is actually still visible. Roads the
+        // ego already drove immediately return to the city traffic layer rather
+        // than leaving a permanent traffic-free hole behind the car.
+        const visibleRouteRoadIds = liveRef.current
+          ? new Set(segments.map((segment) => segment.roadId))
+          : new Set<number>();
+        const congestion =
+          !trafficHiddenRef.current && buffer.current
+            ? buildCongestionLayers(
+                congestionRoadsRef.current ?? [],
+                roadPressure(buffer.current).filter(
+                  (entry) => !visibleRouteRoadIds.has(entry.roadId),
+                ),
+                zoomRef.current,
+              )
+            : [];
         // Contextual controls, derived from the CURRENT route so a reroute
         // swaps them automatically and a passed control retires at once.
         const controls = deriveContextualControls({
