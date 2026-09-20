@@ -16,6 +16,7 @@ import type { Projection } from "@/cities/map-model";
 import { metricToLngLat } from "@/cities/map-model";
 import { hatchSegments } from "./visuals";
 import { iconSizeForLengthUnits } from "./vehicle-sprites";
+import { EGO_SCALE } from "./scale";
 import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
@@ -110,13 +111,16 @@ export function buildVehicleLayers(
         iconMapping: icons.mapping,
         getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        // Physical vehicle size in map metres. The ego grows with camera
-        // descent; pixel bounds are only legibility/safety rails.
-        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * 1.15),
+        // The ego is intentionally oversized enough to track at a glance,
+        // while remaining a map-space object that grows naturally with zoom.
+        getSize: iconSizeForLengthUnits(
+          type,
+          VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale,
+        ),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
         sizeUnits: "meters",
-        sizeMinPixels: type === "bicycle" ? 4 : type === "truck" ? 10 : 7,
-        sizeMaxPixels: type === "bicycle" ? 52 : type === "truck" ? 140 : 96,
+        sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
+        sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],
         billboard: false,
         pickable: false,
       }),
