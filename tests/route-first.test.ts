@@ -176,6 +176,10 @@ describe("route-first layers", () => {
     expect(route.widthMaxPixels).toBeGreaterThan(route.widthMinPixels as number);
     expect(route.getWidth).toBe(ROUTE_SCALE.widthM);
     expect(route.capRounded).toBe(false);
+    expect((route.getColor as () => number[])()).toEqual([
+      ...ROUTE_SCALE.color,
+      Math.round(ROUTE_SCALE.opacity * 255),
+    ]);
 
     const sprites = { atlas: "data:,", mapping: { "destination-pin": { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false } } };
     const destLayers = buildDestinationLayers(model.projection, { x: 100, y: 100, completed: false }, sprites);
@@ -186,15 +190,14 @@ describe("route-first layers", () => {
     expect(pin.sizeMinPixels).toBeGreaterThan(0);
   });
 
-  it("coalesces same-colour road pieces so intersections do not become circles", () => {
+  it("coalesces the whole contiguous trip into one band even when traffic state changes", () => {
     const runs = buildRouteRuns([
       { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
-      { roadId: 2, path: [[1, 1], [2, 1]], traffic: "free" },
-      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "slowed" },
+      { roadId: 2, path: [[1, 1], [2, 1]], traffic: "slowed" },
+      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "congested" },
     ]);
-    expect(runs).toHaveLength(2);
-    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1]]);
-    expect(runs[1].traffic).toBe("slowed");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1], [3, 1]]);
   });
 
   it("never invents a connector across a geometry gap", () => {
