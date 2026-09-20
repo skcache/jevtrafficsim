@@ -89,6 +89,8 @@ export type WorkerEvent =
       readonly incidentSeed: number;
       /** Fully resolved controller-neutral automatic adversity for this run. */
       readonly incidentPlan: ChallengeIncidentPlan;
+      /** Exact resolved adversity available for later controller replay. */
+      readonly incidentHistory: readonly ResolvedChallengeIncident[];
       /** Stable serialization input; controller is deliberately absent. */
       readonly incidentFingerprint: string;
     }
@@ -98,6 +100,7 @@ export type WorkerEvent =
       readonly queued: boolean;
       readonly label: string;
       readonly incident: ResolvedChallengeIncident | null;
+      readonly incidentHistory: readonly ResolvedChallengeIncident[];
       readonly incidentFingerprint: string;
     }
   | { readonly type: "SNAPSHOT"; readonly snapshot: PresentationSnapshot }
