@@ -45,11 +45,17 @@ export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
     if (previous && previous.traffic === segment.traffic) {
       const a = previous.path[previous.path.length - 1];
       const b = path[0];
-      const joined = Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7;
-      previous.path.push(...(joined ? path.slice(1) : path));
-    } else {
-      runs.push({ traffic: segment.traffic, path: [...path] });
+      const joined =
+        Math.abs(a[0] - b[0]) < 1e-7 &&
+        Math.abs(a[1] - b[1]) < 1e-7;
+      if (joined) {
+        previous.path.push(...path.slice(1));
+        continue;
+      }
     }
+    // Never bridge a geometry gap merely because traffic colour matches.
+    // That would draw a fake straight connector across the block.
+    runs.push({ traffic: segment.traffic, path: [...path] });
   }
   return runs;
 }
