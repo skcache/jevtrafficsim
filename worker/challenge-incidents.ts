@@ -141,10 +141,40 @@ function segmentMaps(city: City): {
   return { byRoad, segments };
 }
 
-function centralRouteRoads(routeRoadIds: readonly RoadId[]): RoadId[] {
+/**
+ * Static target window for automatic adversity.
+ *
+ * Timing and targeting use the same canonical route, but targeting is biased
+ * AHEAD of where a free-flow ego would be when the event fires. This keeps an
+ * automatic crash/closure relevant without ever consulting controller-specific
+ * live state. First event targets the middle-late trip; second targets the
+ * final third. A broader central-route fallback keeps short/odd routes valid.
+ */
+export function automaticTargetRoads(
+  routeRoadIds: readonly RoadId[],
+  eventIndex: number,
+): RoadId[] {
   if (routeRoadIds.length <= 4) return [...routeRoadIds];
-  const lo = Math.max(1, Math.floor(routeRoadIds.length * 0.14));
-  const hi = Math.max(lo + 1, Math.ceil(routeRoadIds.length * 0.86));
+  const window =
+    eventIndex === 0
+      ? { lo: 0.42, hi: 0.68 }
+      : { lo: 0.70, hi: 0.94 };
+  const lo = Math.max(1, Math.floor(routeRoadIds.length * window.lo));
+  const hi = Math.max(lo + 1, Math.ceil(routeRoadIds.length * window.hi));
+  const targeted = routeRoadIds.slice(lo, hi);
+  if (targeted.length > 0) return targeted;
+  const fallbackLo = Math.max(1, Math.floor(routeRoadIds.length * 0.18));
+  const fallbackHi = Math.max(
+    fallbackLo + 1,
+    Math.ceil(routeRoadIds.length * 0.90),
+  );
+  return routeRoadIds.slice(fallbackLo, fallbackHi);
+}
+
+function broadCanonicalRoads(routeRoadIds: readonly RoadId[]): RoadId[] {
+  if (routeRoadIds.length <= 4) return [...routeRoadIds];
+  const lo = Math.max(1, Math.floor(routeRoadIds.length * 0.18));
+  const hi = Math.max(lo + 1, Math.ceil(routeRoadIds.length * 0.90));
   return routeRoadIds.slice(lo, hi);
 }
 
@@ -160,11 +190,12 @@ function deterministicPick<T>(
 function safeRouteClosureSegments(
   city: City,
   trip: MaterializedCuratedTrip,
+  candidateRoadIds: readonly RoadId[] = broadCanonicalRoads(trip.route.roadIds),
 ): PhysicalSegment[] {
   const { byRoad } = segmentMaps(city);
   const seen = new Set<string>();
   const candidates: PhysicalSegment[] = [];
-  for (const roadId of centralRouteRoads(trip.route.roadIds)) {
+  for (const roadId of candidateRoadIds) {
     const segment = byRoad.get(roadId);
     if (!segment || seen.has(segment.key)) continue;
     seen.add(segment.key);
@@ -187,8 +218,9 @@ function safeRouteClosureSegments(
 function routeBridgeSegments(
   model: MapModel,
   trip: MaterializedCuratedTrip,
+  candidateRoadIds: readonly RoadId[] = broadCanonicalRoads(trip.route.roadIds),
 ): PhysicalSegment[] {
-  const route = new Set(trip.route.roadIds);
+  const route = new Set(candidateRoadIds);
   const { byRoad } = segmentMaps(model.city);
   const seen = new Set<string>();
   const candidates: PhysicalSegment[] = [];
@@ -215,6 +247,8 @@ function routeBridgeSegments(
   return candidates.sort((a, b) => a.roadId - b.roadId);
 }
 
+const MAX_ROUTE_VENUE_DISTANCE_M = 1_200;
+
 function nearestVenueCenters(
   model: MapModel,
   roadIds: readonly RoadId[],
@@ -231,6 +265,7 @@ function nearestVenueCenters(
       }
       return { id: venue.intersectionId, distance };
     })
+    .filter((entry) => entry.distance <= MAX_ROUTE_VENUE_DISTANCE_M)
     .sort((a, b) => a.distance - b.distance || a.id - b.id)
     .slice(0, 3)
     .map((entry) => entry.id);
@@ -245,40 +280,46 @@ function automaticEntryForKind(
   eventIndex: number,
 ): IncidentScriptEntry | null {
   const label = `automatic:${eventIndex}:${kind}`;
+  const targetRoads = automaticTargetRoads(trip.route.roadIds, eventIndex);
   switch (kind) {
     case "traffic-burst":
       return { atMs, kind };
     case "crash": {
       const roadId = deterministicPick(
-        centralRouteRoads(trip.route.roadIds).filter((id) => !model.city.roads[id]?.closed),
+        targetRoads.filter((id) => !model.city.roads[id]?.closed),
         seed,
         `${label}:road`,
       );
       return roadId === null ? null : { atMs, kind, targetRoadId: roadId };
     }
     case "close-road": {
-      const segment = deterministicPick(
-        safeRouteClosureSegments(model.city, trip),
-        seed,
-        `${label}:segment`,
-      );
+      const targeted = safeRouteClosureSegments(model.city, trip, targetRoads);
+      const candidates =
+        targeted.length > 0
+          ? targeted
+          : safeRouteClosureSegments(model.city, trip);
+      const segment = deterministicPick(candidates, seed, `${label}:segment`);
       return segment === null
         ? null
         : { atMs, kind, targetRoadId: segment.roadId, allowDisconnect: false };
     }
     case "bridge-closed": {
-      const segment = deterministicPick(
-        routeBridgeSegments(model, trip),
-        seed,
-        `${label}:bridge`,
-      );
+      const targeted = routeBridgeSegments(model, trip, targetRoads);
+      const candidates =
+        targeted.length > 0 ? targeted : routeBridgeSegments(model, trip);
+      const segment = deterministicPick(candidates, seed, `${label}:bridge`);
       return segment === null
         ? null
         : { atMs, kind, targetRoadId: segment.roadId, allowDisconnect: false };
     }
     case "event-release": {
+      const targeted = nearestVenueCenters(model, targetRoads);
+      const centers =
+        targeted.length > 0
+          ? targeted
+          : nearestVenueCenters(model, broadCanonicalRoads(trip.route.roadIds));
       const centerIntersectionId = deterministicPick(
-        nearestVenueCenters(model, trip.route.roadIds),
+        centers,
         seed,
         `${label}:venue`,
       );
