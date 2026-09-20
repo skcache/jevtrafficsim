@@ -213,6 +213,11 @@ describe("contextual controls: route distance", () => {
     );
     expect(inside.length).toBe(1);
     expect(inside[0].prominence).toBe("preview");
+    expect(inside[0].emphasis).toBeLessThan(0.1);
+    const node = long.city.intersections[inside[0].intersectionId];
+    // The contextual signal begins exactly where the quiet network marker
+    // lives, then slides toward its kerbside stop-line placement as it grows.
+    expect(Math.hypot(inside[0].x - node.x, inside[0].y - node.y)).toBeLessThan(1);
   });
 
   it("makes the nearest control primary and any second quieter", () => {
@@ -249,6 +254,12 @@ describe("contextual controls: route distance", () => {
     ]);
     const shrinking = farther.find((control) => control.intersectionId === 1);
     expect(shrinking?.emphasis).toBeLessThan(retiring?.emphasis ?? 0);
+    const passedNode = model.city.intersections[1];
+    if (retiring && shrinking) {
+      const retiringDistance = Math.hypot(retiring.x - passedNode.x, retiring.y - passedNode.y);
+      const shrinkingDistance = Math.hypot(shrinking.x - passedNode.x, shrinking.y - passedNode.y);
+      expect(shrinkingDistance).toBeLessThan(retiringDistance);
+    }
 
     const retired = derive(model, [0, 1, 2], 1, { roadId: 1, progress: CONTROL_REVEAL.retireM }, [
       { intersectionId: 2, phaseIndex: 0, stage: "green" },
