@@ -80,9 +80,10 @@ export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
       widthMinPixels: ROUTE_SCALE.minPixels,
       widthMaxPixels: ROUTE_SCALE.maxPixels,
       // One run spans contiguous intersections, so there are no stacked
-      // per-road end caps to turn into the old mystery circles.
+      // per-road end caps. Square/mitered joins also avoid the round vertex
+      // bulbs that previously looked like mystery circles at intersections.
       capRounded: false,
-      jointRounded: true,
+      jointRounded: false,
       pickable: false,
     }),
   ];
