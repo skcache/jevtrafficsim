@@ -28,7 +28,7 @@ const fieldVariants = {
   shown: { opacity: 1, y: 0 },
 };
 
-export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
+export function Onboarding({ onEnterCity, onPreviewSetup }: { onEnterCity: () => void; onPreviewSetup: () => void }) {
   const phase = useUiStore((state) => state.phase);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
   const tripId = useUiStore((state) => state.tripId);
@@ -47,12 +47,14 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
     setSeed(next);
     setSeedText(String(next));
     setRotation((degrees) => degrees + 540);
+    onPreviewSetup();
   };
 
   const commitSeed = () => {
     const normalized = normalizeSeed(seedText, seed);
     setSeed(normalized);
     setSeedText(String(normalized));
+    onPreviewSetup();
   };
 
   const trafficIndex = TRAFFIC_OPTIONS.findIndex((option) => option.value === trafficLevel);
@@ -111,7 +113,10 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
                   <span className="sr-only">Chicago trip</span>
                   <select
                     value={tripId}
-                    onChange={(event) => setTripId(event.target.value as typeof tripId)}
+                    onChange={(event) => {
+                      setTripId(event.target.value as typeof tripId);
+                      onPreviewSetup();
+                    }}
                     className="h-10 w-full rounded-control border border-hair-strong bg-surface px-3 text-ui font-medium text-ink outline-none transition-colors focus:border-ink-38"
                   >
                     {CURATED_TRIPS.map((option) => (
@@ -135,13 +140,19 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
                   <DiscreteSlider
                     value={trafficIndex}
                     count={TRAFFIC_OPTIONS.length}
-                    onChange={(index) => setTrafficLevel(TRAFFIC_OPTIONS[index].value)}
+                    onChange={(index) => {
+                      setTrafficLevel(TRAFFIC_OPTIONS[index].value);
+                      onPreviewSetup();
+                    }}
                     ariaLabel="Traffic level"
                   />
                   <TickRow
                     labels={TRAFFIC_OPTIONS.map((option) => option.label)}
                     value={trafficIndex}
-                    onSelect={(index) => setTrafficLevel(TRAFFIC_OPTIONS[index].value)}
+                    onSelect={(index) => {
+                      setTrafficLevel(TRAFFIC_OPTIONS[index].value);
+                      onPreviewSetup();
+                    }}
                   />
                 </div>
               </motion.div>
@@ -152,7 +163,10 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
                   <Segmented
                     options={CONTROLLER_OPTIONS}
                     value={controller}
-                    onChange={setController}
+                    onChange={(nextController) => {
+                      setController(nextController);
+                      onPreviewSetup();
+                    }}
                     layoutId="controller-pill-config"
                     height={36}
                     ariaLabel="Controller"
