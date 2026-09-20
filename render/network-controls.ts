@@ -13,6 +13,7 @@ import type { MapModel, Projection } from "@/cities/map-model";
 import { NETWORK_CONTROL_SCALE } from "./scale";
 import type { ControlSpriteSet } from "./control-sprites";
 import { toLngLat, type LngLat } from "./deck-layers";
+import { roadPresentationClass } from "./road-hierarchy";
 
 export interface NetworkSignalMarker {
   readonly intersectionId: number;
@@ -21,8 +22,23 @@ export interface NetworkSignalMarker {
 }
 
 export function networkSignalMarkers(model: MapModel): NetworkSignalMarker[] {
+  // Signals only make sense where the underlying road is actually part of the
+  // visible city. OSM micro-connectors still exist for routing, but a tiny
+  // signal floating over a road we intentionally hid would look like a bug.
+  const visibleRoadIds = new Set<number>();
+  for (const street of model.streets) {
+    if (roadPresentationClass(street) === "hidden") continue;
+    for (const roadId of street.roadIds) visibleRoadIds.add(roadId);
+  }
+
   return model.city.intersections
-    .filter((intersection) => intersection.control === "signal")
+    .filter(
+      (intersection) =>
+        intersection.control === "signal" &&
+        [...intersection.incoming, ...intersection.outgoing].some((roadId) =>
+          visibleRoadIds.has(roadId),
+        ),
+    )
     .map((intersection) => ({
       intersectionId: intersection.id,
       x: intersection.x,
