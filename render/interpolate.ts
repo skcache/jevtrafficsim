@@ -106,16 +106,46 @@ export function interpolateEgoRoadProgress(
   previous: PresentationSnapshot | null,
   current: PresentationSnapshot | null,
   alpha: number,
+  indexes?: DirectedPathIndexes,
 ): { roadId: number | null; progress: number } | null {
   const ego = current?.ego ?? null;
   if (!ego) return null;
   const before = previous?.ego ?? null;
+  const t = clamp01(alpha);
   if (before && before.id === ego.id && before.roadId === ego.roadId) {
-    const t = clamp01(alpha);
     return {
       roadId: ego.roadId,
       progress: before.progress + (ego.progress - before.progress) * t,
     };
+  }
+  if (
+    indexes &&
+    before &&
+    before.id === ego.id &&
+    before.roadId !== null &&
+    ego.roadId !== null &&
+    before.roadId !== ego.roadId
+  ) {
+    const previousIndex = indexes[before.roadId];
+    const currentIndex = indexes[ego.roadId];
+    if (previousIndex && currentIndex) {
+      const remaining = Math.max(0, previousIndex.total - before.progress);
+      const travelled = Math.max(0, ego.progress);
+      const total = remaining + travelled;
+      if (total > 0) {
+        const distance = t * total;
+        if (distance <= remaining) {
+          return {
+            roadId: before.roadId,
+            progress: Math.min(previousIndex.total, before.progress + distance),
+          };
+        }
+        return {
+          roadId: ego.roadId,
+          progress: Math.min(currentIndex.total, distance - remaining),
+        };
+      }
+    }
   }
   return { roadId: ego.roadId, progress: ego.progress };
 }
