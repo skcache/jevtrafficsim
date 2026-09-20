@@ -457,11 +457,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // the evidence that the ego is moving through a real traffic system,
         // not a private route animation: dense/queued roads stay amber/red
         // even when the camera is close enough to inspect the ego car.
+        const routeRoadIds = new Set(
+          buffer.current?.trip?.routeRoadIds ?? [],
+        );
         const congestion =
           !trafficHiddenRef.current && buffer.current
             ? buildCongestionLayers(
                 congestionRoadsRef.current ?? [],
-                roadPressure(buffer.current),
+                roadPressure(buffer.current).filter(
+                  (entry) => !routeRoadIds.has(entry.roadId),
+                ),
                 zoomRef.current,
               )
             : [];
@@ -550,6 +555,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           routeControls: snapshot?.routeControls ?? [],
         });
         controlsRef.current = controls;
+        const contextualIntersectionIds = new Set(
+          controls.map((control) => control.intersectionId),
+        );
+        const quietNetworkSignals = networkSignalsRef.current.filter(
+          (marker) => !contextualIntersectionIds.has(marker.intersectionId),
+        );
         routeMixRef.current = routeTrafficMix(segments);
         lastEgoMetricRef.current = egoRendered
           ? { x: egoRendered.x, y: egoRendered.y, headingRadians: egoRendered.headingRadians }
@@ -585,7 +596,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               // Live right-of-way is still reserved for contextual controls.
               ...buildNetworkSignalLayers(
                 projection,
-                networkSignalsRef.current,
+                quietNetworkSignals,
                 controlSpritesRef.current,
                 zoomRef.current,
               ),
