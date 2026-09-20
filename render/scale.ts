@@ -13,11 +13,12 @@
 
 /** The route band: a casing that separates it from the basemap, a coloured core. */
 export const ROUTE_SCALE = {
-  casingWidthM: 17,
-  coreWidthM: 11,
-  casingMinPixels: 5.5,
-  coreMinPixels: 3.5,
-  coreMaxPixels: 30,
+  // Wide enough that the (deliberately huge) ego car reads as ON the route.
+  casingWidthM: 30,
+  coreWidthM: 21,
+  casingMinPixels: 9,
+  coreMinPixels: 6,
+  coreMaxPixels: 60,
   /** Opacity of the painted route over the basemap. */
   casingOpacity: 0.5,
   coreOpacity: 0.92,
@@ -60,14 +61,32 @@ export const FOLLOW_SCALE = {
  */
 export const CONTROL_SCALE = {
   /**
-   * Legibility floor while a control is primary / preview. Sized so all three
-   * lamp positions resolve at follow-camera zoom, not just the lit one.
+   * Legibility floor while a control is primary / preview. Deliberately huge:
+   * a traffic light the user cannot read is not a traffic light. At most two
+   * controls are ever on screen, so a big head cannot flood the map.
    */
-  minPixels: 36,
-  previewMinPixels: 26,
+  minPixels: 104,
+  previewMinPixels: 74,
   /** Safety cap: never larger than this on screen. */
-  maxPixels: 96,
+  maxPixels: 300,
   /** Preview controls draw at this fraction of their primary size. */
   previewSizeScale: 0.78,
   previewOpacity: 0.72,
+} as const;
+
+/**
+ * The ego car is the protagonist, and it is drawn comically large on purpose:
+ * a 4.5 m car at a real scale is a few pixels at follow zoom, which is neither
+ * visible nor fun to watch. Map metres first, with a big pixel floor so it is
+ * unmistakable at every zoom the challenge uses.
+ */
+export const EGO_SCALE = {
+  /** Multiplier applied to the physical vehicle length, in map metres. */
+  lengthScale: 4.2,
+  minPixels: 44,
+  previewMinPixels: 44,
+  maxPixels: 260,
+  /** Per class, so a truck still out-sizes a car and a bicycle stays smallest. */
+  minPixelsByClass: { car: 44, truck: 62, bicycle: 26 } as const,
+  maxPixelsByClass: { car: 260, truck: 340, bicycle: 130 } as const,
 } as const;

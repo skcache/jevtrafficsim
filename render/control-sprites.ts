@@ -199,11 +199,12 @@ export function createControlSprites(): ControlSpriteSet | null {
         mask: false,
       },
     },
+    // Comically large on purpose: the head has to be readable at follow zoom.
     heightM: {
-      "control-signal-red": 10,
-      "control-signal-yellow": 10,
-      "control-signal-green": 10,
-      "control-stop": 7,
+      "control-signal-red": 38,
+      "control-signal-yellow": 38,
+      "control-signal-green": 38,
+      "control-stop": 26,
     },
   };
 }
