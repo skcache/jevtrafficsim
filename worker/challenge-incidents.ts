@@ -171,13 +171,6 @@ export function automaticTargetRoads(
   return routeRoadIds.slice(fallbackLo, fallbackHi);
 }
 
-function broadCanonicalRoads(routeRoadIds: readonly RoadId[]): RoadId[] {
-  if (routeRoadIds.length <= 4) return [...routeRoadIds];
-  const lo = Math.max(1, Math.floor(routeRoadIds.length * 0.18));
-  const hi = Math.max(lo + 1, Math.ceil(routeRoadIds.length * 0.90));
-  return routeRoadIds.slice(lo, hi);
-}
-
 function deterministicPick<T>(
   values: readonly T[],
   seed: number,
@@ -190,7 +183,7 @@ function deterministicPick<T>(
 function safeRouteClosureSegments(
   city: City,
   trip: MaterializedCuratedTrip,
-  candidateRoadIds: readonly RoadId[] = broadCanonicalRoads(trip.route.roadIds),
+  candidateRoadIds: readonly RoadId[],
 ): PhysicalSegment[] {
   const { byRoad } = segmentMaps(city);
   const seen = new Set<string>();
@@ -218,7 +211,7 @@ function safeRouteClosureSegments(
 function routeBridgeSegments(
   model: MapModel,
   trip: MaterializedCuratedTrip,
-  candidateRoadIds: readonly RoadId[] = broadCanonicalRoads(trip.route.roadIds),
+  candidateRoadIds: readonly RoadId[],
 ): PhysicalSegment[] {
   const route = new Set(candidateRoadIds);
   const { byRoad } = segmentMaps(model.city);
@@ -293,31 +286,21 @@ function automaticEntryForKind(
       return roadId === null ? null : { atMs, kind, targetRoadId: roadId };
     }
     case "close-road": {
-      const targeted = safeRouteClosureSegments(model.city, trip, targetRoads);
-      const candidates =
-        targeted.length > 0
-          ? targeted
-          : safeRouteClosureSegments(model.city, trip);
+      const candidates = safeRouteClosureSegments(model.city, trip, targetRoads);
       const segment = deterministicPick(candidates, seed, `${label}:segment`);
       return segment === null
         ? null
         : { atMs, kind, targetRoadId: segment.roadId, allowDisconnect: false };
     }
     case "bridge-closed": {
-      const targeted = routeBridgeSegments(model, trip, targetRoads);
-      const candidates =
-        targeted.length > 0 ? targeted : routeBridgeSegments(model, trip);
+      const candidates = routeBridgeSegments(model, trip, targetRoads);
       const segment = deterministicPick(candidates, seed, `${label}:bridge`);
       return segment === null
         ? null
         : { atMs, kind, targetRoadId: segment.roadId, allowDisconnect: false };
     }
     case "event-release": {
-      const targeted = nearestVenueCenters(model, targetRoads);
-      const centers =
-        targeted.length > 0
-          ? targeted
-          : nearestVenueCenters(model, broadCanonicalRoads(trip.route.roadIds));
+      const centers = nearestVenueCenters(model, targetRoads);
       const centerIntersectionId = deterministicPick(
         centers,
         seed,
