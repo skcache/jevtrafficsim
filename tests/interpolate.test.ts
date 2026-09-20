@@ -142,7 +142,7 @@ describe("turn interpolation", () => {
     )[0];
     // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
     expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    expect(beforeJunction.y).toBeCloseTo(0, 6);
+    expect(beforeJunction.y).toBeCloseTo(-1.7, 6);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,
@@ -170,7 +170,32 @@ describe("turn interpolation", () => {
     const current = snapshot(100, [{ id: 1, roadId: 0, progress: 30 }]);
     const mid = interpolateVehicles(indexes, previous, current, 0.5, options(city, laneOffsets))[0];
     expect(mid.x).toBeCloseTo(25, 6);
-    expect(mid.y).toBeCloseTo(0, 6);
+    expect(mid.y).toBeCloseTo(-1.7, 6);
+  });
+
+  it("stays on a curved road between snapshots instead of cutting the chord", () => {
+    const base = straightModel();
+    const elbow = {
+      ...base,
+      directedPaths: [
+        [[0, 0], [50, 0], [50, 50]],
+        ...base.directedPaths.slice(1),
+      ],
+    } as unknown as MapModel;
+    const elbowIndexes = buildDirectedPathIndexes(elbow);
+    const previous = snapshot(0, [{ id: 1, roadId: 0, progress: 20 }]);
+    const current = snapshot(100, [{ id: 1, roadId: 0, progress: 70 }]);
+    const mid = interpolateVehicles(
+      elbowIndexes,
+      previous,
+      current,
+      0.5,
+      options(elbow.city, laneOffsets),
+    )[0];
+    // Scalar progress=45 stays on the incoming leg. A screen-space chord would
+    // cut diagonally through the block.
+    expect(mid.x).toBeCloseTo(45, 6);
+    expect(mid.y).toBeCloseTo(-1.7, 6);
   });
 
   it("handles a left turn as well as a right turn", () => {
@@ -208,7 +233,7 @@ describe("turn interpolation", () => {
     // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle remains
     // exactly on the incoming road.
     expect(mid.x).toBeCloseTo(99.2, 6);
-    expect(mid.y).toBeCloseTo(0, 6);
+    expect(mid.y).toBeCloseTo(-1.7, 6);
     const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
     // t=0.9 -> 10.8 m: 2.8 m onto the outgoing road, still road-locked.
     expect(after.x).toBeCloseTo(100, 6);
@@ -291,6 +316,16 @@ describe("physical stop-line clamping", () => {
       STOP_LINE_CLEARANCE_M;
     expect(stopped[0].x).toBeCloseTo(expected, 6);
     expect(stopped[0].x).toBeLessThan(100 - stopLineSetbackMetres(city.roads[0].lanes));
+
+    const yellow = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "yellow" }],
+    );
+    expect(yellow[0].x).toBeCloseTo(expected, 6);
 
     const green = clampVehiclesAtSignals(
       city,
@@ -389,9 +424,12 @@ describe("queue packing", () => {
       expect(vehicle.x).toBeGreaterThanOrEqual(0);
       expect(vehicle.x).toBeLessThanOrEqual(100);
     }
-    // The last one is pinned at the road entrance, not past it.
-    const last = [...packed].sort((a, b) => b.queueRank - a.queueRank)[0];
-    expect(last.x).toBeCloseTo(0, 6);
+    const ys = new Set(packed.map((vehicle) => vehicle.y.toFixed(3)));
+    const positions = new Set(
+      packed.map((vehicle) => `${vehicle.x.toFixed(3)}:${vehicle.y.toFixed(3)}`),
+    );
+    expect(ys.size).toBe(2);
+    expect(positions.size).toBe(packed.length);
   });
 
   it("leaves moving vehicles alone", () => {
