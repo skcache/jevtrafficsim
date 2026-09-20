@@ -16,6 +16,7 @@ export const CONTROL_SPRITE_IDS = [
   "control-signal-red",
   "control-signal-yellow",
   "control-signal-green",
+  "control-signal-neutral",
   "control-stop",
 ] as const;
 
@@ -58,7 +59,7 @@ const DIM = { red: "#3d211f", yellow: "#3c3119", green: "#1f3829" } as const;
 const LIT = { red: "#ff4a3d", yellow: "#ffc93c", green: "#4ee06a" } as const;
 const GLOW = { red: "#ff8a7a", yellow: "#ffe08a", green: "#9cf0b0" } as const;
 
-function drawSignal(ctx: CanvasRenderingContext2D, lit: "red" | "yellow" | "green"): void {
+function drawSignal(ctx: CanvasRenderingContext2D, lit: "red" | "yellow" | "green" | null): void {
   // Housing with a light top edge so it reads as a physical object.
   ctx.fillStyle = HOUSING_EDGE;
   ctx.beginPath();
@@ -81,7 +82,7 @@ function drawSignal(ctx: CanvasRenderingContext2D, lit: "red" | "yellow" | "gree
     ctx.beginPath();
     ctx.arc(LAMP.x, cy, LAMP.r + 4, 0, Math.PI * 2);
     ctx.fill();
-    if (name === lit) {
+    if (lit !== null && name === lit) {
       // Wide, light halo: the active lamp dominates the housing at any size.
       ctx.fillStyle = GLOW[name];
       ctx.beginPath();
@@ -149,7 +150,7 @@ export function createControlSprites(): ControlSpriteSet | null {
   if (typeof document === "undefined") {
     return null;
   }
-  const width = SIGNAL_CELL_W * 3 + STOP_CELL;
+  const width = SIGNAL_CELL_W * 4 + STOP_CELL;
   const canvas = document.createElement("canvas");
   canvas.width = width * SCALE;
   canvas.height = SIGNAL_CELL_H * SCALE;
@@ -159,7 +160,7 @@ export function createControlSprites(): ControlSpriteSet | null {
   }
   ctx.scale(SCALE, SCALE);
 
-  const lit: Array<"red" | "yellow" | "green"> = ["red", "yellow", "green"];
+  const lit: Array<"red" | "yellow" | "green" | null> = ["red", "yellow", "green", null];
   lit.forEach((state, index) => {
     ctx.save();
     ctx.translate(SIGNAL_CELL_W * index, 0);
@@ -167,7 +168,7 @@ export function createControlSprites(): ControlSpriteSet | null {
     ctx.restore();
   });
   ctx.save();
-  ctx.translate(SIGNAL_CELL_W * 3, (SIGNAL_CELL_H - STOP_CELL) / 2);
+  ctx.translate(SIGNAL_CELL_W * 4, (SIGNAL_CELL_H - STOP_CELL) / 2);
   drawStop(ctx);
   ctx.restore();
 
@@ -187,8 +188,9 @@ export function createControlSprites(): ControlSpriteSet | null {
       "control-signal-red": signalCell(0),
       "control-signal-yellow": signalCell(1),
       "control-signal-green": signalCell(2),
+      "control-signal-neutral": signalCell(3),
       "control-stop": {
-        x: SIGNAL_CELL_W * 3 * SCALE,
+        x: SIGNAL_CELL_W * 4 * SCALE,
         y: ((SIGNAL_CELL_H - STOP_CELL) / 2) * SCALE,
         width: STOP_CELL * SCALE,
         height: STOP_CELL * SCALE,
