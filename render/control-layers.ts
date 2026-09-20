@@ -29,7 +29,7 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
   }
   const signal = control.signal;
   if (!signal) {
-    return "control-signal-red";
+    return "control-signal-neutral";
   }
   if (signal.stage === "yellow") {
     return "control-signal-yellow";
