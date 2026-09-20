@@ -142,7 +142,8 @@ describe("turn interpolation", () => {
     )[0];
     // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
     expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    expect(beforeJunction.y).toBeCloseTo(-1.7, 6);
+    // Lane offset tapers into the shared junction node, so the path stays continuous.
+    expect(beforeJunction.y).toBeCloseTo(-0.53125, 6);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,
@@ -233,7 +234,7 @@ describe("turn interpolation", () => {
     // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle remains
     // exactly on the incoming road.
     expect(mid.x).toBeCloseTo(99.2, 6);
-    expect(mid.y).toBeCloseTo(-1.7, 6);
+    expect(mid.y).toBeCloseTo(-0.17, 6);
     const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
     // t=0.9 -> 10.8 m: 2.8 m onto the outgoing road, still road-locked.
     expect(after.x).toBeCloseTo(100, 6);
