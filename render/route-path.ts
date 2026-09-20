@@ -51,6 +51,35 @@ export function trimPathFrom(points: readonly Point[], fromDistance: number): Po
 }
 
 /**
+ * Presentation route index aligned to the interpolated ego road.
+ *
+ * Worker snapshots advance `trip.routeIndex` atomically, while the visible car
+ * spends part of the 200 ms interpolation interval finishing the previous road.
+ * During that interval presentation must keep using the previous route segment
+ * or the blue band / upcoming control jumps one intersection ahead of the car.
+ */
+export function presentationRouteIndex(
+  trip: PresentationTripProgress,
+  ego: { readonly roadId: RoadId | null } | null,
+): number {
+  const base = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  if (!ego || ego.roadId === null || trip.routeRoadIds.length === 0) {
+    return base;
+  }
+  const candidates = [base - 1, base, base + 1];
+  for (const index of candidates) {
+    if (
+      index >= 0 &&
+      index < trip.routeRoadIds.length &&
+      trip.routeRoadIds[index] === ego.roadId
+    ) {
+      return index;
+    }
+  }
+  return base;
+}
+
+/**
  * Build the remaining-route segments, in driving order.
  *
  * `ego` is the interpolated on-screen car: its progress trims the current road.
@@ -64,7 +93,7 @@ export function buildRouteSegments(
   classes: ReadonlyMap<RoadId, RouteTrafficClass>,
 ): RouteSegment[] {
   const segments: RouteSegment[] = [];
-  const startIndex = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  const startIndex = presentationRouteIndex(trip, ego);
   for (let index = startIndex; index < trip.routeRoadIds.length; index += 1) {
     const roadId = trip.routeRoadIds[index];
     const points = model.directedPaths[roadId];
