@@ -43,9 +43,10 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
 function sizeFor(control: ContextualControl): number {
   const metres =
     control.kind === "signal" ? CONTROL_SCALE.signalHeightM : CONTROL_SCALE.stopHeightM;
-  return control.prominence === "primary"
-    ? metres
-    : metres * CONTROL_SCALE.previewSizeScale;
+  const scale =
+    CONTROL_SCALE.previewSizeScale +
+    (1 - CONTROL_SCALE.previewSizeScale) * control.emphasis;
+  return metres * scale;
 }
 
 function iconLayer(
