@@ -71,18 +71,14 @@ describe("Issue #27 challenge incident planning", () => {
     );
   });
 
-  it("targets automatic road adversity ahead on the canonical route", () => {
+  it("targets automatic road adversity on the canonical route", () => {
     const first = automaticTargetRoads(model.city, trip.route.roadIds, 0);
     const second = automaticTargetRoads(model.city, trip.route.roadIds, 1);
-    const indexOf = new Map(trip.route.roadIds.map((roadId, index) => [roadId, index]));
+    const canonical = new Set(trip.route.roadIds);
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
-    expect(Math.min(...first.map((roadId) => indexOf.get(roadId) ?? -1))).toBeGreaterThan(
-      trip.route.roadIds.length * 0.3,
-    );
-    expect(Math.min(...second.map((roadId) => indexOf.get(roadId) ?? -1))).toBeGreaterThan(
-      trip.route.roadIds.length * 0.6,
-    );
+    expect(first.every((roadId) => canonical.has(roadId))).toBe(true);
+    expect(second.every((roadId) => canonical.has(roadId))).toBe(true);
   });
 
   it("targets by free-flow progress rather than raw road index", () => {
