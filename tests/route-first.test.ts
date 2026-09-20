@@ -197,6 +197,16 @@ describe("route-first layers", () => {
     expect(runs[1].traffic).toBe("slowed");
   });
 
+  it("never invents a connector across a geometry gap", () => {
+    const runs = buildRouteRuns([
+      { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
+      { roadId: 2, path: [[2, 2], [3, 2]], traffic: "free" },
+    ]);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1]]);
+    expect(runs[1].path).toEqual([[2, 2], [3, 2]]);
+  });
+
   it("places the destination pin on the destination intersection", () => {
     const { trip, snapshot } = (() => {
       const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", 7);
