@@ -132,6 +132,7 @@ import type {
   City,
   IntersectionId,
   RoadId,
+  VehicleId,
   VehicleState,
   VehicleType,
 } from "./types";
@@ -141,6 +142,12 @@ export interface ScheduledSpawn {
   readonly type: VehicleType;
   readonly origin: IntersectionId;
   readonly destination: IntersectionId;
+  /**
+   * Presentation identity only. `ego` marks the ONE vehicle that crosses into
+   * the live frame; it has ZERO effect on movement, routing, capacity, signals
+   * or queueing — the engine treats it exactly like any other spawn.
+   */
+  readonly role?: "ego";
 }
 
 export interface EngineOptions {
@@ -158,6 +165,7 @@ interface SpawnQueueEntry {
   readonly type: VehicleType;
   readonly origin: IntersectionId;
   readonly destination: IntersectionId;
+  readonly role?: "ego";
 }
 
 /** Reroute bookkeeping per affected vehicle (never controller-owned). */
@@ -204,6 +212,12 @@ export interface EngineState {
   readonly rerouteStats: { attempted: number; succeeded: number; failed: number };
   nextSpawnIndex: number;
   ticks: number;
+  /**
+   * The vehicle id the ego spawn actually produced, or null before it spawns
+   * (and if its route never materialises). Recorded when the vehicle is
+   * created, so nothing has to assume "vehicle 0 is the ego forever".
+   */
+  egoVehicleId: VehicleId | null;
 }
 
 function validateSpawn(city: City, spawn: ScheduledSpawn): void {
@@ -237,12 +251,17 @@ export function createEngine(options: EngineOptions): EngineState {
     .map((spawn, sequence) => ({ spawn, sequence }))
     .sort((a, b) => a.spawn.timeMs - b.spawn.timeMs || a.sequence - b.sequence)
     .map(({ spawn }) => spawn);
+  const egoSpawns = spawns.filter((spawn) => spawn.role === "ego");
+  if (egoSpawns.length > 1) {
+    throw new RangeError(`at most one ego spawn is allowed, received ${egoSpawns.length}`);
+  }
   const spawnQueue: SpawnQueueEntry[] = spawns.map((spawn, sequence) => ({
     timeMs: spawn.timeMs,
     sequence,
     type: spawn.type,
     origin: spawn.origin,
     destination: spawn.destination,
+    role: spawn.role,
   }));
   const incidentConfig: IncidentConfig = options.incidents ?? { seed: 0, script: [] };
   return {
@@ -265,6 +284,7 @@ export function createEngine(options: EngineOptions): EngineState {
     rerouteStats: { attempted: 0, succeeded: 0, failed: 0 },
     nextSpawnIndex: 0,
     ticks: 0,
+    egoVehicleId: null,
   };
 }
 
@@ -302,13 +322,17 @@ function spawnDueVehicles(engine: EngineState): void {
       engine.metrics.failedSpawns += 1;
       continue;
     }
+    const vehicleId = traffic.vehicles.length;
     spawnVehicle(city, traffic, {
-      id: traffic.vehicles.length,
+      id: vehicleId,
       type: spawn.type,
       origin: spawn.origin,
       destination: spawn.destination,
       route: route.roadIds,
     });
+    if (spawn.role === "ego") {
+      engine.egoVehicleId = vehicleId;
+    }
   }
 }
 

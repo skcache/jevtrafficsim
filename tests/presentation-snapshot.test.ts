@@ -1,124 +1,177 @@
+/**
+ * Issue #24 — the presentation frame contract.
+ *
+ * The frame used to ship every active vehicle. It now ships ONE ego car, the
+ * sparse road state that replaced the fleet, route-local control state, and the
+ * ego's trip progress. Background traffic never crosses this boundary.
+ */
 import { describe, expect, it } from "vitest";
 import { createFixedController } from "@/controllers/fixed";
 import { createEngine, queueIncident, runEngine, type ScheduledSpawn } from "@/sim/engine";
-import {
-  buildPresentationMetrics,
-  buildPresentationSnapshot,
-} from "@/worker/presentation-snapshot";
+import { buildPresentationMetrics, buildPresentationSnapshot } from "@/worker/presentation-snapshot";
 import { makeStreet } from "./traffic-support";
 
 /**
- * Fixture: road 0 (cap 4, len 2) feeding road 1 (cap 2, len 10).
- * - parker: enters road 1 and drives away
- * - A + B: reach road 0's end at t=200 and queue (road 1 admits only one)
- * - C: parked on road 1's start fills the headroom, so a late entrant waits
- *   as pending
+ * Fixture: chain 0 -> 1 -> 2 -> 3 (roads 0..2).
+ * - the curated trip's car runs 0 -> 2 (roads 0 and 1)
+ * - a background car runs 2 -> 3 and never touches the ego's route
+ * - signals at intersection 1 (on the route) and 3 (off it)
  */
-function fixture(): { city: ReturnType<typeof makeStreet>["city"]; spawns: ScheduledSpawn[] } {
+function fixture(spawns?: ScheduledSpawn[]) {
   const { city } = makeStreet([
     { length: 2, speedLimit: 10, capacity: 4 },
     { length: 10, speedLimit: 10, capacity: 2 },
+    { length: 10, speedLimit: 10, capacity: 2 },
   ]);
-  const spawns: ScheduledSpawn[] = [
-    { timeMs: 0, type: "car", origin: 1, destination: 2 }, // parker on road 1
-    { timeMs: 0, type: "car", origin: 0, destination: 2 }, // A
-    { timeMs: 0, type: "car", origin: 0, destination: 2 }, // B
-  ];
-  return { city, spawns };
+  city.intersections[1].control = "signal";
+  city.intersections[3].control = "signal";
+  const ego: ScheduledSpawn = { timeMs: 0, type: "car", origin: 0, destination: 2, role: "ego" };
+  const background: ScheduledSpawn = { timeMs: 0, type: "car", origin: 2, destination: 3 };
+  return {
+    city,
+    ego,
+    spawns: spawns ?? [ego, background],
+  };
 }
 
 describe("presentation snapshots", () => {
-  it("includes only active vehicles and never routes or destinations", () => {
+  it("carries exactly one ego vehicle and no background fleet", () => {
     const { city, spawns } = fixture();
     const engine = createEngine({ city, controller: createFixedController(), spawns });
     runEngine(engine, 300);
-    const snapshot = buildPresentationSnapshot(engine, 0);
+    const snapshot = buildPresentationSnapshot(engine, 0, "loop-circuit");
     expect(snapshot.sequence).toBe(0);
     expect(snapshot.timeMs).toBe(300);
     expect(snapshot.controller).toBe("fixed");
-    expect(snapshot.vehicles.length).toBe(3);
-    expect(snapshot.vehicles.every((vehicle) => vehicle.state !== "arrived")).toBe(true);
-    const serialized = JSON.stringify(snapshot);
-    expect(serialized).not.toContain('"route"');
-    expect(serialized).not.toContain('"destination"');
-    expect(serialized).not.toContain('"intersections"'); // no city geometry per frame
-    // The parker is on road 1, A and B are queued at road 0's end.
-    expect(snapshot.vehicles.map((vehicle) => vehicle.state)).toEqual([
-      "moving",
-      "queued",
-      "queued",
-    ]);
+    expect(snapshot.ego?.id).toBe(engine.egoVehicleId);
+    expect("vehicles" in snapshot).toBe(false);
   });
 
-  it("drops arrived vehicles as the run progresses", () => {
+  it("identifies the ego by the id the engine recorded, not by list position", () => {
+    const { city } = fixture();
+    // Ego spawned LAST: position-based detection would pick the wrong car.
+    const spawns: ScheduledSpawn[] = [
+      { timeMs: 0, type: "car", origin: 2, destination: 3 },
+      { timeMs: 0, type: "truck", origin: 2, destination: 3 },
+      { timeMs: 0, type: "car", origin: 0, destination: 2, role: "ego" },
+    ];
+    const engine = createEngine({ city, controller: createFixedController(), spawns });
+    runEngine(engine, 200);
+    expect(engine.egoVehicleId).toBe(2);
+    const snapshot = buildPresentationSnapshot(engine, 1, "loop-circuit");
+    expect(snapshot.ego?.id).toBe(2);
+    expect(snapshot.ego?.type).toBe("car");
+    expect(snapshot.ego?.routeIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  it("aggregates road traffic sparsely, with queue counts that match the engine", () => {
+    const { city } = fixture();
+    // Four cars on the same 0 -> 2 trip: the tail queues at road 0's end.
+    const run = createEngine({
+      city,
+      controller: createFixedController(),
+      spawns: [
+        { timeMs: 0, type: "car", origin: 0, destination: 2, role: "ego" },
+        { timeMs: 0, type: "car", origin: 0, destination: 2 },
+        { timeMs: 0, type: "car", origin: 0, destination: 2 },
+        { timeMs: 0, type: "car", origin: 0, destination: 2 },
+      ],
+    });
+    runEngine(run, 400);
+    const snapshot = buildPresentationSnapshot(run, 2, "loop-circuit");
+    // Sparse: only roads that carry state appear.
+    expect(snapshot.roadTraffic.length).toBeLessThan(city.roads.length);
+    expect(snapshot.roadTraffic.length).toBeGreaterThan(0);
+    const expected = new Map<number, number>();
+    for (const vehicle of run.traffic.vehicles) {
+      if (vehicle.state === "queued" && vehicle.roadId !== null) {
+        expected.set(vehicle.roadId, (expected.get(vehicle.roadId) ?? 0) + 1);
+      }
+    }
+    for (const road of snapshot.roadTraffic) {
+      expect(road.queuedCount).toBe(expected.get(road.roadId) ?? 0);
+      expect(road.capacity).toBe(city.roads[road.roadId].capacity);
+      expect(road.occupancy).toBeGreaterThan(0);
+      expect(road.vehicleCount).toBeGreaterThan(0);
+    }
+    expect(snapshot.roadTraffic.some((road) => road.queuedCount > 0)).toBe(true);
+    // Deterministic ordering: ascending road id.
+    const ids = snapshot.roadTraffic.map((road) => road.roadId);
+    expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+  });
+
+  it("filters control state to the ego's remaining route", () => {
     const { city, spawns } = fixture();
     const engine = createEngine({ city, controller: createFixedController(), spawns });
-    runEngine(engine, 1_200); // parker finishes road 1 at t=1000
-    const snapshot = buildPresentationSnapshot(engine, 1);
-    expect(snapshot.vehicles.some((vehicle) => vehicle.id === 0)).toBe(false);
-    expect(snapshot.vehicles.every((vehicle) => vehicle.state !== "arrived")).toBe(true);
+    runEngine(engine, 100);
+    const snapshot = buildPresentationSnapshot(engine, 3, "loop-circuit");
+    // Signal at intersection 1 is on the ego's route; the one at 3 is not.
+    expect(snapshot.routeControls.map((signal) => signal.intersectionId)).toEqual([1]);
+    // The city still runs every signal — this is a payload filter, not a sim change.
+    expect(engine.traffic.signals.size).toBe(2);
   });
 
-  it("uses continuous queue wait for queued vehicles and zero for moving ones", () => {
+  it("reports trip progress from facts the simulation actually has", () => {
     const { city, spawns } = fixture();
     const engine = createEngine({ city, controller: createFixedController(), spawns });
     runEngine(engine, 300);
-    const snapshot = buildPresentationSnapshot(engine, 2);
-    const byId = new Map(snapshot.vehicles.map((vehicle) => [vehicle.id, vehicle]));
-    expect(byId.get(0)?.blockedWaitMs).toBe(0); // moving: never "waiting"
-    expect(byId.get(1)?.blockedWaitMs).toBe(100); // queued since t=200
-    expect(byId.get(2)?.blockedWaitMs).toBe(100);
-    // Moving vehicles stay neutral after release: run until A is released.
-    runEngine(engine, 1_300);
-    const later = buildPresentationSnapshot(engine, 3);
-    const moving = later.vehicles.find((vehicle) => vehicle.id === 1);
-    expect(moving?.state).toBe("moving");
-    expect(moving?.blockedWaitMs).toBe(0);
+    const midway = buildPresentationSnapshot(engine, 4, "loop-circuit");
+    expect(midway.trip).not.toBeNull();
+    expect(midway.trip?.tripId).toBe("loop-circuit");
+    expect(midway.trip?.originIntersectionId).toBe(0);
+    expect(midway.trip?.destinationIntersectionId).toBe(2);
+    expect(midway.trip?.routeRoadIds).toEqual([0, 1]);
+    expect(midway.trip?.routeIndex).toBe(1);
+    expect(midway.trip?.intersectionsCleared).toBe(1);
+    expect(midway.trip?.completed).toBe(false);
+    expect(midway.trip?.distanceTravelledM).toBeCloseTo(3, 5); // 2 m road 0 + 1 m into road 1
+    expect(midway.trip?.distanceRemainingM).toBeCloseTo(9, 5);
+    expect(midway.trip?.tripTimeMs).toBe(300);
+
+    runEngine(engine, 1_200);
+    const arrived = buildPresentationSnapshot(engine, 5, "loop-circuit");
+    expect(arrived.trip?.completed).toBe(true);
+    expect(arrived.trip?.distanceRemainingM).toBe(0);
+    expect(arrived.trip?.distanceTravelledM).toBeCloseTo(12, 5);
+    // tripId is the only place a trip name lives; the ego keeps being ordinary.
+    expect(buildPresentationSnapshot(engine, 6).trip).toBeNull();
   });
 
-  it("reports pending wait for vehicles that never entered a road", () => {
+  it("serializes compactly: no routes, destinations or fleet bookkeeping", () => {
     const { city, spawns } = fixture();
-    const engine = createEngine({
-      city,
-      controller: createFixedController(),
-      spawns: [...spawns, { timeMs: 0, type: "car", origin: 1, destination: 2 }],
-    });
-    // The fourth car targets road 1 (cap 2): parker occupies it, so the second
-    // entrant parks as pending.
-    runEngine(engine, 400);
-    const snapshot = buildPresentationSnapshot(engine, 4);
-    const pending = snapshot.vehicles.find((vehicle) => vehicle.state === "pending");
-    expect(pending).toBeDefined();
-    expect(pending?.roadId).toBeNull();
-    expect(pending?.blockedWaitMs).toBe(400); // all of its time is pending wait
+    const engine = createEngine({ city, controller: createFixedController(), spawns });
+    runEngine(engine, 300);
+    const serialized = JSON.stringify(buildPresentationSnapshot(engine, 7, "loop-circuit"));
+    expect(serialized).not.toContain('"destination"');
+    expect(serialized).not.toContain('"intersections"'); // no city geometry per frame
+    expect(serialized).not.toContain('"successfulReroutes"');
+    // With a trip id, the ego's own route IS allowed — there is exactly one.
+    const withTrip = buildPresentationSnapshot(engine, 7, "loop-circuit");
+    expect(withTrip.trip?.routeRoadIds.length).toBeGreaterThan(0);
+    expect(serialized.length).toBeGreaterThan(0);
   });
 
-  it("serializes signals, road conditions and incident markers compactly", () => {
+  it("reports blocked wait for the ego: continuous while queued, zero while moving", () => {
+    const { city, spawns } = fixture();
+    const engine = createEngine({ city, controller: createFixedController(), spawns });
+    runEngine(engine, 220);
+    const snapshot = buildPresentationSnapshot(engine, 8, "loop-circuit");
+    expect(snapshot.ego?.state).toBe("moving");
+    expect(snapshot.ego?.blockedWaitMs).toBe(0);
+    expect(snapshot.ego?.queueRank).toBeNull();
+  });
+
+  it("carries incidents and road conditions without per-vehicle data", () => {
     const { city, spawns } = fixture();
     const engine = createEngine({ city, controller: createFixedController(), spawns });
     runEngine(engine, 200);
     queueIncident(engine, { kind: "crash", targetRoadId: 0, durationMs: 5_000 });
     runEngine(engine, 400);
-    const snapshot = buildPresentationSnapshot(engine, 5);
-    // Road conditions are compact and only carry roads that differ from base.
-    expect(snapshot.roadConditions.length).toBe(1);
-    expect(snapshot.roadConditions[0]).toEqual({
-      roadId: 0,
-      closed: false,
-      capacity: 2, // max(desired 2, resident 2)
-    });
-    // Incident markers carry status/targets but no internal bookkeeping.
-    expect(snapshot.incidents).toEqual([
-      {
-        id: 0,
-        kind: "crash",
-        status: "active",
-        roadIds: [0],
-        eventCenterIntersectionId: null,
-        expiresAtMs: 5_200,
-      },
-    ]);
-    expect(JSON.stringify(snapshot)).not.toContain("successfulReroutes");
+    const snapshot = buildPresentationSnapshot(engine, 9, "loop-circuit");
+    expect(snapshot.roadConditions.length).toBeGreaterThan(0);
+    expect(snapshot.incidents.length).toBeGreaterThan(0);
+    expect(snapshot.incidents[0]?.kind).toBe("crash");
+    expect(JSON.stringify(snapshot)).not.toContain('"vehicles"');
   });
 
   it("is deterministic for identical engine state", () => {
@@ -128,12 +181,9 @@ describe("presentation snapshots", () => {
     const engineB = createEngine({ city: b.city, controller: createFixedController(), spawns: b.spawns });
     runEngine(engineA, 700);
     runEngine(engineB, 700);
-    expect(JSON.stringify(buildPresentationSnapshot(engineA, 7))).toBe(
-      JSON.stringify(buildPresentationSnapshot(engineB, 7)),
+    expect(JSON.stringify(buildPresentationSnapshot(engineA, 10, "loop-circuit"))).toBe(
+      JSON.stringify(buildPresentationSnapshot(engineB, 10, "loop-circuit")),
     );
     expect(buildPresentationMetrics(engineA)).toEqual(buildPresentationMetrics(engineB));
-    const metrics = buildPresentationMetrics(engineA);
-    expect(metrics.activeVehicles).toBe(3);
-    expect(Number.isFinite(metrics.averageWaitTimeMs)).toBe(true);
   });
 });

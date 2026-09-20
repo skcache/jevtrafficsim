@@ -27,8 +27,23 @@ import {
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
 import { chicagoAsset, chicagoModel } from "./chicago-support";
 
+/**
+ * Issue #24: control state reaches the renderer as `routeControls` — the
+ * payload is already filtered to the ego's route, so this fixture feeds the
+ * same entries through that field.
+ */
 function snapshotWithSignals(signals: PresentationSignal[]): PresentationSnapshot {
-  return { sequence: 1, timeMs: 1000, vehicles: [], signals } as unknown as PresentationSnapshot;
+  return {
+    sequence: 1,
+    timeMs: 1000,
+    controller: "fixed",
+    ego: null,
+    roadTraffic: [],
+    routeControls: signals,
+    trip: null,
+    roadConditions: [],
+    incidents: [],
+  };
 }
 
 /** A sprite set without a DOM: the layer only needs an atlas and a mapping. */

@@ -16,7 +16,7 @@ import {
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import type { City, Road } from "@/sim/types";
-import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
+import type { PresentationSnapshot, PresentationEgoVehicle } from "@/worker/presentation-snapshot";
 
 /** Two-lane eastbound road: straight, 100 m, from intersection 0 to 1. */
 function straightModel(): MapModel {
@@ -79,20 +79,39 @@ function straightModel(): MapModel {
   } as unknown as MapModel;
 }
 
+/**
+ * Issue #24 frames carry ONE vehicle. Tests that used to build small fleets
+ * now build the ego frame: `vehicles` keeps the familiar call shape, and the
+ * first entry becomes the ego.
+ */
 function snapshot(
   timeMs: number,
-  vehicles: Array<Partial<PresentationVehicle> & { id: number; roadId: number | null; progress: number }>,
+  vehicles: Array<Partial<PresentationEgoVehicle> & { id: number; roadId: number | null; progress: number }>,
 ): PresentationSnapshot {
+  const [first] = vehicles;
   return {
     sequence: timeMs,
     timeMs,
-    vehicles: vehicles.map((vehicle) => ({
-      type: "car",
-      state: "moving",
-      blockedWaitMs: 0,
-      ...vehicle,
-    })) as PresentationVehicle[],
-  } as unknown as PresentationSnapshot;
+    controller: "fixed",
+    // Defaults first; the caller's own fields (id, roadId, progress, overrides)
+    // land last so nothing is silently overwritten.
+    ego: first
+      ? {
+          type: "car" as const,
+          state: "moving" as const,
+          blockedWaitMs: 0,
+          routeIndex: 0,
+          queueRank: null,
+          speed: 0,
+          ...first,
+        }
+      : null,
+    roadTraffic: [],
+    routeControls: [],
+    trip: null,
+    roadConditions: [],
+    incidents: [],
+  };
 }
 
 const options = (city: City, laneOffsets: number[], nowMs = 1000, receivedAtMs = 1000) => ({

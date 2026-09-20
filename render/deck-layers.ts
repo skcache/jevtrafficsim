@@ -335,7 +335,7 @@ export function buildSignalLayers(
   }
 
   const raw: Glyph[] = [];
-  for (const signal of snapshot.signals) {
+  for (const signal of snapshot.routeControls) {
     const plan = plans.get(signal.intersectionId);
     if (!plan || plan.groupIncoming.length === 0) {
       continue;

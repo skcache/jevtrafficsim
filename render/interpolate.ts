@@ -17,7 +17,10 @@ import type { DirectedPathIndexes } from "@/render/map-geometry";
 import { applyLaneOffset } from "@/render/map-geometry";
 import { vehicleLaneOffsetMetres } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
-import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
+import type {
+  PresentationEgoVehicle,
+  PresentationSnapshot,
+} from "@/worker/presentation-snapshot";
 
 export function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
@@ -79,8 +82,8 @@ export function positionForRoad(
 export interface RenderedVehicle {
   readonly id: number;
   readonly roadId: number | null;
-  readonly type: PresentationVehicle["type"];
-  readonly state: PresentationVehicle["state"];
+  readonly type: PresentationEgoVehicle["type"];
+  readonly state: PresentationEgoVehicle["state"];
   readonly x: number;
   readonly y: number;
   readonly headingRadians: number;
@@ -115,15 +118,15 @@ export function interpolateVehicles(
   options: InterpolateOptions,
 ): RenderedVehicle[] {
   const t = clamp01(alpha);
-  const previousById = new Map<number, PresentationVehicle>();
-  if (previous) {
-    for (const vehicle of previous.vehicles) {
-      previousById.set(vehicle.id, vehicle);
-    }
+  // Issue #24: the frame carries ONE vehicle — the curated trip's ego car.
+  // Background traffic stays in the engine, so there is no fleet to interpolate.
+  const previousById = new Map<number, PresentationEgoVehicle>();
+  if (previous?.ego) {
+    previousById.set(previous.ego.id, previous.ego);
   }
   const fade = clamp01((options.nowMs - options.receivedAtMs) / SPAWN_FADE_IN_MS);
   const rendered: RenderedVehicle[] = [];
-  for (const vehicle of current.vehicles) {
+  for (const vehicle of current.ego ? [current.ego] : []) {
     const offset = vehicle.roadId === null ? 0 : vehicleLaneOffsetMetres(options.city, options.laneOffsets, vehicle.id, vehicle.roadId);
     const currentPosition = positionForRoad(indexes, vehicle.roadId, vehicle.progress, offset);
     if (!currentPosition) {
@@ -185,8 +188,8 @@ export function interpolateVehicles(
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
-  before: PresentationVehicle,
-  current: PresentationVehicle,
+  before: PresentationEgoVehicle,
+  current: PresentationEgoVehicle,
   t: number,
   options: InterpolateOptions,
 ): (WorldPosition & { fromHeading: number; toHeading: number }) | null {

@@ -25,7 +25,7 @@ import { QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
 import { samplePathIndex } from "@/cities/paths";
 import { VEHICLE_MINZOOM } from "@/render/zoom-grammar";
 import * as mapGeometry from "@/render/map-geometry";
-import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
+import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 import { chicagoModel } from "./chicago-support";
 
 const vehicle = (
@@ -494,26 +494,27 @@ describe("turn continuity", () => {
     const offsets = model.city.roads.map((road) =>
       laneCentreOffsetMetres(model, road.id, carriagewayPairs(model)),
     );
-    const snapshot = (roadId: number, progress: number): PresentationSnapshot =>
-      ({
-        sequence: 0,
-        timeMs: 0,
-        controller: "fixed",
-        vehicles: [
-          {
-            id: 1,
-            type: "car",
-            state: "moving",
-            roadId,
-            progress,
-            queueRank: null,
-            blockedWaitMs: 0,
-          } as PresentationVehicle,
-        ],
-        signals: [],
-        roadConditions: [],
-        incidents: [],
-      }) as unknown as PresentationSnapshot;
+    const snapshot = (roadId: number, progress: number): PresentationSnapshot => ({
+      sequence: 0,
+      timeMs: 0,
+      controller: "fixed",
+      ego: {
+        id: 1,
+        type: "car",
+        state: "moving",
+        roadId,
+        progress,
+        routeIndex: 0,
+        queueRank: null,
+        blockedWaitMs: 0,
+        speed: 0,
+      },
+      roadTraffic: [],
+      routeControls: [],
+      trip: null,
+      roadConditions: [],
+      incidents: [],
+    });
 
     const previous = snapshot(pair.from.id, pair.from.length - 6);
     const current = snapshot(pair.to.id, 6);
@@ -544,7 +545,17 @@ describe("incident language", () => {
   it("exposes a crash anchor for the dev camera, and null when there is no crash", () => {
     const model = chicagoModel(2);
     const empty = buildIncidentLayers(
-      { sequence: 0, timeMs: 0, vehicles: [], signals: [], roadConditions: [], incidents: [] } as unknown as PresentationSnapshot,
+      {
+        sequence: 0,
+        timeMs: 0,
+        controller: "fixed",
+        ego: null,
+        roadTraffic: [],
+        routeControls: [],
+        trip: null,
+        roadConditions: [],
+        incidents: [],
+      },
       model,
     );
     expect(empty.extras.crash).toBeNull();
@@ -553,11 +564,14 @@ describe("incident language", () => {
       {
         sequence: 0,
         timeMs: 0,
-        vehicles: [],
-        signals: [],
+        controller: "fixed",
+        ego: null,
+        roadTraffic: [],
+        routeControls: [],
+        trip: null,
         roadConditions: [],
         incidents: [{ id: 1, kind: "crash", status: "active", roadIds: [crashRoad.id], eventCenterIntersectionId: null, expiresAtMs: null }],
-      } as unknown as PresentationSnapshot,
+      },
       model,
     );
     // A crash draws as deck geometry with no DOM plate, so the anchor is the
@@ -569,17 +583,19 @@ describe("incident language", () => {
 
   it("contains no pulse or ring animation", () => {
     const model = chicagoModel(2);
-    const snapshot = {
+    const snapshot: PresentationSnapshot = {
       sequence: 0,
       timeMs: 0,
       controller: "fixed",
-      vehicles: [],
-      signals: [],
+      ego: null,
+      roadTraffic: [],
+      routeControls: [],
+      trip: null,
       roadConditions: [{ roadId: 0, closed: true, capacity: 10 }],
       incidents: [
         { id: 1, kind: "event-release", status: "active", roadIds: [], eventCenterIntersectionId: null, expiresAtMs: null },
       ],
-    } as unknown as PresentationSnapshot;
+    };
     const { layers } = buildIncidentLayers(snapshot, model);
     const ids = layers.map((layer) => layer.id);
     expect(ids).not.toContain("event-rings");

@@ -58,18 +58,15 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
   if (!snapshot) {
     return [];
   }
+  // Reads the SPARSE per-road aggregates: congestion is a property of roads,
+  // and the frame no longer carries background vehicle objects at all.
   const stats = new Map<number, { active: number; queued: number; maxWait: number }>();
-  for (const vehicle of snapshot.vehicles) {
-    if (vehicle.roadId === null) {
-      continue;
-    }
-    const entry = stats.get(vehicle.roadId) ?? { active: 0, queued: 0, maxWait: 0 };
-    entry.active += 1;
-    if (vehicle.blockedWaitMs > 0) {
-      entry.queued += 1;
-      entry.maxWait = Math.max(entry.maxWait, vehicle.blockedWaitMs);
-    }
-    stats.set(vehicle.roadId, entry);
+  for (const road of snapshot.roadTraffic) {
+    stats.set(road.roadId, {
+      active: road.vehicleCount,
+      queued: road.queuedCount,
+      maxWait: road.maxBlockedWaitMs,
+    });
   }
 
   const pressure: RoadPressure[] = [];

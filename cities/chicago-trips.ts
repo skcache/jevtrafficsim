@@ -86,7 +86,8 @@ export interface MaterializedCuratedTrip {
   readonly routeKey: string;
 }
 
-const METRO_SCALE_INDEX = 4;
+/** The curated challenge runs the full Metro city: the trips are defined for it. */
+export const METRO_SCALE_INDEX = 4;
 
 /**
  * Anchors reuse the same Chicago coordinates already shipped by the showcase.

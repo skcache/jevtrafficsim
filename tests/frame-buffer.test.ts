@@ -14,8 +14,10 @@ function snapshot(sequence: number, timeMs: number): PresentationSnapshot {
     sequence,
     timeMs,
     controller: "adaptive",
-    vehicles: [],
-    signals: [],
+    ego: null,
+    roadTraffic: [],
+    routeControls: [],
+    trip: null,
     roadConditions: [],
     incidents: [],
   };
