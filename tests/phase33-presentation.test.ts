@@ -306,9 +306,11 @@ describe("product shell contracts", () => {
     // Traffic/signals exist before live mode; route/ego layers remain gated.
     expect(map).toContain("...networkTrafficLayers");
     expect(map).toContain("...networkSignalLayers");
-    // Incident plates and route-specific incident chrome still belong only to
-    // the live challenge, not the prewarmed setup background.
-    expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
+    // Traffic-mode hazards are visible in the prewarmed map too, while verbose
+    // incident plates stay reserved for the live challenge.
+    expect(map).toContain("...incidents.layers");
+    expect(map).toContain("const showIncidentLabels = liveRef.current && !trafficHiddenRef.current");
+    expect(map).toContain("visiblePlates = showIncidentLabels ? incidents.extras.plates : []");
   });
 
   it("shows citywide traffic context without double-painting the visible ego route", () => {
