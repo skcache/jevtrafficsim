@@ -66,7 +66,7 @@ export const CONTROL_SCALE = {
   signalHeightM: 20,
   stopHeightM: 15,
   minPixels: 30,
-  previewMinPixels: 22,
+  previewMinPixels: 18,
   maxPixels: 112,
   previewSizeScale: 0.72,
   previewOpacity: 0.78,
