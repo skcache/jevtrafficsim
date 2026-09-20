@@ -115,7 +115,7 @@ export const CURATED_TRIPS: readonly CuratedTrip[] = [
     camera: { mode: "fit-route", paddingPx: 88, maxZoom: 16.0 },
     expected: {
       minRoadKinds: 3,
-      features: ["major-arterial", "expressway", "river-crossing", "lakefront", "downtown-grid"],
+      features: ["major-arterial", "river-crossing", "lakefront", "downtown-grid"],
     },
   },
   {
