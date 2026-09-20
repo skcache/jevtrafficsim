@@ -221,17 +221,27 @@ function transitionPosition(
   const fromHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
   const toHeading = samplePathIndex(currentIndex, 0).heading;
 
+  // Lane centres on two roads generally do not meet at exactly the same
+  // coordinate. Taper each lane offset into the junction centre, then back out
+  // on the next road. This preserves lane identity away from the junction while
+  // guaranteeing a continuous path through the shared node.
+  const laneTaperM = 8;
   if (distance <= remaining) {
+    const progress = before.progress + distance;
+    const distanceToJunction = Math.max(0, previousIndex.total - progress);
+    const taper = Math.min(1, distanceToJunction / laneTaperM);
     const position = applyLaneOffset(
-      samplePathIndex(previousIndex, before.progress + distance),
-      previousOffset,
+      samplePathIndex(previousIndex, progress),
+      previousOffset * taper,
     );
     return { ...position, fromHeading, toHeading };
   }
 
+  const outgoingProgress = Math.min(currentIndex.total, distance - remaining);
+  const taper = Math.min(1, Math.max(0, outgoingProgress) / laneTaperM);
   const position = applyLaneOffset(
-    samplePathIndex(currentIndex, Math.min(currentIndex.total, distance - remaining)),
-    currentOffset,
+    samplePathIndex(currentIndex, outgoingProgress),
+    currentOffset * taper,
   );
   return { ...position, fromHeading, toHeading };
 }
