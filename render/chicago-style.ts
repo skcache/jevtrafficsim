@@ -28,7 +28,11 @@
  * a top-level `interpolate`/`step` — it cannot appear inside a `filter` or a
  * nested `case`.
  */
-import type { LayerSpecification, StyleSpecification } from "maplibre-gl";
+import type {
+  LayerSpecification,
+  Map as MapLibreMap,
+  StyleSpecification,
+} from "maplibre-gl";
 import type { ShowcaseGeoJson } from "./map-geojson";
 import { CLOSE_TIER_MINZOOM, MID_TIER_MINZOOM } from "./zoom-grammar";
 import { roadVisualScaleAt } from "./road-presentation";
@@ -42,6 +46,45 @@ import { roadVisualScaleAt } from "./road-presentation";
  * blue water, desaturated green parks, charcoal labels — nothing in the
  * basemap competes with a red incident or an amber congested road.
  */
+/**
+ * Road opacity, normal vs route-focused (Issue #25).
+ *
+ * When a live trip is on screen the basemap roads step back so the ego's route
+ * is the dominant object; the controls and streets stay readable, they just
+ * stop competing. One table drives both the style and the live switch, so the
+ * focused and restored values can never drift.
+ */
+export const ROAD_FOCUS_PAINT: Record<
+  string,
+  { normal: number | unknown[]; focused: number | unknown[] }
+> = {
+  "roads-local-casing": {
+    normal: ["interpolate", ["linear"], ["zoom"], 12.9, 0, 13.6, 1],
+    focused: ["interpolate", ["linear"], ["zoom"], 12.9, 0, 13.6, 0.34],
+  },
+  "roads-local": {
+    normal: ["interpolate", ["linear"], ["zoom"], 12.9, 0, 13.6, 1],
+    focused: ["interpolate", ["linear"], ["zoom"], 12.9, 0, 13.6, 0.34],
+  },
+  "roads-arterial-casing": { normal: 1, focused: 0.38 },
+  "roads-arterial": { normal: 1, focused: 0.44 },
+  "roads-highway-casing": { normal: 1, focused: 0.42 },
+  "roads-highway": { normal: 1, focused: 0.5 },
+};
+
+/**
+ * Toggle the basemap road weight for the route-first view. Callers pass the
+ * MapLibre map; missing layers are skipped so a style change cannot throw here.
+ */
+export function applyRoadFocus(map: MapLibreMap, focused: boolean): void {
+  for (const [id, spec] of Object.entries(ROAD_FOCUS_PAINT)) {
+    if (!map.getLayer(id)) {
+      continue;
+    }
+    map.setPaintProperty(id, "line-opacity", (focused ? spec.focused : spec.normal) as never);
+  }
+}
+
 export const CHICAGO_PALETTE = {
   land: "#f7f5f0",
   water: "#bfd4df",
@@ -299,7 +342,8 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: {
         "line-color": palette.localCasing,
         "line-width": roadWidthPx(1.6),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.localRoads, 0, 13.6, 1],
+        // Expression stop list, narrowed for the style spec.
+        "line-opacity": ROAD_FOCUS_PAINT["roads-local-casing"].normal as never,
       },
     },
     {
@@ -311,7 +355,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       paint: {
         "line-color": palette.localSurface,
         "line-width": roadWidthPx(),
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.localRoads, 0, 13.6, 1],
+        "line-opacity": ROAD_FOCUS_PAINT["roads-local"].normal as never,
       },
     },
     {
@@ -319,28 +363,44 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
-      paint: { "line-color": palette.arterialCasing, "line-width": roadWidthPx(2, 1.35) },
+      paint: {
+        "line-color": palette.arterialCasing,
+        "line-width": roadWidthPx(2, 1.35),
+        "line-opacity": ROAD_FOCUS_PAINT["roads-arterial-casing"].normal as never,
+      },
     },
     {
       id: "roads-arterial",
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
-      paint: { "line-color": palette.arterialSurface, "line-width": roadWidthPx(0, 1.45) },
+      paint: {
+        "line-color": palette.arterialSurface,
+        "line-width": roadWidthPx(0, 1.45),
+        "line-opacity": ROAD_FOCUS_PAINT["roads-arterial"].normal as never,
+      },
     },
     {
       id: "roads-highway-casing",
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
-      paint: { "line-color": palette.highwayCasing, "line-width": roadWidthPx(2.8, 3.6) },
+      paint: {
+        "line-color": palette.highwayCasing,
+        "line-width": roadWidthPx(2.8, 3.6),
+        "line-opacity": ROAD_FOCUS_PAINT["roads-highway-casing"].normal as never,
+      },
     },
     {
       id: "roads-highway",
       type: "line",
       layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
-      paint: { "line-color": palette.highwaySurface, "line-width": roadWidthPx(0, 3.35) },
+      paint: {
+        "line-color": palette.highwaySurface,
+        "line-width": roadWidthPx(0, 3.35),
+        "line-opacity": ROAD_FOCUS_PAINT["roads-highway"].normal as never,
+      },
     },
     {
       id: "roads-highway-guardrail",

@@ -4,6 +4,8 @@
  */
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { ControllerChoice } from "@/worker/protocol";
+import { CURATED_TRIPS } from "@/cities/chicago-trips";
+import type { PresentationTripProgress } from "@/worker/presentation-snapshot";
 
 export interface ScaleOption {
   readonly value: CitySize;
@@ -113,4 +115,99 @@ export function formatPercent(ratio: number): string {
     return "—";
   }
   return `${Math.round(ratio * 100)}%`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Trip HUD (Issue #25)                                                */
+/* ------------------------------------------------------------------ */
+
+/** "740 m" up to a kilometre, then "7.4 km". */
+export function formatDistance(metres: number): string {
+  if (!Number.isFinite(metres) || metres <= 0) {
+    return "0 m";
+  }
+  if (metres < 1_000) {
+    return `${Math.round(metres)} m`;
+  }
+  return `${(metres / 1_000).toFixed(1)} km`;
+}
+
+/** m/s -> km/h, the unit a person reads speed in. */
+export function formatSpeed(metresPerSecond: number): string {
+  if (!Number.isFinite(metresPerSecond) || metresPerSecond <= 0) {
+    return "0 km/h";
+  }
+  return `${Math.round(metresPerSecond * 3.6)} km/h`;
+}
+
+export type TripStateLabel = "Moving" | "Stopped" | "Arrived" | "Waiting";
+
+/**
+ * One place maps simulation state to the word the HUD shows, so the header
+ * chip can never disagree with the numbers underneath it.
+ */
+export function tripStateLabel(egoState: string | null, completed: boolean): TripStateLabel {
+  if (completed) {
+    return "Arrived";
+  }
+  if (egoState === "queued") {
+    return "Stopped";
+  }
+  if (egoState === "pending") {
+    return "Waiting";
+  }
+  return "Moving";
+}
+
+export interface TripHudRow {
+  readonly label: string;
+  readonly value: string;
+}
+
+export interface TripHudView {
+  readonly tripId: string;
+  readonly tripName: string;
+  readonly state: TripStateLabel;
+  readonly completed: boolean;
+  readonly rows: readonly TripHudRow[];
+}
+
+export interface TripHudInput {
+  readonly trip: PresentationTripProgress | null;
+  readonly egoState: string | null;
+  readonly egoSpeedMps: number;
+}
+
+/**
+ * The trip HUD is a pure read of the presentation frame: every value below is
+ * a field the worker computed, formatted — no derived guesswork that could
+ * drift from the map.
+ */
+export function tripHudView(input: TripHudInput): TripHudView | null {
+  const { trip } = input;
+  if (!trip) {
+    return null;
+  }
+  const name = CURATED_TRIPS.find((candidate) => candidate.id === trip.tripId)?.label ?? trip.tripId;
+  const cleared = `${trip.intersectionsCleared} / ${trip.routeRoadIds.length}`;
+  return {
+    tripId: trip.tripId,
+    tripName: name,
+    state: tripStateLabel(input.egoState, trip.completed),
+    completed: trip.completed,
+    rows: [
+      { label: "Elapsed", value: formatDuration(trip.tripTimeMs) },
+      { label: "Remaining", value: formatDistance(trip.distanceRemainingM) },
+      { label: "Speed", value: formatSpeed(input.egoSpeedMps) },
+      { label: "Stopped", value: formatDuration(trip.waitTimeMs) },
+      { label: "Cleared", value: cleared },
+      {
+        label: "Est. remaining",
+        value:
+          trip.completed || trip.estimatedRemainingMs === null
+            ? "—"
+            : formatDuration(trip.estimatedRemainingMs),
+      },
+    ],
+  };
 }

@@ -9,7 +9,10 @@
 import { create } from "zustand";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
-import type { PresentationMetrics } from "@/worker/presentation-snapshot";
+import type {
+  PresentationMetrics,
+  PresentationTripProgress,
+} from "@/worker/presentation-snapshot";
 import type { ControllerChoice, RunConfig } from "@/worker/protocol";
 
 export type UiPhase = "landing" | "config" | "entering" | "city";
@@ -30,6 +33,12 @@ export interface UiState {
   error: string | null;
   metrics: PresentationMetrics | null;
   metricsHistory: number[];
+  /** Trip HUD source: the ego's trip progress from the latest frame. */
+  trip: PresentationTripProgress | null;
+  egoState: string | null;
+  egoSpeedMps: number;
+  /** Follow camera: owned by the map, mirrored here for the chrome button. */
+  following: boolean;
   config: RunConfig | null;
   scaleLabel: string;
   scenarioOpen: boolean;
@@ -50,6 +59,12 @@ export interface UiState {
   setRunComplete: (runComplete: boolean) => void;
   setError: (error: string | null) => void;
   setMetrics: (metrics: PresentationMetrics) => void;
+  setTripFrame: (frame: {
+    trip: PresentationTripProgress | null;
+    egoState: string | null;
+    egoSpeedMps: number;
+  }) => void;
+  setFollowing: (following: boolean) => void;
   setFeedback: (feedback: string | null) => void;
   flashSurge: () => void;
   showSurge: () => void;
@@ -70,6 +85,10 @@ export const useUiStore = create<UiState>()((set) => ({
   error: null,
   metrics: null,
   metricsHistory: [],
+  trip: null,
+  egoState: null,
+  egoSpeedMps: 0,
+  following: true,
   config: null,
   scaleLabel: "Medium",
   scenarioOpen: false,
@@ -96,6 +115,9 @@ export const useUiStore = create<UiState>()((set) => ({
       running: true,
       metrics: null,
       metricsHistory: [],
+      trip: null,
+      egoState: null,
+      egoSpeedMps: 0,
     }),
   setRunning: (running) => set({ running }),
   setRunComplete: (runComplete) => set({ runComplete }),
@@ -107,9 +129,12 @@ export const useUiStore = create<UiState>()((set) => ({
         -METRICS_HISTORY_LIMIT,
       ),
     })),
+  setTripFrame: ({ trip, egoState, egoSpeedMps }) => set({ trip, egoState, egoSpeedMps }),
+  setFollowing: (following) => set({ following }),
   setFeedback: (feedback) => set({ feedback }),
   flashSurge: () => set((state) => ({ surgeFlash: state.surgeFlash + 1 })),
   showSurge: () => set({ surgeVisible: true }),
   hideSurge: () => set({ surgeVisible: false }),
-  resetMetrics: () => set({ metrics: null, metricsHistory: [] }),
+  resetMetrics: () =>
+    set({ metrics: null, metricsHistory: [], trip: null, egoState: null, egoSpeedMps: 0 }),
 }));

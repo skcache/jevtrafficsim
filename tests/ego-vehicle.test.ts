@@ -7,8 +7,9 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import { createEngine, runEngine, type ScheduledSpawn } from "@/sim/engine";
+import { createEngine, runEngine, setEngineController, type ScheduledSpawn } from "@/sim/engine";
 import { buildPresentationSnapshot } from "@/worker/presentation-snapshot";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { chicagoModel } from "./chicago-support";
@@ -197,6 +198,38 @@ describe("ego vehicle seam", () => {
     expect(largeBytes).toBeLessThan(8_000);
   });
 });
+
+  it("keeps the ego's identity, route and clock across a live controller switch", () => {
+    const { city } = makeStreet([
+      { length: 10, speedLimit: 10, capacity: 2 },
+      { length: 10, speedLimit: 10, capacity: 2 },
+    ]);
+    const engine = createEngine({
+      city,
+      controller: createFixedController(),
+      spawns: egoOnChain([{ timeMs: 0, type: "car", origin: 0, destination: 2 }]),
+    });
+    runEngine(engine, 600);
+    const before = engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId)!;
+    const beforeSnapshot = buildPresentationSnapshot(engine, 0, "t");
+    const egoBefore = { id: engine.egoVehicleId, route: [...before.route], tripTimeMs: before.tripTimeMs };
+
+    // Fixed -> Adaptive, in place: same vehicle, same route, same clock, same
+    // destination. Only policy changes.
+    setEngineController(engine, createAdaptiveController());
+    runEngine(engine, 700);
+    const after = engine.traffic.vehicles.find((vehicle) => vehicle.id === egoBefore.id)!;
+    expect(engine.controller.id).toBe("adaptive");
+    expect(engine.egoVehicleId).toBe(egoBefore.id);
+    expect([...after.route]).toEqual(egoBefore.route);
+    expect(after.origin).toBe(0);
+    expect(after.destination).toBe(2);
+    expect(after.tripTimeMs).toBeGreaterThanOrEqual(egoBefore.tripTimeMs);
+    const afterSnapshot = buildPresentationSnapshot(engine, 1, "t");
+    expect(afterSnapshot.trip?.originIntersectionId).toBe(beforeSnapshot.trip?.originIntersectionId);
+    expect(afterSnapshot.trip?.destinationIntersectionId).toBe(beforeSnapshot.trip?.destinationIntersectionId);
+    expect(afterSnapshot.trip?.tripTimeMs).toBeGreaterThan(beforeSnapshot.trip?.tripTimeMs ?? 0);
+  });
 
 /**
  * Wiring cannot be proven by types alone — the signal-sprite bug in Phase 3.2

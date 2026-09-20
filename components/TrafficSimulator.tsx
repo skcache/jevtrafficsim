@@ -22,7 +22,7 @@ import type { ControllerChoice, WorkerCommand, WorkerEvent } from "@/worker/prot
 import { CityMap, type MapHandle } from "./CityMap";
 import { createFrameBuffer, pushFrame, setFrameModel, type FrameBuffer } from "./frame-buffer";
 import { IncidentBar } from "./IncidentBar";
-import { MetricsHUD } from "./MetricsHUD";
+import { TripHUD } from "./TripHUD";
 import { Onboarding } from "./Onboarding";
 import { SimChrome } from "./SimChrome";
 import { scaleIndexForSize } from "./ui-model";
@@ -157,6 +157,12 @@ export function TrafficSimulator() {
         }
         case "SNAPSHOT": {
           pushFrame(framesRef.current, data.snapshot, performance.now());
+          // Trip HUD source: the ego's own progress, at frame rate (5 Hz).
+          store.setTripFrame({
+            trip: data.snapshot.trip,
+            egoState: data.snapshot.ego?.state ?? null,
+            egoSpeedMps: data.snapshot.ego?.speed ?? 0,
+          });
           break;
         }
         case "METRICS": {
@@ -315,6 +321,12 @@ export function TrafficSimulator() {
     mapHandleRef.current = handle;
   }, []);
 
+  // Follow camera: the map owns the state; the chrome only mirrors and toggles it.
+  const following = useUiStore((state) => state.following);
+  const onFollow = useCallback(() => {
+    mapHandleRef.current?.followEgo();
+  }, []);
+
   const scaleIndex = scaleIndexForSize(citySize);
   const live = phase === "city";
 
@@ -331,6 +343,8 @@ export function TrafficSimulator() {
         />
         <Onboarding onEnterCity={enterCity} />
         <SimChrome
+          following={following}
+          onFollow={onFollow}
           onPause={onPause}
           onResume={onResume}
           onController={onController}
@@ -344,7 +358,7 @@ export function TrafficSimulator() {
           onHome={onHome}
           onChangeSetup={onChangeSetup}
         />
-        <MetricsHUD />
+        <TripHUD />
         <IncidentBar onIncident={onIncident} />
       </div>
     </MotionConfig>
