@@ -24,13 +24,24 @@ export interface RoadPressure {
   readonly queued: number;
   /** Longest blocked wait on the road (ms). */
   readonly maxBlockedWaitMs: number;
+  /** Current occupancy divided by effective capacity. */
+  readonly occupancyRatio: number;
 }
 
-/** Queued-count and wait thresholds per level, worst first. */
-const LEVELS: readonly { level: CongestionLevel; minQueued: number; minWaitMs: number }[] = [
-  { level: "severe", minQueued: 4, minWaitMs: 25_000 },
-  { level: "bad", minQueued: 2, minWaitMs: 12_000 },
-  { level: "warm", minQueued: 1, minWaitMs: 5_000 },
+/**
+ * Whole-city traffic layer thresholds. Occupancy matters as much as a queue:
+ * otherwise moving but dense traffic disappears and the map falsely looks
+ * empty until cars physically stop.
+ */
+const LEVELS: readonly {
+  level: CongestionLevel;
+  minQueued: number;
+  minWaitMs: number;
+  minOccupancyRatio: number;
+}[] = [
+  { level: "severe", minQueued: 4, minWaitMs: 25_000, minOccupancyRatio: 0.92 },
+  { level: "bad", minQueued: 2, minWaitMs: 12_000, minOccupancyRatio: 0.72 },
+  { level: "warm", minQueued: 1, minWaitMs: 5_000, minOccupancyRatio: 0.46 },
 ];
 
 /** Restrained overlay colours: amber -> orange -> red, never neon. */
@@ -40,9 +51,17 @@ export const CONGESTION_COLORS: Record<CongestionLevel, readonly [number, number
   severe: [178, 58, 44, 170],
 };
 
-function levelFor(queued: number, maxBlockedWaitMs: number): CongestionLevel | null {
+function levelFor(
+  queued: number,
+  maxBlockedWaitMs: number,
+  occupancyRatio: number,
+): CongestionLevel | null {
   for (const rule of LEVELS) {
-    if (queued >= rule.minQueued || maxBlockedWaitMs >= rule.minWaitMs) {
+    if (
+      queued >= rule.minQueued ||
+      maxBlockedWaitMs >= rule.minWaitMs ||
+      occupancyRatio >= rule.minOccupancyRatio
+    ) {
       return rule.level;
     }
   }
@@ -60,18 +79,22 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
   }
   // Reads the SPARSE per-road aggregates: congestion is a property of roads,
   // and the frame no longer carries background vehicle objects at all.
-  const stats = new Map<number, { active: number; queued: number; maxWait: number }>();
+  const stats = new Map<
+    number,
+    { active: number; queued: number; maxWait: number; occupancyRatio: number }
+  >();
   for (const road of snapshot.roadTraffic) {
     stats.set(road.roadId, {
       active: road.vehicleCount,
       queued: road.queuedCount,
       maxWait: road.maxBlockedWaitMs,
+      occupancyRatio: road.capacity > 0 ? road.occupancy / road.capacity : 0,
     });
   }
 
   const pressure: RoadPressure[] = [];
   for (const [roadId, entry] of [...stats.entries()].sort((a, b) => a[0] - b[0])) {
-    const level = levelFor(entry.queued, entry.maxWait);
+    const level = levelFor(entry.queued, entry.maxWait, entry.occupancyRatio);
     if (level === null) {
       continue;
     }
@@ -81,6 +104,7 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
       active: entry.active,
       queued: entry.queued,
       maxBlockedWaitMs: entry.maxWait,
+      occupancyRatio: entry.occupancyRatio,
     });
   }
   return pressure;
