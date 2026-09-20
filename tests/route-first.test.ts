@@ -176,6 +176,7 @@ describe("route-first layers", () => {
     expect(route.widthMaxPixels).toBeGreaterThan(route.widthMinPixels as number);
     expect(route.getWidth).toBe(ROUTE_SCALE.widthM);
     expect(route.capRounded).toBe(false);
+    expect(route.jointRounded).toBe(false);
     expect((route.getColor as () => number[])()).toEqual([
       ...ROUTE_SCALE.color,
       Math.round(ROUTE_SCALE.opacity * 255),
@@ -198,6 +199,15 @@ describe("route-first layers", () => {
     ]);
     expect(runs).toHaveLength(1);
     expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1], [3, 1]]);
+  });
+
+  it("removes duplicate junction points that can render as circles", () => {
+    const runs = buildRouteRuns([
+      { roadId: 1, path: [[0, 0], [1, 1], [1, 1]], traffic: "free" },
+      { roadId: 2, path: [[1, 1], [1, 1], [2, 1]], traffic: "free" },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1]]);
   });
 
   it("never invents a connector across a geometry gap", () => {
