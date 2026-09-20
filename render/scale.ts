@@ -17,9 +17,11 @@
  * unrelated lines. Traffic state may still change the band colour by segment.
  */
 export const ROUTE_SCALE = {
-  widthM: 15,
-  minPixels: 5.5,
-  maxPixels: 38,
+  /** Navigation blue stays constant; traffic state is a separate city layer. */
+  color: [55, 112, 214] as const,
+  widthM: 10.5,
+  minPixels: 4.25,
+  maxPixels: 30,
   opacity: 0.96,
 } as const;
 
@@ -60,25 +62,26 @@ export const FOLLOW_SCALE = {
  */
 export const CONTROL_SCALE = {
   /**
-   * Contextual controls are deliberately larger than the background system
-   * markers, but no longer billboard-sized. Map metres remain authoritative.
+   * A contextual control starts at the same physical scale as the quiet
+   * network marker and grows continuously as the ego approaches. This is the
+   * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
    */
-  signalHeightM: 20,
-  stopHeightM: 15,
-  minPixels: 30,
-  previewMinPixels: 18,
-  maxPixels: 112,
-  previewSizeScale: 0.72,
-  previewOpacity: 0.78,
+  signalBaseHeightM: 5.5,
+  signalHeightM: 16,
+  stopBaseHeightM: 5,
+  stopHeightM: 12,
+  minPixels: 5,
+  maxPixels: 88,
+  opacityFloor: 0.5,
 } as const;
 
 /** Tiny neutral signal heads that prove the whole-city control system exists. */
 export const NETWORK_CONTROL_SCALE = {
-  signalHeightM: 6,
-  minPixels: 5,
-  maxPixels: 18,
-  opacity: 0.42,
-  minZoom: 13.2,
+  signalHeightM: 5.5,
+  minPixels: 4,
+  maxPixels: 14,
+  opacity: 0.34,
+  minZoom: 12.8,
 } as const;
 
 /**
