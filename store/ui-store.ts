@@ -8,6 +8,7 @@
  */
 import { create } from "zustand";
 import type { CitySize, TrafficLevel } from "@/sim/types";
+import type { CuratedTripId } from "@/cities/chicago-trips";
 import type { PresentationMetrics } from "@/worker/presentation-snapshot";
 import type { ControllerChoice, RunConfig } from "@/worker/protocol";
 
@@ -20,6 +21,7 @@ export interface UiState {
   phase: UiPhase;
   citySize: CitySize;
   trafficLevel: TrafficLevel;
+  tripId: CuratedTripId;
   controller: ControllerChoice;
   seed: number;
   ready: boolean;
@@ -39,6 +41,7 @@ export interface UiState {
   setPhase: (phase: UiPhase) => void;
   setCitySize: (citySize: CitySize) => void;
   setTrafficLevel: (trafficLevel: TrafficLevel) => void;
+  setTripId: (tripId: CuratedTripId) => void;
   setController: (controller: ControllerChoice) => void;
   setSeed: (seed: number) => void;
   setScenarioOpen: (open: boolean) => void;
@@ -56,8 +59,9 @@ export interface UiState {
 
 export const useUiStore = create<UiState>()((set) => ({
   phase: "landing",
-  citySize: "medium",
+  citySize: "large",
   trafficLevel: "everyday",
+  tripId: "united-center-to-navy-pier",
   controller: "adaptive",
   seed: 42,
   ready: false,
@@ -75,6 +79,7 @@ export const useUiStore = create<UiState>()((set) => ({
   setPhase: (phase) => set({ phase }),
   setCitySize: (citySize) => set({ citySize }),
   setTrafficLevel: (trafficLevel) => set({ trafficLevel }),
+  setTripId: (tripId) => set({ tripId, citySize: "large" }),
   setController: (controller) => set({ controller }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
@@ -83,6 +88,7 @@ export const useUiStore = create<UiState>()((set) => ({
       config,
       seed: config.seed,
       controller: config.controller,
+      tripId: config.tripId,
       scaleLabel,
       ready: true,
       error: null,

@@ -13,18 +13,16 @@
  */
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
-import type { CitySize, TrafficLevel } from "@/sim/types";
+import type { TrafficLevel } from "@/sim/types";
+import { CURATED_TRIPS, curatedTrip, type CuratedTripId } from "@/cities/chicago-trips";
 import { useUiStore } from "@/store/ui-store";
 import type { ControllerChoice } from "@/worker/protocol";
 import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
 import {
-  CITY_SIZE_OPTIONS,
   CONTROLLER_OPTIONS,
   TRAFFIC_OPTIONS,
-  citySizeDescription,
   diceSeed,
   normalizeSeed,
-  sizeForScaleIndex,
   trafficLabel,
 } from "./ui-model";
 
@@ -32,7 +30,7 @@ interface SimChromeProps {
   onPause: () => void;
   onResume: () => void;
   onController: (controller: ControllerChoice) => void;
-  onCitySize: (citySize: CitySize) => void;
+  onTripId: (tripId: CuratedTripId) => void;
   onTrafficLevel: (trafficLevel: TrafficLevel) => void;
   onSeed: (seed: number) => void;
   onRestart: () => void;
@@ -81,11 +79,11 @@ const glyph = {
 
 /** Scenario popover: the same three decisions as onboarding, editable live. */
 function ScenarioPanel({
-  onCitySize,
+  onTripId,
   onTrafficLevel,
   onSeed,
-}: Pick<SimChromeProps, "onCitySize" | "onTrafficLevel" | "onSeed">) {
-  const citySize = useUiStore((state) => state.citySize);
+}: Pick<SimChromeProps, "onTripId" | "onTrafficLevel" | "onSeed">) {
+  const tripId = useUiStore((state) => state.tripId);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
   const seed = useUiStore((state) => state.seed);
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
@@ -120,7 +118,7 @@ function ScenarioPanel({
     };
   }, [setScenarioOpen]);
 
-  const cityIndex = CITY_SIZE_OPTIONS.findIndex((option) => option.value === citySize);
+  const trip = curatedTrip(tripId);
   const trafficIndex = TRAFFIC_OPTIONS.findIndex((option) => option.value === trafficLevel);
 
   return (
@@ -136,18 +134,19 @@ function ScenarioPanel({
       <div className="flex flex-col gap-4">
         <div>
           <div className="flex items-baseline justify-between">
-            <span className="label-micro">City size</span>
-            <span className="text-meta text-ink-52">{citySizeDescription(citySize)}</span>
+            <span className="label-micro">Trip</span>
+            <span className="text-meta text-ink-52">Metro</span>
           </div>
-          <div className="mt-2">
-            <DiscreteSlider
-              value={cityIndex}
-              count={CITY_SIZE_OPTIONS.length}
-              onChange={(index) => onCitySize(sizeForScaleIndex(index))}
-              ariaLabel="City size"
-            />
-            <TickRow labels={CITY_SIZE_OPTIONS.map((option) => option.label)} value={cityIndex} />
-          </div>
+          <select
+            value={tripId}
+            onChange={(event) => onTripId(event.target.value as CuratedTripId)}
+            className="mt-2 h-9 w-full rounded-control border border-hair-strong bg-surface px-2.5 text-meta font-medium text-ink outline-none"
+          >
+            {CURATED_TRIPS.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-micro leading-relaxed text-ink-52">{trip.summary}</p>
         </div>
         <div>
           <span className="label-micro">Traffic</span>
@@ -190,7 +189,7 @@ export function SimChrome(props: SimChromeProps) {
   const running = useUiStore((state) => state.running);
   const controller = useUiStore((state) => state.controller);
   const seed = useUiStore((state) => state.seed);
-  const scaleLabel = useUiStore((state) => state.scaleLabel);
+  const tripId = useUiStore((state) => state.tripId);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
   const scenarioOpen = useUiStore((state) => state.scenarioOpen);
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
@@ -200,6 +199,7 @@ export function SimChrome(props: SimChromeProps) {
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
   const live = phase === "city";
+  const activeTrip = curatedTrip(tripId);
 
   return (
     <>
@@ -220,7 +220,7 @@ export function SimChrome(props: SimChromeProps) {
                 Chicago
               </span>
               <span className="text-meta leading-none text-ink-52">
-                {scaleLabel} · {trafficLabel(trafficLevel)}
+                {activeTrip.label} · {trafficLabel(trafficLevel)}
               </span>
               <span className="value-num text-micro leading-none text-ink-38">Seed {seed}</span>
               <button
@@ -291,7 +291,7 @@ export function SimChrome(props: SimChromeProps) {
             <AnimatePresence>
               {scenarioOpen && (
                 <ScenarioPanel
-                  onCitySize={props.onCitySize}
+                  onTripId={props.onTripId}
                   onTrafficLevel={props.onTrafficLevel}
                   onSeed={props.onSeed}
                 />

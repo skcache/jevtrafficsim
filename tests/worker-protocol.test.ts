@@ -14,6 +14,7 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
+      tripId: "united-center-to-navy-pier",
       controller: "adaptive",
       seed: 42,
     });
@@ -21,6 +22,7 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
+      tripId: "united-center-to-navy-pier",
       controller: "adaptive",
       seed: 42,
       durationMs: undefined,
@@ -29,6 +31,7 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "large",
       trafficLevel: "rush-hour",
+      tripId: "soldier-field-to-river-north",
       controller: "fixed",
       seed: 0xffffffff,
       durationMs: 120_000,
@@ -41,6 +44,7 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
+      tripId: "united-center-to-navy-pier",
       controller: "fixed",
       seed: 42,
     };
@@ -48,6 +52,7 @@ describe("worker protocol validation", () => {
     expect(() => parseWorkerCommand([base])).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, citySize: "huge" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, trafficLevel: "apocalypse" })).toThrow(RangeError);
+    expect(() => parseWorkerCommand({ ...base, tripId: "made-up-trip" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, controller: "jev" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, seed: Number.NaN })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, seed: -1 })).toThrow(RangeError);

@@ -13,6 +13,7 @@
 import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
+import type { CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
@@ -179,6 +180,7 @@ export function TrafficSimulator() {
       type: "INIT",
       citySize: defaults.citySize,
       trafficLevel: defaults.trafficLevel,
+      tripId: defaults.tripId,
       controller: defaults.controller,
       seed: defaults.seed,
     } satisfies WorkerCommand);
@@ -193,7 +195,7 @@ export function TrafficSimulator() {
   }, []);
 
   const startRun = useCallback(
-    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; seed: number }> = {}) => {
+    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; tripId: CuratedTripId; seed: number }> = {}) => {
       const state = useUiStore.getState();
       state.setError(null);
       state.setRunComplete(false);
@@ -201,6 +203,7 @@ export function TrafficSimulator() {
         type: "INIT",
         citySize: overrides.citySize ?? state.citySize,
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
+        tripId: overrides.tripId ?? state.tripId,
         controller: state.controller,
         seed: overrides.seed ?? state.seed,
       });
@@ -209,8 +212,10 @@ export function TrafficSimulator() {
   );
 
   const enterCity = useCallback(() => {
-    useUiStore.getState().setPhase("entering");
-    startRun();
+    const store = useUiStore.getState();
+    store.setCitySize("large");
+    store.setPhase("entering");
+    startRun({ citySize: "large" });
   }, [startRun]);
 
   const onPause = useCallback(() => {
@@ -232,10 +237,11 @@ export function TrafficSimulator() {
     [send],
   );
 
-  const onCitySize = useCallback(
-    (citySize: CitySize) => {
-      useUiStore.getState().setCitySize(citySize);
-      startRun({ citySize });
+  const onTripId = useCallback(
+    (tripId: CuratedTripId) => {
+      const store = useUiStore.getState();
+      store.setTripId(tripId);
+      startRun({ citySize: "large", tripId });
     },
     [startRun],
   );
@@ -320,7 +326,7 @@ export function TrafficSimulator() {
           onPause={onPause}
           onResume={onResume}
           onController={onController}
-          onCitySize={onCitySize}
+          onTripId={onTripId}
           onTrafficLevel={onTrafficLevel}
           onSeed={onSeed}
           onRestart={onRestart}

@@ -74,8 +74,9 @@ describe("UI store phases", () => {
   beforeEach(() => {
     useUiStore.setState({
       phase: "landing",
-      citySize: "medium",
+      citySize: "large",
       trafficLevel: "everyday",
+      tripId: "united-center-to-navy-pier",
       controller: "adaptive",
       seed: 42,
       ready: false,
@@ -87,6 +88,14 @@ describe("UI store phases", () => {
       scaleLabel: "Medium",
       scenarioOpen: false,
     });
+  });
+
+  it("selecting a curated trip pins public setup to Metro", () => {
+    const store = useUiStore.getState();
+    store.setCitySize("medium");
+    store.setTripId("streeterville-to-united-center");
+    expect(useUiStore.getState().tripId).toBe("streeterville-to-united-center");
+    expect(useUiStore.getState().citySize).toBe("large");
   });
 
   it("walks landing -> config -> entering -> city", () => {
@@ -105,7 +114,7 @@ describe("UI store phases", () => {
     store.setCitySize("large");
     store.setTrafficLevel("rush-hour");
     store.applyReady(
-      { citySize: "large", trafficLevel: "rush-hour", controller: "adaptive", seed: 77, durationMs: 600_000 },
+      { citySize: "large", trafficLevel: "rush-hour", tripId: "willis-tower-to-near-west-side", controller: "adaptive", seed: 77, durationMs: 600_000 },
       "Metro",
     );
     const state = useUiStore.getState();
@@ -115,12 +124,13 @@ describe("UI store phases", () => {
     expect(state.scaleLabel).toBe("Metro");
     expect(state.citySize).toBe("large");
     expect(state.trafficLevel).toBe("rush-hour");
+    expect(state.tripId).toBe("willis-tower-to-near-west-side");
   });
 
   it("switching controller is a live change, not a reset", () => {
     const store = useUiStore.getState();
     store.applyReady(
-      { citySize: "medium", trafficLevel: "everyday", controller: "adaptive", seed: 42, durationMs: 600_000 },
+      { citySize: "large", trafficLevel: "everyday", tripId: "united-center-to-navy-pier", controller: "adaptive", seed: 42, durationMs: 600_000 },
       "Medium",
     );
     store.setRunComplete(true);
