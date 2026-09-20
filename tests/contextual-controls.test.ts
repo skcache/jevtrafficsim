@@ -181,19 +181,19 @@ describe("contextual controls: route distance", () => {
       { intersectionId: 1, phaseIndex: 0, stage: "green" },
     ]);
     expect(controls.length).toBeGreaterThan(0);
-    // 100 m road, 40 m driven: the signal at node 1 is 60 m ahead.
+    // The control is measured to the physical stop line, 7 m before node 1.
     expect(controls[0].intersectionId).toBe(1);
-    expect(controls[0].distanceAheadM).toBeCloseTo(60, 6);
+    expect(controls[0].distanceAheadM).toBeCloseTo(53, 6);
   });
 
   it("accumulates future roads in route order", () => {
     const controls = derive(model, [0, 1, 2], 0, { roadId: 0, progress: 90 }, [
       { intersectionId: 1, phaseIndex: 0, stage: "green" },
     ]);
-    // Signal 10 m ahead; the stop sign at node 2 is 110 m ahead: both visible.
+    // Physical stop lines are 7 m before each controlled node.
     expect(controls.map((control) => control.intersectionId)).toEqual([1, 2]);
-    expect(controls[0].distanceAheadM).toBeCloseTo(10, 6);
-    expect(controls[1].distanceAheadM).toBeCloseTo(110, 6);
+    expect(controls[0].distanceAheadM).toBeCloseTo(3, 6);
+    expect(controls[1].distanceAheadM).toBeCloseTo(103, 6);
     expect(controls[1].kind).toBe("stop");
   });
 
@@ -236,7 +236,7 @@ describe("contextual controls: route distance", () => {
     ]);
     expect(after.some((control) => control.intersectionId === 1)).toBe(false);
     expect(after[0].intersectionId).toBe(2);
-    expect(after[0].distanceAheadM).toBeCloseTo(95, 6);
+    expect(after[0].distanceAheadM).toBeCloseTo(88, 6);
   });
 
   it("discovers signals only from the remaining route", () => {
