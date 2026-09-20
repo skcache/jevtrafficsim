@@ -231,6 +231,10 @@ async function buildRun(config: RunConfig): Promise<void> {
     timeMs: engine.traffic.timeMs,
     incidentSeed: incidentPlan.incidentSeed,
     incidentPlan,
+    incidentHistory: state.incidentHistory.map((incident) => ({
+      ...incident,
+      entry: { ...incident.entry },
+    })),
     incidentFingerprint: challengeIncidentFingerprintInput(
       incidentPlan,
       state.incidentHistory,
@@ -365,6 +369,10 @@ function handleCommand(command: WorkerCommand): void {
           queued: false,
           label: "Trip vehicle is not ready yet",
           incident: null,
+          incidentHistory: state.incidentHistory.map((incident) => ({
+            ...incident,
+            entry: { ...incident.entry },
+          })),
           incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
         });
         return;
@@ -395,6 +403,10 @@ function handleCommand(command: WorkerCommand): void {
           queued: false,
           label: resolution.label,
           incident: null,
+          incidentHistory: state.incidentHistory.map((incident) => ({
+            ...incident,
+            entry: { ...incident.entry },
+          })),
           incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
         });
         return;
@@ -413,6 +425,10 @@ function handleCommand(command: WorkerCommand): void {
         queued: true,
         label: resolution.label,
         incident: resolved,
+        incidentHistory: state.incidentHistory.map((incident) => ({
+          ...incident,
+          entry: { ...incident.entry },
+        })),
         incidentFingerprint: challengeIncidentFingerprintInput(plan, state.incidentHistory),
       });
       postSnapshot();
