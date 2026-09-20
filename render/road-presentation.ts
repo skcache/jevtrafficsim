@@ -12,6 +12,7 @@
  * `*PxAt` helpers convert to pixels at a given zoom using Chicago's latitude.
  */
 import type { MapModel } from "@/cities/map-model";
+import type { City } from "@/sim/types";
 
 import {
   LANE_WIDTH_M,
@@ -45,8 +46,9 @@ export function roadVisualScaleAt(zoom: number): number {
     [11, 1],
     [13, 1.06],
     [15, 1.16],
-    [17, 1.32],
-    [19.5, 1.55],
+    [17, 1.4],
+    [18.5, 1.75],
+    [19.5, 2.05],
   ];
   if (zoom <= stops[0][0]) {
     return stops[0][1];
@@ -202,6 +204,26 @@ export function laneSlotFor(vehicleId: number, roadId: number, lanes: number): n
   // A cheap stable mix: consecutive ids land on different lanes on one road
   // while staying spread within the road's own lane count.
   return Math.abs((vehicleId * 2654435761 + roadId * 40503) % lanes);
+}
+
+/**
+ * Stable physical lane offset for one vehicle on one directed road.
+ *
+ * `baseOffsets` contains the centre of the direction's lane group. This helper
+ * adds the per-vehicle lane slot inside that group so interpolation, signal
+ * clamping and queue packing cannot disagree about which lane a vehicle uses.
+ */
+export function vehicleLaneOffsetMetres(
+  city: City,
+  baseOffsets: readonly number[],
+  vehicleId: number,
+  roadId: number,
+): number {
+  const road = city.roads[roadId];
+  const lanes = Math.max(1, road?.lanes ?? 1);
+  const slot = laneSlotFor(vehicleId, roadId, lanes);
+  const withinGroup = (slot - (lanes - 1) / 2) * LANE_WIDTH_M;
+  return (baseOffsets[roadId] ?? 0) + withinGroup;
 }
 
 /** True when this directed road is one of two directions on one carriageway. */
