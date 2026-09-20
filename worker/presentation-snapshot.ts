@@ -76,6 +76,14 @@ export interface PresentationTripProgress {
   readonly distanceTravelledM: number;
   readonly intersectionsCleared: number;
   readonly completed: boolean;
+  /**
+   * Deterministic estimate of the time left, derived ONLY from the remaining
+   * route's free-flow times and the current occupancy of those roads
+   * (factor = 1 - 0.8 * occupancy/capacity, floored so a jam never reads as
+   * infinite; a closed road is near-blocked). It ignores signal waits, so it is
+   * an estimate, not a promise — which is why the HUD labels it "Est.".
+   */
+  readonly estimatedRemainingMs: number | null;
 }
 
 export interface PresentationSignal {
@@ -240,6 +248,21 @@ function tripProgressOf(
       remaining += length;
     }
   }
+  let etaSeconds = 0;
+  for (let index = ego.routeIndex; index < ego.route.length; index += 1) {
+    const road = engine.city.roads[ego.route[index]];
+    if (!road || road.speedLimit <= 0) {
+      continue;
+    }
+    const length = index === ego.routeIndex ? Math.max(0, road.length - ego.progress) : road.length;
+    const ratio =
+      road.capacity > 0
+        ? Math.min(1, (engine.traffic.occupancy.get(road.id) ?? 0) / road.capacity)
+        : 0;
+    const factor = road.closed ? 0.08 : Math.max(0.2, 1 - 0.8 * ratio);
+    etaSeconds += length / road.speedLimit / factor;
+  }
+  const completed = ego.state === "arrived";
   return {
     tripId,
     originIntersectionId: ego.origin,
@@ -251,7 +274,8 @@ function tripProgressOf(
     distanceRemainingM: remaining,
     distanceTravelledM: travelled,
     intersectionsCleared: ego.routeIndex,
-    completed: ego.state === "arrived",
+    completed,
+    estimatedRemainingMs: completed ? 0 : Math.round(etaSeconds * 1_000),
   };
 }
 

@@ -56,8 +56,16 @@ import {
   type IncidentExtras,
 } from "@/render/deck-layers";
 import { waitHeatBucket } from "@/render/map-geometry";
+import { useUiStore } from "@/store/ui-store";
 import { type VehicleIconSet } from "@/render/vehicle-icons";
 import { createVehicleSprites } from "@/render/vehicle-sprites";
+import { createDestinationSprites, type DestinationSpriteSet } from "@/render/destination-sprite";
+import { advanceFollow, createFollowState, disableFollow, enableFollow, type FollowState } from "@/render/follow-camera";
+import { FOLLOW_SCALE } from "@/render/scale";
+import { applyRoadFocus } from "@/render/chicago-style";
+import { buildRouteSegments, routeTrafficMix, type RouteSegment } from "@/render/route-path";
+import { classifySnapshotRoads, type RouteTrafficClass } from "@/render/route-traffic";
+import { buildDestinationLayers, buildRouteLayers } from "@/render/route-layers";
 import { createSignalSprites, type SignalSpriteSet } from "@/render/signal-sprites";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
@@ -85,6 +93,9 @@ export interface MapHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   getZoom: () => number;
+  /** Resume following the ego car, easing back to it (Issue #25). */
+  followEgo: () => void;
+  isFollowing: () => boolean;
 }
 
 interface CityMapProps {
@@ -118,6 +129,16 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const frameRef = useRef<
     { id: number; roadId: number | null; x: number; y: number; headingRadians: number; blockedWaitMs: number }[]
   >([]);
+  const destSpritesRef = useRef<DestinationSpriteSet | null>(null);
+  /** Follow camera state; north-up, driven by the interpolated car. */
+  const followRef = useRef<FollowState>(createFollowState());
+  /** While a camera ease owns the frame (enter-city flight, recenter). */
+  const easeGuardUntilRef = useRef(0);
+  const lastRenderAtRef = useRef(0);
+  const routeSegmentsRef = useRef<RouteSegment[]>([]);
+  /** Last interpolated car position in map metres (for recenter). */
+  const lastEgoMetricRef = useRef<{ x: number; y: number; headingRadians: number } | null>(null);
+  const routeMixRef = useRef<Record<RouteTrafficClass, number>>({ free: 0, slowed: 0, congested: 0 });
   const liveRef = useRef(live);
   /** `?notraffic=1`: hide every traffic primitive for a basemap review. */
   const trafficHiddenRef = useRef(
@@ -212,6 +233,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     // Sprites are built once, never per frame.
     iconsRef.current = createVehicleSprites();
     signalSpritesRef.current = createSignalSprites();
+    destSpritesRef.current = createDestinationSprites();
     if (window.location.search.includes("debug")) {
       // Dev-only diagnostics (URL-gated).
       (window as unknown as { __jevMapInstance?: unknown }).__jevMapInstance = map;
@@ -292,7 +314,62 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         map.zoomTo(map.getZoom() - 1, { duration: 320 });
       },
       getZoom: () => map.getZoom(),
+      followEgo: () => {
+        // Resume following immediately: switch state on, then ease the camera
+        // back to the car once, so the user sees where it went instead of a
+        // teleport. Per-frame tracking takes over when the ease ends.
+        followRef.current = enableFollow(followRef.current);
+        useUiStore.getState().setFollowing(true);
+        const ego = lastEgoMetricRef.current;
+        easeGuardUntilRef.current = performance.now() + FOLLOW_SCALE.recenterEaseMs;
+        if (ego) {
+          map.easeTo({
+            center: metricToLngLat(projection, ego.x, ego.y),
+            bearing: 0,
+            pitch: 0,
+            duration: FOLLOW_SCALE.recenterEaseMs,
+            easing: (t) => 1 - Math.pow(1 - t, 3),
+          });
+        }
+      },
+      isFollowing: () => followRef.current.following,
     };
+
+    // Manual pan is the user taking the camera: follow yields at once and the
+    // chrome offers Recenter. Zoom is NOT a takeover — zooming while following
+    // is how the route gets inspected — so no zoom listener here.
+    //
+    // The rule is enforced from the raw pointer stream on the map canvas, not
+    // only from MapLibre's gesture events: the intent is "the user dragged the
+    // map", and that must hold regardless of how the library reports drags.
+    const onUserDrag = () => {
+      if (followRef.current.following) {
+        followRef.current = disableFollow(followRef.current);
+        useUiStore.getState().setFollowing(false);
+      }
+    };
+    map.on("dragstart", onUserDrag);
+    const canvasContainer = map.getCanvasContainer();
+    let pointerOrigin: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      pointerOrigin = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointerOrigin) {
+        return;
+      }
+      if (Math.hypot(event.clientX - pointerOrigin.x, event.clientY - pointerOrigin.y) < 5) {
+        return;
+      }
+      pointerOrigin = null;
+      onUserDrag();
+    };
+    const onPointerUp = () => {
+      pointerOrigin = null;
+    };
+    canvasContainer.addEventListener("pointerdown", onPointerDown);
+    canvasContainer.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
 
     map.on("load", () => {
       // The landing is a composed view — the river meeting the Loop — not a
@@ -420,6 +497,55 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             blockedWaitMs: vehicle.blockedWaitMs,
           }));
         }
+        // ---- Route-first presentation (Issue #25) -----------------------
+        // The route comes from the frame's trip payload, which the worker
+        // rebuilds from the vehicle's own route — so a reroute repaints here
+        // immediately and the curated trip's original roads are never reused.
+        const snapshot = buffer.current;
+        let segments: RouteSegment[] = [];
+        let destination: { x: number; y: number; completed: boolean } | null = null;
+        const egoRendered = settled[0] ?? null;
+        if (snapshot?.trip) {
+          segments = buildRouteSegments(
+            buffer.model,
+            snapshot.trip,
+            // Progress comes from the frame's ego (the rendered vehicle carries
+            // display geometry only); roadId decides whether to trim.
+            snapshot.ego
+              ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
+              : null,
+            classifySnapshotRoads(snapshot),
+          );
+          const destinationNode = buffer.model.city.intersections[snapshot.trip.destinationIntersectionId];
+          if (destinationNode) {
+            destination = {
+              x: destinationNode.x,
+              y: destinationNode.y,
+              completed: snapshot.trip.completed,
+            };
+          }
+        }
+        routeSegmentsRef.current = segments;
+        routeMixRef.current = routeTrafficMix(segments);
+        lastEgoMetricRef.current = egoRendered
+          ? { x: egoRendered.x, y: egoRendered.y, headingRadians: egoRendered.headingRadians }
+          : null;
+
+        // Follow camera: driven by the INTERPOLATED on-screen car (60 Hz), not
+        // the 5 Hz worker snapshot, and north-up. A camera ease in flight wins
+        // the frame; once it ends, per-frame tracking resumes silently.
+        const dtMs = lastRenderAtRef.current > 0 ? Math.min(250, now - lastRenderAtRef.current) : 16;
+        lastRenderAtRef.current = now;
+        const follow = advanceFollow(followRef.current, lastEgoMetricRef.current, dtMs);
+        followRef.current = follow.state;
+        if (follow.target && followRef.current.following && now >= easeGuardUntilRef.current) {
+          activeMap.jumpTo({
+            center: metricToLngLat(projection, follow.target[0], follow.target[1]),
+            bearing: 0,
+            pitch: 0,
+          });
+        }
+
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
@@ -431,6 +557,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               // deliberately traffic-free; simulation state appears only after
               // Enter City so the first live frame has a clear semantic shift.
               ...congestion,
+              // Route (casing + traffic-coloured core), then the destination
+              // pin, then the one car: ego > route > destination > traffic.
+              ...buildRouteLayers(segments),
+              ...buildDestinationLayers(projection, destination, destSpritesRef.current),
               ...buildVehicleLayers(
                 projection,
                 settled,
@@ -486,6 +616,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             occupiedRoadsWithQueues:
               buffer.current?.roadTraffic.filter((road) => road.queuedCount > 0).length ?? 0,
             routeControls: buffer.current?.routeControls.length ?? 0,
+            routeSegments: segments.length,
+            routeMix: routeMixRef.current,
+            routeTrafficByRoad: segments.slice(0, 12).map((segment) => `${segment.roadId}:${segment.traffic}`),
+            destination: destination ? { x: Math.round(destination.x), y: Math.round(destination.y), completed: destination.completed } : null,
+            following: followRef.current.following,
+            cameraCenter: [Math.round(mapRef.current?.getCenter().lng ?? 0), Math.round(mapRef.current?.getCenter().lat ?? 0)],
             snapshotBytes: buffer.current ? JSON.stringify(buffer.current).length : 0,
             layerIds: layers.map((layer) => layer.id),
             // Signals hide themselves when the atlas is missing rather than
@@ -510,6 +646,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     return () => {
       cancelAnimationFrame(raf);
       map.off("zoom", onZoom);
+      map.off("dragstart", onUserDrag);
+      canvasContainer.removeEventListener("pointerdown", onPointerDown);
+      canvasContainer.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
       plates.forEach((marker) => marker.remove());
       overlayRef.current = null;
       mapRef.current = null;
@@ -518,6 +658,26 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     // `ready` is the async-geography gate: the effect must re-run when the
     // model first arrives, and only then.
   }, [frames, onHandle, ready]);
+
+  // Route-first focus (Issue #25): while a trip is live, the basemap roads
+  // step back so the ego's route is the dominant object. Leaving the city
+  // restores the authored cartography exactly.
+  useEffect(() => {
+    const map = mapRef.current;
+    followRef.current = live ? enableFollow(followRef.current) : disableFollow(followRef.current);
+    useUiStore.getState().setFollowing(live);
+    if (map) {
+      // Enter City's flight owns the camera for a moment; following takes over
+      // when it lands rather than cutting it off mid-ease.
+      easeGuardUntilRef.current = live ? performance.now() + 1_600 : 0;
+      const apply = () => applyRoadFocus(map, live);
+      if (map.isStyleLoaded()) {
+        apply();
+      } else {
+        map.once("load", apply);
+      }
+    }
+  }, [live, ready]);
 
   // Scale changes: swap the local GeoJSON sources; geography is nested.
   useEffect(() => {

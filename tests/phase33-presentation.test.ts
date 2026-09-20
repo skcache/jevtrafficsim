@@ -267,7 +267,8 @@ describe("detail hierarchy by zoom", () => {
 
 describe("product shell contracts", () => {
   const chrome = readFileSync(new URL("../components/SimChrome.tsx", import.meta.url), "utf8");
-  const metrics = readFileSync(new URL("../components/MetricsHUD.tsx", import.meta.url), "utf8");
+  // Issue #25 renamed the surface: the trip HUD is now the primary instrument.
+  const tripHud = readFileSync(new URL("../components/TripHUD.tsx", import.meta.url), "utf8");
   const dock = readFileSync(new URL("../components/IncidentBar.tsx", import.meta.url), "utf8");
   const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
 
@@ -276,12 +277,12 @@ describe("product shell contracts", () => {
     expect(chrome).not.toContain("Central");
   });
 
-  it("groups the metrics into one surface and has no sparkline", () => {
-    expect(metrics).toContain("surface");
-    expect(metrics).not.toContain("sparkline");
-    expect(metrics).toContain("tabular");
+  it("groups the HUD into one surface and has no sparkline", () => {
+    expect(tripHud).toContain("surface");
+    expect(tripHud).not.toContain("sparkline");
+    expect(tripHud).toContain("value-num");
     // One panel, not a stack of loose rows: a single wrapper carries the surface.
-    expect(metrics.match(/className="surface/g)?.length).toBe(1);
+    expect(tripHud.match(/className="surface/g)?.length).toBe(1);
   });
 
   it("keeps the dock to one line per action", () => {

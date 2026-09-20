@@ -121,6 +121,19 @@ const options = (city: City, laneOffsets: number[], nowMs = 1000, receivedAtMs =
   city,
 });
 
+describe("ego-only rendering", () => {
+  it("renders exactly one vehicle when the frame has an ego, none when it does not", () => {
+    const model = straightModel();
+    const indexes = buildDirectedPathIndexes(model);
+    const withEgo = snapshot(0, [{ id: 3, roadId: 0, progress: 10 }]);
+    const withoutEgo = snapshot(0, []);
+    const options = { nowMs: 1000, receivedAtMs: 1000, laneOffsets: [0, 0], city: model.city };
+    expect(interpolateVehicles(indexes, null, withEgo, 0.5, options).length).toBe(1);
+    expect(interpolateVehicles(indexes, null, withoutEgo, 0.5, options).length).toBe(0);
+    expect(interpolateVehicles(indexes, null, withEgo, 0.5, options)[0].id).toBe(3);
+  });
+});
+
 describe("lane placement", () => {
   it("puts a two-lane one-way vehicle at its lane-group centre, not a fixed offset", () => {
     const model = straightModel();

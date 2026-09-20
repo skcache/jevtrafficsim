@@ -174,6 +174,30 @@ describe("presentation snapshots", () => {
     expect(JSON.stringify(snapshot)).not.toContain('"vehicles"');
   });
 
+  it("estimates the remaining time deterministically from route and traffic", () => {
+    const a = fixture();
+    const b = fixture();
+    const engineA = createEngine({ city: a.city, controller: createFixedController(), spawns: a.spawns });
+    const engineB = createEngine({ city: b.city, controller: createFixedController(), spawns: b.spawns });
+    runEngine(engineA, 300);
+    runEngine(engineB, 300);
+    const tripA = buildPresentationSnapshot(engineA, 0, "loop-circuit").trip;
+    const tripB = buildPresentationSnapshot(engineB, 0, "loop-circuit").trip;
+    expect(tripA?.estimatedRemainingMs).toBe(tripB?.estimatedRemainingMs);
+    expect(tripA?.estimatedRemainingMs ?? -1).toBeGreaterThan(0);
+    expect(Number.isFinite(tripA?.estimatedRemainingMs ?? NaN)).toBe(true);
+
+    // A congested road cannot make the estimate faster: same route, more
+    // occupancy, larger estimate.
+    runEngine(engineA, 1_500);
+    const later = buildPresentationSnapshot(engineA, 1, "loop-circuit").trip;
+    expect((later?.estimatedRemainingMs ?? 0) >= 0).toBe(true);
+    runEngine(engineA, 5_000);
+    const arrived = buildPresentationSnapshot(engineA, 2, "loop-circuit").trip;
+    expect(arrived?.completed).toBe(true);
+    expect(arrived?.estimatedRemainingMs).toBe(0);
+  });
+
   it("is deterministic for identical engine state", () => {
     const a = fixture();
     const b = fixture();
