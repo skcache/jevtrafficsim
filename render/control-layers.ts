@@ -40,9 +40,12 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
   return "control-signal-red";
 }
 
-function sizeFor(control: ContextualControl, sprites: ControlSpriteSet): number {
-  const metres = sprites.heightM[controlSpriteFor(control)];
-  return control.prominence === "primary" ? metres : metres * CONTROL_SCALE.previewSizeScale;
+function sizeFor(control: ContextualControl): number {
+  const metres =
+    control.kind === "signal" ? CONTROL_SCALE.signalHeightM : CONTROL_SCALE.stopHeightM;
+  return control.prominence === "primary"
+    ? metres
+    : metres * CONTROL_SCALE.previewSizeScale;
 }
 
 function iconLayer(
@@ -60,12 +63,13 @@ function iconLayer(
     iconMapping: sprites.mapping,
     getIcon: (control) => controlSpriteFor(control),
     getPosition: (control) => toLngLat(projection, control.x, control.y) as LngLat,
-    getSize: (control) => sizeFor(control, sprites),
+    getSize: (control) => sizeFor(control),
     sizeUnits: "meters",
     sizeMinPixels,
     sizeMaxPixels: CONTROL_SCALE.maxPixels,
-    // Upright glyphs: the housing reads as a traffic light, not a tilted sticker.
-    billboard: false,
+    // Geographic anchor, screen-facing sign face. Map-space size still controls
+    // zoom scaling; billboarding prevents pitch/tilt from crushing the lamps.
+    billboard: true,
     opacity,
     pickable: false,
   });
