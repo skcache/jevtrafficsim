@@ -181,7 +181,18 @@ describe("signal presentation stays simulation-first", () => {
     const signals: PresentationSignal[] = [
       { intersectionId: entry[0], phaseIndex: 0, stage: "green" },
     ];
-    const snapshot = { sequence: 1, timeMs: 1000, vehicles: [], signals } as unknown as PresentationSnapshot;
+    // Issue #24: the renderer reads route-filtered control state.
+    const snapshot: PresentationSnapshot = {
+      sequence: 1,
+      timeMs: 1000,
+      controller: "fixed",
+      ego: null,
+      roadTraffic: [],
+      routeControls: signals,
+      trip: null,
+      roadConditions: [],
+      incidents: [],
+    };
     const sprites = {
       atlas: "data:image/png;base64,",
       mapping: Object.fromEntries(

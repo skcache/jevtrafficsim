@@ -15,11 +15,10 @@
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import type { WaterCrossingBridge } from "@/cities/map-model";
-import {
-  CHICAGO_SCALE_LABELS,
-  availableChicagoEventVenues,
-  chicagoScaleForSize,
-} from "@/cities/chicago";
+import { CHICAGO_SCALE_LABELS, availableChicagoEventVenues } from "@/cities/chicago";
+import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
+import { materializeChallengeTrip } from "@/worker/ego-spawn";
+import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
 import { generateDemand } from "@/sim/demand";
@@ -29,6 +28,7 @@ import {
   setEngineController,
   stepEngine,
   type EngineState,
+  type ScheduledSpawn,
 } from "@/sim/engine";
 import { createRng } from "@/sim/rng";
 import {
@@ -59,6 +59,8 @@ const scope = self as unknown as WorkerScope;
 interface WorkerState {
   config: RunConfig | null;
   engine: EngineState | null;
+  /** The curated trip this run materialised; null before the first build. */
+  trip: MaterializedCuratedTrip | null;
   scaleIndex: number;
   incidentSeed: number;
   running: boolean;
@@ -80,6 +82,7 @@ interface WorkerState {
 const state: WorkerState = {
   config: null,
   engine: null,
+  trip: null,
   scaleIndex: 2,
   incidentSeed: 0,
   running: false,
@@ -107,7 +110,11 @@ function postSnapshot(): void {
   }
   post({
     type: "SNAPSHOT",
-    snapshot: buildPresentationSnapshot(state.engine, state.snapshotSequence),
+    snapshot: buildPresentationSnapshot(
+      state.engine,
+      state.snapshotSequence,
+      state.config?.tripId ?? null,
+    ),
   });
   state.snapshotSequence += 1;
 }
@@ -137,7 +144,9 @@ async function buildRun(config: RunConfig): Promise<void> {
   clearTimer();
   state.running = false;
   state.complete = false;
-  const scaleIndex = chicagoScaleForSize(config.citySize);
+  // The curated challenge IS a trip across real Chicago, and the trips are
+  // defined against the Metro graph: every run loads Metro.
+  const scaleIndex = METRO_SCALE_INDEX;
   const token = (state.buildToken += 1);
   let model: MapModel;
   try {
@@ -153,12 +162,29 @@ async function buildRun(config: RunConfig): Promise<void> {
     return; // a newer build superseded this one
   }
   const city = model.city;
-  const spawns = generateDemand({
+  // Background demand is exactly what it always was: the whole city stays alive.
+  const background = generateDemand({
     city,
     level: config.trafficLevel,
     seed: config.seed,
     durationMs: config.durationMs,
   });
+  // The selected curated trip becomes ONE ordinary car at t=0. Materialisation
+  // resolves the trip's anchors to graph nodes through the Issue #23 contract;
+  // the vehicle's own route is still A*'s, computed at spawn like everyone
+  // else's, so presentation identity never buys it a different road.
+  let challenge;
+  try {
+    challenge = materializeChallengeTrip(model, config.tripId, config.seed);
+  } catch (error) {
+    post({
+      type: "ERROR",
+      message: `curated trip ${config.tripId} unavailable: ${String((error as Error)?.message ?? error)}`,
+    });
+    return;
+  }
+  const trip = challenge.trip;
+  const spawns: ScheduledSpawn[] = [challenge.spawn, ...background];
   // Deterministic incident root derived from the run seed: interactive
   // incidents resolve from it through the engine's existing machinery.
   const incidentSeed = createRng(config.seed).fork("incidents").seed;
@@ -170,6 +196,7 @@ async function buildRun(config: RunConfig): Promise<void> {
   });
   state.config = config;
   state.engine = engine;
+  state.trip = trip;
   state.scaleIndex = scaleIndex;
   state.incidentSeed = incidentSeed;
   state.snapshotSequence = 0;

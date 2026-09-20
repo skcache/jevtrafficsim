@@ -362,11 +362,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       const activeMap = mapRef.current;
       if (buffer && activeMap && buffer.model && buffer.paths) {
         const alpha = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
+        // One vehicle in the frame now: the ego. Background traffic reaches the
+        // map only as sparse road aggregates.
         const progress = new Map<number, number>();
-        if (buffer.current) {
-          for (const vehicle of buffer.current.vehicles) {
-            progress.set(vehicle.id, vehicle.progress);
-          }
+        if (buffer.current?.ego) {
+          progress.set(buffer.current.ego.id, buffer.current.ego.progress);
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
         const congestion =
@@ -393,7 +393,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               laneOffsets,
               interpolated,
               (id) => progress.get(id) ?? 0,
-              buffer.current.signals,
+              buffer.current.routeControls,
             )
           : [];
         const vehicles = buffer.current
@@ -467,11 +467,26 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               y: Math.round(vehicle.y),
               waitMs: Math.round(vehicle.blockedWaitMs),
             }));
+          // Challenge diagnostics (Issue #24): there is no fleet in the frame
+          // any more, so report the ego and the road state that replaced it.
+          const ego = buffer.current?.ego ?? null;
+          const trip = buffer.current?.trip ?? null;
           (window as unknown as { __jevLayers?: unknown }).__jevLayers = {
             hottest: hotspots[0] ?? null,
             hotspots,
-            vehicleCount: vehicles.length,
-            snapshotVehicles: buffer.current?.vehicles.length ?? 0,
+            renderedVehicles: vehicles.length,
+            egoVehicleId: ego?.id ?? null,
+            egoState: ego?.state ?? null,
+            egoBlockedWaitMs: ego ? Math.round(ego.blockedWaitMs) : null,
+            tripId: trip?.tripId ?? null,
+            tripRouteLength: trip?.routeRoadIds.length ?? 0,
+            tripRouteIndex: trip?.routeIndex ?? 0,
+            tripCompleted: trip?.completed ?? null,
+            roadTrafficEntries: buffer.current?.roadTraffic.length ?? 0,
+            occupiedRoadsWithQueues:
+              buffer.current?.roadTraffic.filter((road) => road.queuedCount > 0).length ?? 0,
+            routeControls: buffer.current?.routeControls.length ?? 0,
+            snapshotBytes: buffer.current ? JSON.stringify(buffer.current).length : 0,
             layerIds: layers.map((layer) => layer.id),
             // Signals hide themselves when the atlas is missing rather than
             // falling back to a coloured dot, so debug reports it explicitly.

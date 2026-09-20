@@ -32,7 +32,11 @@ interface JevDebugHook {
   snapshot: {
     sequence: number;
     timeMs: number;
-    vehicles: number;
+    egoVehicleId: number | null;
+    egoState: string | null;
+    tripId: string | null;
+    roadTrafficEntries: number;
+    routeControls: number;
     controller: string;
     incidents: string[];
     closedRoads: number;
@@ -71,7 +75,11 @@ function updateDebugHook(event: WorkerEvent): void {
       hook.snapshot = {
         sequence: event.snapshot.sequence,
         timeMs: event.snapshot.timeMs,
-        vehicles: event.snapshot.vehicles.length,
+        egoVehicleId: event.snapshot.ego?.id ?? null,
+        egoState: event.snapshot.ego?.state ?? null,
+        tripId: event.snapshot.trip?.tripId ?? null,
+        roadTrafficEntries: event.snapshot.roadTraffic.length,
+        routeControls: event.snapshot.routeControls.length,
         controller: event.snapshot.controller,
         incidents: event.snapshot.incidents.map((incident) => `${incident.kind}:${incident.status}`),
         closedRoads: event.snapshot.roadConditions.filter((road) => road.closed).length,

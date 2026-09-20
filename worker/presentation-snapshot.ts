@@ -1,43 +1,81 @@
 /**
- * Bounded presentation snapshots (Task 11): the live-render frame sent to the
- * main thread. NEVER `takeSnapshot(engine)` — that intentionally carries every
- * vehicle for the whole run and grows forever. This frame contains only what
- * the renderer and HUD need RIGHT NOW:
+ * Bounded presentation snapshots: the live-render frame sent to the main thread.
  *
- * - active vehicles only (no arrived, no routes, no destinations);
- * - current blocked wait per vehicle (continuous queue wait for queued,
- *   pending wait for pending, zero while moving) for the wait-heat pass;
- * - compact signal state, road conditions and active/recent incident markers;
- * - no city geometry (sent once in READY), no partitions, no maps.
+ * Issue #24 changed what this frame IS. It used to carry every active vehicle,
+ * which made the render payload scale with the fleet: a rush-hour city shipped
+ * hundreds of vehicle objects across the worker boundary every 200 ms so the map
+ * could draw them. The product now has ONE protagonist — the curated trip's ego
+ * car — and background traffic stays in the engine where it belongs.
  *
- * Deterministic for identical engine state: vehicles in engine order,
- * everything else sorted by id.
+ * The frame therefore contains:
+ *
+ * - the ego vehicle, or null before it spawns (and if its route never forms);
+ * - SPARSE per-road traffic aggregates, so roads can be coloured by state in
+ *   Issue #25 without shipping a single background vehicle object;
+ * - control state for the ego's remaining route only — the city still runs
+ *   every signal, presentation just stops transmitting the ones that do not
+ *   matter to the challenge;
+ * - the ego's trip progress, from facts the simulation actually has;
+ * - runtime road conditions and incident markers the UI already needs.
+ *
+ * Deterministic for identical engine state.
  */
-import { currentQueueWaitMs } from "@/sim/approach-stats";
 import type { EngineState } from "@/sim/engine";
+import { currentQueueWaitMs } from "@/sim/approach-stats";
 import { computeMetrics, type SimulationMetrics } from "@/sim/metrics";
 import type { SignalStage } from "@/sim/signals";
-import type {
-  IncidentKind,
-  IncidentRecord,
-} from "@/sim/incidents";
+import type { IncidentKind, IncidentRecord } from "@/sim/incidents";
 import type { IntersectionId, RoadId, VehicleId, VehicleState, VehicleType } from "@/sim/types";
 
-export interface PresentationVehicle {
+/** One directed road carrying visible state. Absent road = free baseline. */
+export interface PresentationRoadTraffic {
+  readonly roadId: RoadId;
+  /** Footprint units currently on the road (the simulation's own measure). */
+  readonly occupancy: number;
+  /** Effective capacity, so a consumer can ratio the two without city data. */
+  readonly capacity: number;
+  /** Active vehicles on this road (any state except arrived). */
+  readonly vehicleCount: number;
+  /** Vehicles queued at this road's stop line. */
+  readonly queuedCount: number;
+  /**
+   * Longest current blocked wait on this road, in ms. Kept here because road
+   * congestion reads it, and one scalar per OCCUPIED road is still sparse —
+   * versus a wait field on every vehicle object.
+   */
+  readonly maxBlockedWaitMs: number;
+}
+
+/**
+ * The one vehicle the map draws. Everything here is a straight read of the
+ * simulation's own vehicle: no re-derivation, no presentation-only physics.
+ */
+export interface PresentationEgoVehicle {
   readonly id: VehicleId;
   readonly type: VehicleType;
   readonly state: VehicleState;
   readonly roadId: RoadId | null;
   readonly progress: number;
-  /**
-   * Position in this road's queue, 0 = front (nearest the stop line), or null
-   * when the vehicle is not queued. Computed here with the SAME ordering rule
-   * the simulation uses — queuedSinceMs ascending, then id — so presentation can
-   * never disagree with the simulation about who is in front.
-   */
+  readonly routeIndex: number;
   readonly queueRank: number | null;
-  /** Continuous blocked wait (ms); 0 while moving. */
   readonly blockedWaitMs: number;
+  /** Current effective speed (world units per second). */
+  readonly speed: number;
+}
+
+export interface PresentationTripProgress {
+  readonly tripId: string;
+  readonly originIntersectionId: IntersectionId;
+  readonly destinationIntersectionId: IntersectionId;
+  /** The ego's CURRENT route — updates if an incident reroutes it. */
+  readonly routeRoadIds: readonly RoadId[];
+  readonly routeIndex: number;
+  readonly tripTimeMs: number;
+  readonly waitTimeMs: number;
+  readonly distanceRemainingM: number;
+  readonly distanceTravelledM: number;
+  readonly intersectionsCleared: number;
+  readonly completed: boolean;
 }
 
 export interface PresentationSignal {
@@ -66,8 +104,13 @@ export interface PresentationSnapshot {
   readonly sequence: number;
   readonly timeMs: number;
   readonly controller: string;
-  readonly vehicles: readonly PresentationVehicle[];
-  readonly signals: readonly PresentationSignal[];
+  /** The challenge's protagonist, or null before it exists. At most one. */
+  readonly ego: PresentationEgoVehicle | null;
+  /** Sparse road state for later traffic colouring. No vehicle objects. */
+  readonly roadTraffic: readonly PresentationRoadTraffic[];
+  /** Control state on the ego's remaining route only. */
+  readonly routeControls: readonly PresentationSignal[];
+  readonly trip: PresentationTripProgress | null;
   readonly roadConditions: readonly PresentationRoadCondition[];
   readonly incidents: readonly PresentationIncidentMarker[];
 }
@@ -109,38 +152,143 @@ export function assignQueueRanks(
   return ranks;
 }
 
+/** Blocked wait by state: continuous while queued, pending wait, else zero. */
+function blockedWaitOf(engine: EngineState, vehicle: EngineState["traffic"]["vehicles"][number]): number {
+  if (vehicle.state === "queued") {
+    return currentQueueWaitMs(engine.traffic.timeMs, vehicle.queuedSinceMs);
+  }
+  if (vehicle.state === "pending") {
+    return vehicle.waitTimeMs;
+  }
+  return 0;
+}
+
+/**
+ * Sparse road aggregates: only roads with vehicles or queues appear. An absent
+ * road is a free road, so the payload scales with NETWORK STATE rather than
+ * with the number of vehicle objects.
+ */
+export function aggregateRoadTraffic(engine: EngineState): PresentationRoadTraffic[] {
+  const vehicleCounts = new Map<RoadId, number>();
+  const queuedCounts = new Map<RoadId, number>();
+  const maxWaits = new Map<RoadId, number>();
+  for (const vehicle of engine.traffic.vehicles) {
+    if (vehicle.roadId === null || vehicle.state === "arrived") {
+      continue;
+    }
+    vehicleCounts.set(vehicle.roadId, (vehicleCounts.get(vehicle.roadId) ?? 0) + 1);
+    if (vehicle.state === "queued") {
+      queuedCounts.set(vehicle.roadId, (queuedCounts.get(vehicle.roadId) ?? 0) + 1);
+    }
+    const wait = blockedWaitOf(engine, vehicle);
+    if (wait > 0) {
+      maxWaits.set(vehicle.roadId, Math.max(maxWaits.get(vehicle.roadId) ?? 0, wait));
+    }
+  }
+  const roadIds = new Set<RoadId>(engine.traffic.occupancy.keys());
+  for (const roadId of queuedCounts.keys()) {
+    roadIds.add(roadId);
+  }
+  return [...roadIds]
+    .sort((a, b) => a - b)
+    .map((roadId) => ({
+      roadId,
+      occupancy: engine.traffic.occupancy.get(roadId) ?? 0,
+      capacity: engine.city.roads[roadId]?.capacity ?? 0,
+      vehicleCount: vehicleCounts.get(roadId) ?? 0,
+      queuedCount: queuedCounts.get(roadId) ?? 0,
+      maxBlockedWaitMs: maxWaits.get(roadId) ?? 0,
+    }));
+}
+
+/** Intersections the ego still has to pass: the remaining route's endpoints. */
+function remainingRouteIntersections(
+  engine: EngineState,
+  route: readonly RoadId[],
+  routeIndex: number,
+): Set<IntersectionId> {
+  const nodes = new Set<IntersectionId>();
+  for (let index = Math.max(0, routeIndex - 1); index < route.length; index += 1) {
+    const road = engine.city.roads[route[index]];
+    if (!road) {
+      continue;
+    }
+    nodes.add(road.from);
+    nodes.add(road.to);
+  }
+  return nodes;
+}
+
+function tripProgressOf(
+  engine: EngineState,
+  tripId: string | null,
+  ego: EngineState["traffic"]["vehicles"][number],
+): PresentationTripProgress | null {
+  if (tripId === null) {
+    return null;
+  }
+  let travelled = 0;
+  let remaining = 0;
+  for (let index = 0; index < ego.route.length; index += 1) {
+    const length = engine.city.roads[ego.route[index]]?.length ?? 0;
+    if (index < ego.routeIndex) {
+      travelled += length;
+    } else if (index === ego.routeIndex) {
+      travelled += Math.max(0, Math.min(length, ego.progress));
+      remaining += Math.max(0, length - ego.progress);
+    } else {
+      remaining += length;
+    }
+  }
+  return {
+    tripId,
+    originIntersectionId: ego.origin,
+    destinationIntersectionId: ego.destination,
+    routeRoadIds: [...ego.route],
+    routeIndex: ego.routeIndex,
+    tripTimeMs: ego.tripTimeMs,
+    waitTimeMs: ego.waitTimeMs,
+    distanceRemainingM: remaining,
+    distanceTravelledM: travelled,
+    intersectionsCleared: ego.routeIndex,
+    completed: ego.state === "arrived",
+  };
+}
+
 export function buildPresentationSnapshot(
   engine: EngineState,
   sequence: number,
+  tripId: string | null = null,
 ): PresentationSnapshot {
-  // Queue ranks first, in one pass: per directed road, ordered exactly as
-  // sim/traffic.ts orders its own queue (queuedSinceMs ascending, then id). The
-  // renderer reads this instead of trying to reconstruct the order from
-  // progress, which is what let presentation disagree with the simulation.
-  const queueRanks = assignQueueRanks(engine.traffic.vehicles);
+  const vehicles = engine.traffic.vehicles;
+  const queueRanks = assignQueueRanks(vehicles);
 
-  const vehicles: PresentationVehicle[] = [];
-  for (const vehicle of engine.traffic.vehicles) {
-    if (vehicle.state === "arrived") {
-      continue; // bounded: completed trips never enter the live frame
-    }
-    vehicles.push({
-      id: vehicle.id,
-      type: vehicle.type,
-      state: vehicle.state,
-      roadId: vehicle.roadId,
-      progress: vehicle.progress,
-      queueRank: queueRanks.get(vehicle.id) ?? null,
-      blockedWaitMs:
-        vehicle.state === "queued"
-          ? currentQueueWaitMs(engine.traffic.timeMs, vehicle.queuedSinceMs)
-          : vehicle.state === "pending"
-            ? vehicle.waitTimeMs
-            : 0,
-    });
-  }
+  // Exactly one ego, identified by the id the engine recorded when the ego
+  // spawn created its vehicle — never by position in the vehicle list.
+  const egoVehicle =
+    engine.egoVehicleId === null ? undefined : vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId);
+  const ego: PresentationEgoVehicle | null = egoVehicle
+    ? {
+        id: egoVehicle.id,
+        type: egoVehicle.type,
+        state: egoVehicle.state,
+        roadId: egoVehicle.roadId,
+        progress: egoVehicle.progress,
+        routeIndex: egoVehicle.routeIndex,
+        queueRank: queueRanks.get(egoVehicle.id) ?? null,
+        blockedWaitMs: blockedWaitOf(engine, egoVehicle),
+        speed: egoVehicle.speed,
+      }
+    : null;
 
-  const signals: PresentationSignal[] = [...engine.traffic.signals.entries()]
+  // Control state is filtered to the ego's remaining route: the data exists for
+  // the challenge, not for a citywide signal field. No visual behaviour here —
+  // Issue #26 decides how controls appear.
+  const routeNodes = egoVehicle
+    ? remainingRouteIntersections(engine, egoVehicle.route, egoVehicle.routeIndex)
+    : new Set<IntersectionId>();
+  const routeControls: PresentationSignal[] = [...engine.traffic.signals.entries()]
+    .filter(([intersectionId]) => routeNodes.has(intersectionId))
     .sort((a, b) => a[0] - b[0])
     .map(([intersectionId, signal]) => ({
       intersectionId,
@@ -172,8 +320,10 @@ export function buildPresentationSnapshot(
     sequence,
     timeMs: engine.traffic.timeMs,
     controller: engine.controller.id,
-    vehicles,
-    signals,
+    ego,
+    roadTraffic: aggregateRoadTraffic(engine),
+    routeControls,
+    trip: egoVehicle ? tripProgressOf(engine, tripId, egoVehicle) : null,
     roadConditions,
     incidents,
   };
