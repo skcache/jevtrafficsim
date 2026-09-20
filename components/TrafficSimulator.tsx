@@ -248,6 +248,14 @@ export function TrafficSimulator() {
     [send],
   );
 
+  const previewSetup = useCallback(() => {
+    // Configuration is a live traffic preview, not a static mock. Mark the
+    // next READY as prewarm-only so changing trip/traffic/controller/seed
+    // refreshes the city behind the setup panel without entering the challenge.
+    prewarmRef.current = true;
+    startRun({ citySize: "large" });
+  }, [startRun]);
+
   const enterCity = useCallback(() => {
     const store = useUiStore.getState();
     store.setCitySize("large");
@@ -364,7 +372,7 @@ export function TrafficSimulator() {
           }`}
           aria-hidden="true"
         />
-        <Onboarding onEnterCity={enterCity} />
+        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} />
         <SimChrome
           following={following}
           onFollow={onFollow}
