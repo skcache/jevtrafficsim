@@ -30,7 +30,6 @@ export function TripHUD() {
   const metrics = useUiStore((state) => state.metrics);
   const live = phase === "city";
   const view = tripHudView({ trip, egoState, egoSpeedMps });
-  const settled = view !== null;
 
   return (
     <motion.div
