@@ -38,6 +38,7 @@ import type {
 
 export type ControlKind = "signal" | "stop";
 export type ControlProminence = "primary" | "preview";
+export type ControlLifecycle = "upcoming" | "retiring";
 
 export interface ContextualControl {
   readonly intersectionId: IntersectionId;
@@ -51,6 +52,8 @@ export interface ContextualControl {
   readonly bearing: number;
   /** Nearest control is primary inside the primary band; others stay quieter. */
   readonly prominence: ControlProminence;
+  /** Whether the control is ahead of the ego or smoothly returning to network scale. */
+  readonly lifecycle: ControlLifecycle;
   /**
    * Continuous 0..1 approach emphasis. The renderer uses this to grow the
    * contextual control smoothly out of the tiny citywide signal system.
