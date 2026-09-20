@@ -151,24 +151,48 @@ function segmentMaps(city: City): {
  * final third. A broader central-route fallback keeps short/odd routes valid.
  */
 export function automaticTargetRoads(
+  city: City,
   routeRoadIds: readonly RoadId[],
   eventIndex: number,
 ): RoadId[] {
   if (routeRoadIds.length <= 4) return [...routeRoadIds];
+
+  // Route position is measured by free-flow travel time, not array index.
+  // Chicago routes mix tiny downtown links with long expressway pieces; an
+  // index fraction can put a "late trip" incident physically near the start.
+  const durations = routeRoadIds.map((roadId) => {
+    const road = city.roads[roadId];
+    return road && road.speedLimit > 0 ? road.length / road.speedLimit : 0;
+  });
+  const total = durations.reduce((sum, value) => sum + value, 0);
+  if (!(total > 0)) return [...routeRoadIds];
+
   const window =
     eventIndex === 0
       ? { lo: 0.42, hi: 0.68 }
       : { lo: 0.70, hi: 0.94 };
-  const lo = Math.max(1, Math.floor(routeRoadIds.length * window.lo));
-  const hi = Math.max(lo + 1, Math.ceil(routeRoadIds.length * window.hi));
-  const targeted = routeRoadIds.slice(lo, hi);
+  const center = (window.lo + window.hi) / 2;
+  let elapsed = 0;
+  const scored = routeRoadIds.map((roadId, index) => {
+    const duration = durations[index];
+    const midpoint = (elapsed + duration / 2) / total;
+    elapsed += duration;
+    return { roadId, midpoint };
+  });
+  const targeted = scored
+    .filter((entry) => entry.midpoint >= window.lo && entry.midpoint <= window.hi)
+    .map((entry) => entry.roadId);
   if (targeted.length > 0) return targeted;
-  const fallbackLo = Math.max(1, Math.floor(routeRoadIds.length * 0.18));
-  const fallbackHi = Math.max(
-    fallbackLo + 1,
-    Math.ceil(routeRoadIds.length * 0.90),
-  );
-  return routeRoadIds.slice(fallbackLo, fallbackHi);
+
+  // Degenerate route geometry can leave no road midpoint inside a narrow band.
+  // Pick the three nearest roads to the intended progress point, preserving
+  // driving order in the returned set.
+  return scored
+    .map((entry, index) => ({ ...entry, index, distance: Math.abs(entry.midpoint - center) }))
+    .sort((a, b) => a.distance - b.distance || a.index - b.index)
+    .slice(0, 3)
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.roadId);
 }
 
 function deterministicPick<T>(
@@ -242,6 +266,11 @@ function routeBridgeSegments(
 
 const MAX_ROUTE_VENUE_DISTANCE_M = 1_200;
 
+function roadLabel(model: MapModel, roadId: RoadId): string {
+  const piece = model.streets.find((street) => street.roadIds.includes(roadId));
+  return piece?.bridge?.name ?? piece?.name ?? piece?.ref ?? `road ${roadId}`;
+}
+
 function nearestVenueCenters(
   model: MapModel,
   roadIds: readonly RoadId[],
@@ -273,7 +302,7 @@ function automaticEntryForKind(
   eventIndex: number,
 ): IncidentScriptEntry | null {
   const label = `automatic:${eventIndex}:${kind}`;
-  const targetRoads = automaticTargetRoads(trip.route.roadIds, eventIndex);
+  const targetRoads = automaticTargetRoads(model.city, trip.route.roadIds, eventIndex);
   switch (kind) {
     case "traffic-burst":
       return { atMs, kind };
@@ -477,7 +506,7 @@ export function resolveManualChallengeIncident(
         ? { entry: null, label: "No valid route road for a crash" }
         : {
             entry: { atMs, kind: input.kind, targetRoadId },
-            label: "Crash queued on the trip corridor",
+            label: `Crash queued on ${roadLabel(input.model, targetRoadId)}`,
           };
     }
 
@@ -494,7 +523,7 @@ export function resolveManualChallengeIncident(
               targetRoadId: segment.roadId,
               allowDisconnect: false,
             },
-            label: "Route road closure queued",
+            label: `${roadLabel(input.model, segment.roadId)} closed — rerouting`,
           };
     }
 
@@ -510,7 +539,7 @@ export function resolveManualChallengeIncident(
               targetRoadId: segment.roadId,
               allowDisconnect: false,
             },
-            label: "Route-relevant bridge closure queued",
+            label: `${roadLabel(input.model, segment.roadId)} closed`,
           };
     }
 
