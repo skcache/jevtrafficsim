@@ -44,7 +44,6 @@ import {
   presetPose,
 } from "@/render/camera-presets";
 import { buildChicagoStyle } from "@/render/chicago-style";
-import { CLOSE_TIER_MINZOOM } from "@/render/zoom-grammar";
 import { buildShowcaseGeoJson, type ShowcaseGeoJson } from "@/render/map-geojson";
 import {
   buildCongestionLayers,
@@ -71,6 +70,7 @@ import {
   type ContextualControl,
 } from "@/render/contextual-controls";
 import { buildControlLayers } from "@/render/control-layers";
+import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
@@ -123,8 +123,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
-  /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
+  /** Per-road lng/lat paths + physical widths, for the whole-city traffic layer. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
+  /** Static low-prominence signal network: citywide system context, no worker payload. */
+  const networkSignalsRef = useRef<NetworkSignalMarker[]>([]);
   /** Latest incident plate positions (metric), for the dev camera helper. */
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
   /** Metric anchor of the active crash, for the dev camera hook. */
@@ -197,9 +199,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         ),
         widthM: widthMetresForRoad(model, road.id, pairs),
       }));
+      networkSignalsRef.current = networkSignalMarkers(model);
     } else {
       laneOffsetsRef.current = null;
       congestionRoadsRef.current = [];
+      networkSignalsRef.current = [];
     }
   }, [model, geo]);
 
@@ -449,8 +453,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           progress.set(buffer.current.ego.id, buffer.current.ego.progress);
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
+        // Whole-city traffic remains visible at every challenge zoom. This is
+        // the evidence that the ego is moving through a real traffic system,
+        // not a private route animation: dense/queued roads stay amber/red
+        // even when the camera is close enough to inspect the ego car.
         const congestion =
-          !trafficHiddenRef.current && zoomRef.current < CLOSE_TIER_MINZOOM && buffer.current
+          !trafficHiddenRef.current && buffer.current
             ? buildCongestionLayers(
                 congestionRoadsRef.current ?? [],
                 roadPressure(buffer.current),
@@ -573,8 +581,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               // deliberately traffic-free; simulation state appears only after
               // Enter City so the first live frame has a clear semantic shift.
               ...congestion,
-              // Route (casing + traffic-coloured core), then the destination
-              // pin, then the one car: ego > route > destination > traffic.
+              // Quiet neutral signal heads show the citywide control network.
+              // Live right-of-way is still reserved for contextual controls.
+              ...buildNetworkSignalLayers(
+                projection,
+                networkSignalsRef.current,
+                controlSpritesRef.current,
+                zoomRef.current,
+              ),
+              // One smooth traffic-coloured route band, then destination + ego.
               ...buildRouteLayers(segments),
               ...buildDestinationLayers(projection, destination, destSpritesRef.current),
               ...buildVehicleLayers(
