@@ -11,6 +11,10 @@ import type {
   PresentationMetrics,
   PresentationSnapshot,
 } from "./presentation-snapshot";
+import type {
+  ChallengeIncidentPlan,
+  ResolvedChallengeIncident,
+} from "./challenge-incidents";
 
 /** Fixed simulation pacing: one 100 ms tick per scheduled worker iteration. */
 export const SIM_TICK_MS = 100;
@@ -83,6 +87,18 @@ export type WorkerEvent =
       readonly scaleLabel: string;
       readonly timeMs: number;
       readonly incidentSeed: number;
+      /** Fully resolved controller-neutral automatic adversity for this run. */
+      readonly incidentPlan: ChallengeIncidentPlan;
+      /** Stable serialization input; controller is deliberately absent. */
+      readonly incidentFingerprint: string;
+    }
+  | {
+      readonly type: "INCIDENT_RESOLVED";
+      readonly kind: IncidentKind;
+      readonly queued: boolean;
+      readonly label: string;
+      readonly incident: ResolvedChallengeIncident | null;
+      readonly incidentFingerprint: string;
     }
   | { readonly type: "SNAPSHOT"; readonly snapshot: PresentationSnapshot }
   | { readonly type: "METRICS"; readonly metrics: PresentationMetrics }
