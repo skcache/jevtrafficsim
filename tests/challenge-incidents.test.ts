@@ -4,13 +4,14 @@ import { materializeCuratedTrip } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import {
   CHALLENGE_INCIDENT_COUNTS,
+  automaticTargetRoads,
   buildChallengeIncidentPlan,
   challengeIncidentFingerprintInput,
   resolveManualChallengeIncident,
   tripReachableExcluding,
   type ResolvedChallengeIncident,
 } from "@/worker/challenge-incidents";
-import { physicalSegments } from "@/sim/incidents";
+import { physicalSegments, reachableIntersectionCount } from "@/sim/incidents";
 import { createEngine, runEngine, setEngineController } from "@/sim/engine";
 import { createFixedController } from "@/controllers/fixed";
 import { createAdaptiveController } from "@/controllers/adaptive";
@@ -50,6 +51,20 @@ describe("Issue #27 challenge incident planning", () => {
     expect(b.seed).toBe(43);
     expect(challengeIncidentFingerprintInput(a)).not.toBe(
       challengeIncidentFingerprintInput(b),
+    );
+  });
+
+  it("targets automatic road adversity ahead on the canonical route", () => {
+    const first = automaticTargetRoads(trip.route.roadIds, 0);
+    const second = automaticTargetRoads(trip.route.roadIds, 1);
+    const indexOf = new Map(trip.route.roadIds.map((roadId, index) => [roadId, index]));
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    expect(Math.min(...first.map((roadId) => indexOf.get(roadId) ?? -1))).toBeGreaterThan(
+      trip.route.roadIds.length * 0.3,
+    );
+    expect(Math.min(...second.map((roadId) => indexOf.get(roadId) ?? -1))).toBeGreaterThan(
+      trip.route.roadIds.length * 0.6,
     );
   });
 
@@ -106,15 +121,29 @@ describe("Issue #27 challenge incident planning", () => {
           candidate.roadIds.includes(entry.targetRoadId!),
         );
         expect(segment).toBeDefined();
+        const excluded = new Set(segment?.roadIds ?? []);
+        expect(
+          reachableIntersectionCount(model.city, excluded),
+        ).toBe(reachableIntersectionCount(model.city));
         expect(
           tripReachableExcluding(
             model.city,
             trip.originIntersectionId,
             trip.destinationIntersectionId,
-            new Set(segment?.roadIds ?? []),
+            excluded,
           ),
         ).toBe(true);
       }
+    }
+  });
+
+  it("never stacks two automatic closures in one Rush scenario", () => {
+    for (let seed = 0; seed < 50; seed += 1) {
+      const plan = buildChallengeIncidentPlan(model, trip, "rush-hour", seed);
+      const closures = plan.entries.filter(
+        (entry) => entry.kind === "close-road" || entry.kind === "bridge-closed",
+      );
+      expect(closures.length).toBeLessThanOrEqual(1);
     }
   });
 
