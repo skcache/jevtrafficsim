@@ -46,8 +46,8 @@ const LEVELS: readonly {
 
 /**
  * City traffic-mode colours. Flowing roads get a quiet green proof-of-life;
- * pressure graduates through amber/orange/red. The ego route is filtered out
- * by CityMap and keeps its own blue/amber/red language.
+ * pressure graduates through amber/orange/red. The currently visible ego route
+ * is filtered out by CityMap because it stays one navigation-blue band.
  */
 export const CONGESTION_COLORS: Record<
   CongestionLevel,
