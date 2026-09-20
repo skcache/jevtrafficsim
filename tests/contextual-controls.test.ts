@@ -227,19 +227,33 @@ describe("contextual controls: route distance", () => {
     expect(controls[1].emphasis).toBeLessThan(1);
   });
 
-  it("retires a control the ego has passed", () => {
+  it("shrinks a passed control back into the background network before retiring it", () => {
     const before = derive(model, [0, 1, 2], 0, { roadId: 0, progress: 95 }, [
       { intersectionId: 1, phaseIndex: 0, stage: "green" },
     ]);
     expect(before.some((control) => control.intersectionId === 1)).toBe(true);
-    // Now on the next road: the node-1 signal is behind the ego and gone.
-    const after = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 5 }, [
-      { intersectionId: 1, phaseIndex: 0, stage: "green" },
+
+    const justPassed = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 5 }, [
       { intersectionId: 2, phaseIndex: 0, stage: "green" },
     ]);
-    expect(after.some((control) => control.intersectionId === 1)).toBe(false);
-    expect(after[0].intersectionId).toBe(2);
-    expect(after[0].distanceAheadM).toBeCloseTo(88, 6);
+    const retiring = justPassed.find((control) => control.intersectionId === 1);
+    expect(retiring?.lifecycle).toBe("retiring");
+    expect(retiring?.distanceAheadM).toBe(-5);
+    expect(retiring?.emphasis).toBeGreaterThan(0.9);
+    expect(controlSpriteFor(retiring!)).toBe("control-signal-neutral");
+    expect(upcomingControl(justPassed)?.intersectionId).toBe(2);
+    expect(upcomingControl(justPassed)?.distanceAheadM).toBeCloseTo(88, 6);
+
+    const farther = derive(model, [0, 1, 2], 1, { roadId: 1, progress: 40 }, [
+      { intersectionId: 2, phaseIndex: 0, stage: "green" },
+    ]);
+    const shrinking = farther.find((control) => control.intersectionId === 1);
+    expect(shrinking?.emphasis).toBeLessThan(retiring?.emphasis ?? 0);
+
+    const retired = derive(model, [0, 1, 2], 1, { roadId: 1, progress: CONTROL_REVEAL.retireM }, [
+      { intersectionId: 2, phaseIndex: 0, stage: "green" },
+    ]);
+    expect(retired.some((control) => control.intersectionId === 1)).toBe(false);
   });
 
   it("discovers signals only from the remaining route", () => {
