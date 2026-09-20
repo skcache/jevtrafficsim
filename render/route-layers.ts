@@ -5,8 +5,8 @@
  * Both are world-bound: widths and sizes are in MAP METRES so they grow as the
  * camera descends, with pixel values only as legibility floors and safety caps
  * (see render/scale.ts). The route is painted per road from the centralized
- * classifier, so a rerouted or congested trip repaints immediately and
- * deterministically.
+ * current-route payload, so reroutes repaint immediately. Traffic state is
+ * rendered by the separate citywide traffic layer; the route stays one colour.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
