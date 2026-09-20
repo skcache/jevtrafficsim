@@ -94,6 +94,32 @@ export interface RenderedVehicle {
   readonly queueRank: number;
 }
 
+/**
+ * Display-time ego road progress.
+ *
+ * The map runs at rAF while worker snapshots arrive at 5 Hz. Route trimming
+ * and contextual-control distance must follow the same interpolated progress as
+ * the visible car or the band/light visibly step every 200 ms. Across a road
+ * transition the current road wins; same-road motion is a scalar lerp.
+ */
+export function interpolateEgoRoadProgress(
+  previous: PresentationSnapshot | null,
+  current: PresentationSnapshot | null,
+  alpha: number,
+): { roadId: number | null; progress: number } | null {
+  const ego = current?.ego ?? null;
+  if (!ego) return null;
+  const before = previous?.ego ?? null;
+  if (before && before.id === ego.id && before.roadId === ego.roadId) {
+    const t = clamp01(alpha);
+    return {
+      roadId: ego.roadId,
+      progress: before.progress + (ego.progress - before.progress) * t,
+    };
+  }
+  return { roadId: ego.roadId, progress: ego.progress };
+}
+
 export interface InterpolateOptions {
   /** Wall-clock now, for spawn fades. */
   readonly nowMs: number;
