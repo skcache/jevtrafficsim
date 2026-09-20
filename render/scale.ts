@@ -19,9 +19,9 @@
 export const ROUTE_SCALE = {
   /** Navigation blue stays constant; traffic state is a separate city layer. */
   color: [55, 112, 214] as const,
-  widthM: 10.5,
-  minPixels: 4.25,
-  maxPixels: 30,
+  widthM: 13,
+  minPixels: 5,
+  maxPixels: 36,
   opacity: 0.96,
 } as const;
 
@@ -66,21 +66,21 @@ export const CONTROL_SCALE = {
    * network marker and grows continuously as the ego approaches. This is the
    * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
    */
-  signalBaseHeightM: 5.5,
-  signalHeightM: 16,
-  stopBaseHeightM: 5,
-  stopHeightM: 12,
-  minPixels: 5,
-  maxPixels: 88,
+  signalBaseHeightM: 4.8,
+  signalHeightM: 13.5,
+  stopBaseHeightM: 4.4,
+  stopHeightM: 10.5,
+  minPixels: 4,
+  maxPixels: 72,
   opacityFloor: 0.5,
 } as const;
 
 /** Tiny neutral signal heads that prove the whole-city control system exists. */
 export const NETWORK_CONTROL_SCALE = {
-  signalHeightM: 5.5,
-  minPixels: 4,
-  maxPixels: 14,
-  opacity: 0.34,
+  signalHeightM: 4.8,
+  minPixels: 3.5,
+  maxPixels: 12,
+  opacity: 0.3,
   minZoom: 12.8,
 } as const;
 
