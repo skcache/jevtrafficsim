@@ -12,9 +12,9 @@
  */
 
 /**
- * The ego route is ONE clean band. No casing/core double stroke: that produced
- * bulbous circles where per-road paths met and made the route look like two
- * unrelated lines. Traffic state may still change the band colour by segment.
+ * The ego route is ONE clean navigation-blue band. No casing/core double
+ * stroke and no per-road colour switching: both produced seams/bulbous
+ * intersection artifacts and made the route read as multiple objects.
  */
 export const ROUTE_SCALE = {
   /** Navigation blue stays constant; traffic state is a separate city layer. */
