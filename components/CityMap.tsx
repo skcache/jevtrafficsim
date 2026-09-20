@@ -596,6 +596,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               // This is deliberate proof that the challenge sits on top of a
               // live citywide system rather than animating one private route.
               ...congestion,
+              // Hazards belong to the city traffic system too. Keep their
+              // geographic markers visible during landing/config preview so
+              // the map can show "traffic + incidents" before the ego route
+              // becomes the foreground experience.
+              ...incidents.layers,
             ];
         const networkSignalLayers: Layer[] = trafficHiddenRef.current
           ? []
@@ -623,13 +628,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 // Contextual controls take over from the tiny network marker as
                 // the ego approaches, then retire back to network scale.
                 ...buildControlLayers(projection, controls, controlSpritesRef.current),
-                ...incidents.layers,
               ];
 
-        // Layer order is intentional. Traffic sits on the roads; the blue route
-        // sits above traffic; tiny citywide signal infrastructure stays visible
-        // above the route until its contextual replacement takes over; the ego
-        // and relevant live control own the top of the visual hierarchy.
+        // Layer order is intentional. Traffic + hazards sit on the road network;
+        // the blue route sits above that system; tiny citywide signal
+        // infrastructure remains visible until its contextual replacement takes
+        // over; the ego and relevant live control own the top hierarchy.
         const layers: Layer[] = [
           ...networkTrafficLayers,
           ...routeLayers,
@@ -637,10 +641,13 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           ...challengeTopLayers,
         ];
         overlayRef.current?.setProps({ layers });
-        const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
-        const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
+
+        // Keep verbose incident plates out of onboarding so the setup remains
+        // calm, but retain the actual crash/closure/event geometry underneath.
+        const showIncidentLabels = liveRef.current && !trafficHiddenRef.current;
+        const visiblePlates = showIncidentLabels ? incidents.extras.plates : [];
         platesRef.current = visiblePlates;
-        crashRef.current = showDynamicMapState ? incidents.extras.crash : null;
+        crashRef.current = !trafficHiddenRef.current ? incidents.extras.crash : null;
         syncPlates(visiblePlates);
         if (window.location.search.includes("debug")) {
           const buckets = [0, 0, 0, 0, 0];
