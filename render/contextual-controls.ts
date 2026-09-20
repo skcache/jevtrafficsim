@@ -212,7 +212,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
   // is primary, AT MOST one second stays quieter. Emphasis grows continuously
   // from the preview boundary to the primary band so the citywide micro-signal
   // feels like it enlarges as the ego approaches instead of popping in.
-  const upcoming = controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => {
+  const upcoming: ContextualControl[] = controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => {
     const raw =
       control.distanceAheadM <= CONTROL_REVEAL.primaryM
         ? 1
