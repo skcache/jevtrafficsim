@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chicagoModel } from "./chicago-support";
-import { materializeCuratedTrip } from "@/cities/chicago-trips";
+import { CURATED_TRIPS, materializeCuratedTrip } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import {
   CHALLENGE_INCIDENT_COUNTS,
@@ -32,6 +32,23 @@ describe("Issue #27 challenge incident planning", () => {
     expect(buildChallengeIncidentPlan(model, trip, "light", 42).entries).toEqual([]);
     expect(buildChallengeIncidentPlan(model, trip, "everyday", 42).entries).toHaveLength(1);
     expect(buildChallengeIncidentPlan(model, trip, "rush-hour", 42).entries).toHaveLength(2);
+  });
+
+  it("builds the promised incident count for all six curated trips", () => {
+    for (const curated of CURATED_TRIPS) {
+      const materialized = materializeCuratedTrip(model, {
+        tripId: curated.id,
+        seed: 42,
+      });
+      expect(
+        buildChallengeIncidentPlan(model, materialized, "everyday", 42).entries,
+        curated.id,
+      ).toHaveLength(1);
+      expect(
+        buildChallengeIncidentPlan(model, materialized, "rush-hour", 42).entries,
+        curated.id,
+      ).toHaveLength(2);
+    }
   });
 
   it("is byte-identical for the same controller-neutral inputs", () => {
