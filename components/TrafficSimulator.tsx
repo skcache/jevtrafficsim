@@ -13,6 +13,7 @@
 import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
+import type { CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
@@ -110,7 +111,6 @@ export function TrafficSimulator() {
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
   const citySize = useUiStore((state) => state.citySize);
-  const tripId = useUiStore((state) => state.tripId);
   /** True while the landing's background run is the one on screen. */
   const prewarmRef = useRef(false);
 
@@ -195,7 +195,7 @@ export function TrafficSimulator() {
   }, []);
 
   const startRun = useCallback(
-    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; seed: number }> = {}) => {
+    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; tripId: CuratedTripId; seed: number }> = {}) => {
       const state = useUiStore.getState();
       state.setError(null);
       state.setRunComplete(false);
@@ -203,7 +203,7 @@ export function TrafficSimulator() {
         type: "INIT",
         citySize: overrides.citySize ?? state.citySize,
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
-        tripId: state.tripId,
+        tripId: overrides.tripId ?? state.tripId,
         controller: state.controller,
         seed: overrides.seed ?? state.seed,
       });
@@ -237,10 +237,11 @@ export function TrafficSimulator() {
     [send],
   );
 
-  const onCitySize = useCallback(
-    (citySize: CitySize) => {
-      useUiStore.getState().setCitySize(citySize);
-      startRun({ citySize });
+  const onTripId = useCallback(
+    (tripId: CuratedTripId) => {
+      const store = useUiStore.getState();
+      store.setTripId(tripId);
+      startRun({ citySize: "large", tripId });
     },
     [startRun],
   );
@@ -325,7 +326,7 @@ export function TrafficSimulator() {
           onPause={onPause}
           onResume={onResume}
           onController={onController}
-          onCitySize={onCitySize}
+          onTripId={onTripId}
           onTrafficLevel={onTrafficLevel}
           onSeed={onSeed}
           onRestart={onRestart}
