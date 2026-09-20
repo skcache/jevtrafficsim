@@ -302,13 +302,19 @@ describe("product shell contracts", () => {
     expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
   });
 
-  it("shows the citywide traffic system behind the ego challenge", () => {
+  it("shows citywide traffic context without double-painting the ego route", () => {
     expect(map).toContain("buildNetworkSignalLayers");
     expect(map).toContain("networkSignalMarkers");
     expect(map).toContain("buildCongestionLayers");
     // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
     // road state even while the camera is close enough to inspect the ego.
     expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
+    // The route already paints its own blue/amber/red state. Citywide pressure
+    // must not peek out around it as a second coloured stroke.
+    expect(map).toContain("!routeRoadIds.has(entry.roadId)");
+    // The tiny neutral signal yields while that intersection is contextual, so
+    // the user sees one control enlarging rather than two stacked glyphs.
+    expect(map).toContain("!contextualIntersectionIds.has(marker.intersectionId)");
   });
 
   it("swaps every presentation source when the city scale changes", () => {
