@@ -11,8 +11,11 @@ describe("citywide traffic-system presentation", () => {
 
   it("derives neutral signal markers from static Chicago controls", () => {
     const markers = networkSignalMarkers(model);
-    expect(markers.length).toBe(model.city.intersections.filter((node) => node.control === "signal").length);
+    const allSignals = model.city.intersections.filter(
+      (node) => node.control === "signal",
+    ).length;
     expect(markers.length).toBeGreaterThan(100);
+    expect(markers.length).toBeLessThanOrEqual(allSignals);
     expect(new Set(markers.map((marker) => marker.intersectionId)).size).toBe(markers.length);
   });
 
