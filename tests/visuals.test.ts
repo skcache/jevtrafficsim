@@ -11,6 +11,9 @@
 import { describe, expect, it } from "vitest";
 import {
   hatchSegments,
+  signalGateBackingWidthPx,
+  signalGateWidthPx,
+  signalHeadHeightPx,
   signalTier,
   signalTierOpacity,
   sparklineLastPoint,
@@ -84,6 +87,21 @@ describe("signal tiers", () => {
     expect(signalTierOpacity(16.2)).toBeCloseTo(1, 5);
     expect(signalTierOpacity(16.5)).toBeCloseTo(1, 5);
     expect(signalTierOpacity(17.5)).toBeCloseTo(1, 5);
+  });
+
+  it("scales both semantic gates and physical heads continuously with zoom", () => {
+    expect(signalGateWidthPx(15.8)).toBeCloseTo(3.1, 3);
+    expect(signalGateWidthPx(19.5)).toBeGreaterThan(6.3);
+    expect(signalGateBackingWidthPx(17)).toBeGreaterThan(signalGateWidthPx(17));
+    expect(signalHeadHeightPx(16.5)).toBeCloseTo(22, 5);
+    expect(signalHeadHeightPx(19.5)).toBeCloseTo(56, 5);
+    expect(signalHeadHeightPx(19)).toBeGreaterThan(signalHeadHeightPx(18));
+
+    let previousGate = signalGateWidthPx(15.8);
+    for (let zoom = 15.9; zoom <= 19.5; zoom += 0.1) {
+      expect(signalGateWidthPx(zoom)).toBeGreaterThanOrEqual(previousGate - 1e-9);
+      previousGate = signalGateWidthPx(zoom);
+    }
   });
 });
 

@@ -19,7 +19,7 @@
  * Approach direction is carried by the colored state gate across the road; the
  * head's only job is to read instantly as a familiar red/yellow/green light.
  *
- * Convention: sprites are centred in their cell; `getAngle` rotates them.
+ * Convention: sprites are centred in their cell and remain screen-aligned.
  */
 import type { SignalStage } from "@/sim/signals";
 
@@ -42,15 +42,15 @@ interface SpritePart {
 /* ------------------------------------------------------------------ */
 
 /** Lit lamps, matching the muted signal palette the layer already used. */
-const LIT_RED = "#b23a2c";
-const LIT_YELLOW = "#c98a2b";
-const LIT_GREEN = "#2f8a55";
+const LIT_RED = "#e64b43";
+const LIT_YELLOW = "#e2a329";
+const LIT_GREEN = "#2fa463";
 
 /** Housing and its restrained border. */
-const HOUSING = "#3a3f45";
-const HOUSING_BORDER = "#22262b";
+const HOUSING = "#34383d";
+const HOUSING_BORDER = "#171a1d";
 /** Lamps that are not lit: present, but barely there. */
-const LAMP_DIM = "#2f3338";
+const LAMP_DIM = "#1f2327";
 
 /* ------------------------------------------------------------------ */
 /* Geometry helpers (authoring-time path data)                         */
@@ -84,14 +84,14 @@ function circlePath(cx: number, cy: number, r: number): string {
 /* ------------------------------------------------------------------ */
 
 /** Housing extent in sprite units (the cell is 64 × 128). */
-export const SIGNAL_SPRITE_UNITS = { width: 40, height: 96 } as const;
+export const SIGNAL_SPRITE_UNITS = { width: 44, height: 100 } as const;
 
 /** Lamp centres, top (red) to bottom (green), in sprite units. */
-export const SIGNAL_LAMP_OFFSETS_Y: readonly [number, number, number] = [-30, 0, 30];
+export const SIGNAL_LAMP_OFFSETS_Y: readonly [number, number, number] = [-31, 0, 31];
 
-const LAMP_RADIUS = 13;
+const LAMP_RADIUS = 12.5;
 /** Inner highlight radius: reads as "lit" without glowing. */
-const LAMP_CORE_RADIUS = 4.5;
+const LAMP_CORE_RADIUS = 4;
 
 /** Which lamp each state lights: 0 = top (red), 1 = middle, 2 = bottom. */
 export const SIGNAL_SPRITE_LIT_LAMP: Record<SignalSpriteId, 0 | 1 | 2> = {
@@ -109,10 +109,10 @@ const LIT_COLOR: Record<SignalSpriteId, string> = {
 function signalSprite(lit: 0 | 1 | 2): readonly SpritePart[] {
   const { width, height } = SIGNAL_SPRITE_UNITS;
   const parts: SpritePart[] = [
-    // Housing, then a border just inside it: restrained, never glowing.
-    { d: roundedRectPath(0, 0, width, height, 10), fill: HOUSING },
-    { d: roundedRectPath(0, 0, width - 6, height - 6, 8), fill: HOUSING_BORDER },
-    { d: roundedRectPath(0, 0, width - 10, height - 10, 7), fill: HOUSING },
+    // Two clean masses survive rasterisation at 16 px far better than the old
+    // three nested rectangles, which collapsed into a black dash.
+    { d: roundedRectPath(0, 0, width, height, 9), fill: HOUSING_BORDER },
+    { d: roundedRectPath(0, 0, width - 5, height - 5, 7), fill: HOUSING },
   ];
   const id = (Object.keys(SIGNAL_SPRITE_LIT_LAMP) as SignalSpriteId[]).find(
     (key) => SIGNAL_SPRITE_LIT_LAMP[key] === lit,

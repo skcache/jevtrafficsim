@@ -12,6 +12,7 @@
  * `*PxAt` helpers convert to pixels at a given zoom using Chicago's latitude.
  */
 import type { MapModel } from "@/cities/map-model";
+import type { City } from "@/sim/types";
 
 import {
   LANE_WIDTH_M,
@@ -31,9 +32,41 @@ export function metresPerPixel(zoom: number): number {
   return (EARTH_CIRCUMFERENCE_PX * Math.cos((CHICAGO_LATITUDE * Math.PI) / 180)) / 2 ** zoom;
 }
 
+/**
+ * Presentation scale for roads. Physical map scaling already makes a road grow
+ * with zoom; this adds a deliberate close-inspection exaggeration so streets do
+ * not remain hairlines while cars and traffic lights become legible.
+ */
+export function roadVisualScaleAt(zoom: number): number {
+  if (!Number.isFinite(zoom)) {
+    return 1;
+  }
+  const stops: readonly [number, number][] = [
+    [9, 0.95],
+    [11, 1],
+    [13, 1.06],
+    [15, 1.16],
+    [17, 1.4],
+    [18.5, 1.75],
+    [19.5, 2.05],
+  ];
+  if (zoom <= stops[0][0]) {
+    return stops[0][1];
+  }
+  for (let i = 1; i < stops.length; i += 1) {
+    const [z1, s1] = stops[i];
+    const [z0, s0] = stops[i - 1];
+    if (zoom <= z1) {
+      const t = (zoom - z0) / (z1 - z0);
+      return s0 + (s1 - s0) * t;
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
 /** Pixel width for a physical width at a zoom (never below `minPx`). */
 export function widthPxAt(zoom: number, widthMetres: number, minPx = 0.6): number {
-  return Math.max(minPx, widthMetres / metresPerPixel(zoom));
+  return Math.max(minPx, (widthMetres * roadVisualScaleAt(zoom)) / metresPerPixel(zoom));
 }
 
 /**
@@ -173,6 +206,26 @@ export function laneSlotFor(vehicleId: number, roadId: number, lanes: number): n
   return Math.abs((vehicleId * 2654435761 + roadId * 40503) % lanes);
 }
 
+/**
+ * Stable physical lane offset for one vehicle on one directed road.
+ *
+ * `baseOffsets` contains the centre of the direction's lane group. This helper
+ * adds the per-vehicle lane slot inside that group so interpolation, signal
+ * clamping and queue packing cannot disagree about which lane a vehicle uses.
+ */
+export function vehicleLaneOffsetMetres(
+  city: City,
+  baseOffsets: readonly number[],
+  vehicleId: number,
+  roadId: number,
+): number {
+  const road = city.roads[roadId];
+  const lanes = Math.max(1, road?.lanes ?? 1);
+  const slot = laneSlotFor(vehicleId, roadId, lanes);
+  const withinGroup = (slot - (lanes - 1) / 2) * LANE_WIDTH_M;
+  return (baseOffsets[roadId] ?? 0) + withinGroup;
+}
+
 /** True when this directed road is one of two directions on one carriageway. */
 export function isSharedCarriageway(
   pairs: { readonly partners: readonly (readonly number[])[] },
@@ -192,3 +245,15 @@ export const VEHICLE_LENGTH_M: Record<string, number> = {
 };
 /** Gap left between queued vehicles. */
 export const QUEUE_GAP_M = 1.1;
+/** Extra bumper clearance behind the rendered stop/go gate. */
+export const STOP_LINE_CLEARANCE_M = 0.8;
+
+/**
+ * Physical stop-line setback from an intersection centre for one incoming lane
+ * group. Signal rendering and queued-vehicle placement MUST share this helper,
+ * otherwise the light and the vehicle can disagree about where "stop" is.
+ */
+export function stopLineSetbackMetres(lanes: number): number {
+  const halfLaneGroupM = (Math.max(1, lanes) * LANE_WIDTH_M) / 2;
+  return Math.min(9, Math.max(5, halfLaneGroupM + 3.6));
+}

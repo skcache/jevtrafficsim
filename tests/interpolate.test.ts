@@ -5,8 +5,14 @@
  */
 import { describe, expect, it } from "vitest";
 import { angleDelta, interpolateVehicles, lerpAngle, positionForRoad } from "@/render/interpolate";
-import { packQueues } from "@/render/queue-packing";
-import { LANE_WIDTH_M, QUEUE_GAP_M, VEHICLE_LENGTH_M } from "@/render/road-presentation";
+import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
+import {
+  LANE_WIDTH_M,
+  QUEUE_GAP_M,
+  STOP_LINE_CLEARANCE_M,
+  VEHICLE_LENGTH_M,
+  stopLineSetbackMetres,
+} from "@/render/road-presentation";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import type { City, Road } from "@/sim/types";
@@ -134,12 +140,10 @@ describe("turn interpolation", () => {
       0.5,
       options(city, laneOffsets),
     )[0];
-    // t=0.5 -> 7.5 m travelled. The turn is a quadratic curve now, so the
-    // sample sits slightly inside the straight line to the junction — that
-    // curvature IS the no-corner-cut behaviour.
-    expect(beforeJunction.x).toBeGreaterThan(97);
-    expect(beforeJunction.x).toBeLessThan(97.5);
-    expect(Math.abs(beforeJunction.y)).toBeLessThan(1.2);
+    // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
+    expect(beforeJunction.x).toBeCloseTo(97.5, 6);
+    // Lane offset tapers into the shared junction node, so the path stays continuous.
+    expect(beforeJunction.y).toBeCloseTo(-0.53125, 6);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,
@@ -148,10 +152,9 @@ describe("turn interpolation", () => {
       0.8,
       options(city, laneOffsets),
     )[0];
-    // On the new road, and still east of the junction: a straight-line lerp
-    // would have cut the corner through the block.
-    expect(pastJunction.x).toBeGreaterThan(98);
-    expect(pastJunction.y).toBeGreaterThan(0);
+    // Once the junction is crossed, position stays exactly on the new road.
+    expect(pastJunction.x).toBeCloseTo(100, 6);
+    expect(pastJunction.y).toBeCloseTo(2, 6);
   });
 
   it("rotates the heading the short way around", () => {
@@ -168,7 +171,32 @@ describe("turn interpolation", () => {
     const current = snapshot(100, [{ id: 1, roadId: 0, progress: 30 }]);
     const mid = interpolateVehicles(indexes, previous, current, 0.5, options(city, laneOffsets))[0];
     expect(mid.x).toBeCloseTo(25, 6);
-    expect(mid.y).toBeCloseTo(0, 6);
+    expect(mid.y).toBeCloseTo(-1.7, 6);
+  });
+
+  it("stays on a curved road between snapshots instead of cutting the chord", () => {
+    const base = straightModel();
+    const elbow = {
+      ...base,
+      directedPaths: [
+        [[0, 0], [50, 0], [50, 50]],
+        ...base.directedPaths.slice(1),
+      ],
+    } as unknown as MapModel;
+    const elbowIndexes = buildDirectedPathIndexes(elbow);
+    const previous = snapshot(0, [{ id: 1, roadId: 0, progress: 20 }]);
+    const current = snapshot(100, [{ id: 1, roadId: 0, progress: 70 }]);
+    const mid = interpolateVehicles(
+      elbowIndexes,
+      previous,
+      current,
+      0.5,
+      options(elbow.city, laneOffsets),
+    )[0];
+    // Scalar progress=45 stays on the incoming leg. A screen-space chord would
+    // cut diagonally through the block.
+    expect(mid.x).toBeCloseTo(45, 6);
+    expect(mid.y).toBeCloseTo(-1.7, 6);
   });
 
   it("handles a left turn as well as a right turn", () => {
@@ -203,15 +231,14 @@ describe("turn interpolation", () => {
     const current = snapshot(100, [{ id: 11, roadId: 3, progress: 4 }]);
     const offsets = [0, 0, 0, 0];
     const mid = interpolateVehicles(leftIndexes, previous, current, 0.6, options(leftCity, offsets))[0];
-    // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle is still short
-    // of the junction, on the curve.
-    expect(mid.x).toBeGreaterThan(98.4);
-    expect(mid.x).toBeLessThan(99.3);
-    expect(Math.abs(mid.y)).toBeLessThan(1.2);
+    // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle remains
+    // exactly on the incoming road.
+    expect(mid.x).toBeCloseTo(99.2, 6);
+    expect(mid.y).toBeCloseTo(-0.17, 6);
     const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
-    // t=0.9 -> 10.8 m: past the junction, heading north (negative y).
-    expect(after.x).toBeGreaterThan(98.5);
-    expect(after.y).toBeLessThan(-0.5);
+    // t=0.9 -> 10.8 m: 2.8 m onto the outgoing road, still road-locked.
+    expect(after.x).toBeCloseTo(100, 6);
+    expect(after.y).toBeCloseTo(-2.8, 6);
   });
 
   it("falls back to the current position when the roads are not joined", () => {
@@ -254,6 +281,65 @@ describe("spawn fade", () => {
   });
 });
 
+describe("physical stop-line clamping", () => {
+  const model = straightModel();
+  const city = model.city;
+  const indexes = buildDirectedPathIndexes(model);
+  const laneOffsets = [0, 0, 0];
+
+  it("never lets a red-light vehicle render inside the intersection", () => {
+    const rendered = [{
+      id: 1,
+      roadId: 0,
+      type: "car",
+      state: "moving",
+      x: 99,
+      y: 0,
+      headingRadians: 0,
+      blockedWaitMs: 0,
+      fade: 1,
+      queueRank: -1,
+    }] as never;
+    const progress = new Map([[1, 99]]);
+
+    const stopped = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "all-red" }],
+    );
+    const expected =
+      100 -
+      stopLineSetbackMetres(city.roads[0].lanes) -
+      VEHICLE_LENGTH_M.car / 2 -
+      STOP_LINE_CLEARANCE_M;
+    expect(stopped[0].x).toBeCloseTo(expected, 6);
+    expect(stopped[0].x).toBeLessThan(100 - stopLineSetbackMetres(city.roads[0].lanes));
+
+    const yellow = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "yellow" }],
+    );
+    expect(yellow[0].x).toBeCloseTo(expected, 6);
+
+    const green = clampVehiclesAtSignals(
+      city,
+      indexes,
+      laneOffsets,
+      rendered,
+      (id) => progress.get(id) ?? 0,
+      [{ intersectionId: 1, phaseIndex: 0, stage: "green" }],
+    );
+    expect(green[0].x).toBe(99);
+  });
+});
+
 describe("queue packing", () => {
   const model = straightModel();
   const city = model.city;
@@ -262,9 +348,7 @@ describe("queue packing", () => {
 
 
 
-  it("ranks a mixed queue front-first and never overlaps", () => {
-    // All three share the same stop-line progress, as the simulation allows.
-    // The order comes from the worker's rank, not from progress or from id.
+  it("packs a mixed queue into stable physical lanes without overlap", () => {
     const rendered = [
       { id: 1, roadId: 0, type: "car", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 0, fade: 1, queueRank: 0 },
       { id: 2, roadId: 0, type: "truck", state: "queued", x: 0, y: 0, headingRadians: 0, blockedWaitMs: 0, fade: 1, queueRank: 1 },
@@ -276,19 +360,26 @@ describe("queue packing", () => {
       [3, 95],
     ]);
     const packed = packQueues(city, indexes, laneOffsets, rendered, (id) => progress.get(id) ?? 0);
-    const sorted = [...packed].sort((a, b) => a.queueRank - b.queueRank);
-    expect(sorted.map((vehicle) => vehicle.id)).toEqual([1, 2, 3]);
-    // Spacing uses real class lengths plus the gap.
-    const gapAfterFront = (VEHICLE_LENGTH_M.car + QUEUE_GAP_M);
-    expect(Math.hypot(sorted[1].x - sorted[0].x, sorted[1].y - sorted[0].y)).toBeCloseTo(
-      gapAfterFront,
-      6,
-    );
-    const gapAfterSecond = VEHICLE_LENGTH_M.truck + QUEUE_GAP_M;
-    expect(Math.hypot(sorted[2].x - sorted[1].x, sorted[2].y - sorted[1].y)).toBeCloseTo(
-      gapAfterSecond,
-      6,
-    );
+    const byId = new Map(packed.map((vehicle) => [vehicle.id, vehicle]));
+    const car = byId.get(1)!;
+    const truck = byId.get(2)!;
+    const bike = byId.get(3)!;
+
+    const expectedCarFront =
+      100 -
+      stopLineSetbackMetres(city.roads[0].lanes) -
+      VEHICLE_LENGTH_M.car / 2 -
+      STOP_LINE_CLEARANCE_M;
+    expect(car.x).toBeCloseTo(expectedCarFront, 6);
+
+    // Stable id slots put ids 1 and 3 in one lane and id 2 in the other.
+    expect(car.y).toBeCloseTo(bike.y, 6);
+    expect(truck.y).not.toBeCloseTo(car.y, 6);
+
+    // Only vehicles sharing a lane pack bumper-to-bumper.
+    const carToBike =
+      VEHICLE_LENGTH_M.car / 2 + QUEUE_GAP_M + VEHICLE_LENGTH_M.bicycle / 2;
+    expect(Math.abs(car.x - bike.x)).toBeCloseTo(carToBike, 6);
   });
 
   it("is deterministic for identical state", () => {
@@ -328,9 +419,12 @@ describe("queue packing", () => {
       expect(vehicle.x).toBeGreaterThanOrEqual(0);
       expect(vehicle.x).toBeLessThanOrEqual(100);
     }
-    // The last one is pinned at the road entrance, not past it.
-    const last = [...packed].sort((a, b) => b.queueRank - a.queueRank)[0];
-    expect(last.x).toBeCloseTo(0, 6);
+    const ys = new Set(packed.map((vehicle) => vehicle.y.toFixed(3)));
+    const positions = new Set(
+      packed.map((vehicle) => `${vehicle.x.toFixed(3)}:${vehicle.y.toFixed(3)}`),
+    );
+    expect(ys.size).toBe(2);
+    expect(positions.size).toBe(packed.length);
   });
 
   it("leaves moving vehicles alone", () => {

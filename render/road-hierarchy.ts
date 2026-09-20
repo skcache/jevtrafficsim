@@ -16,42 +16,83 @@
  *   - the second cause was ordinary short pieces: 130 unnamed pieces under 60 m
  *     (mostly tertiary/residential stubs between close intersections) drawn at
  *     mid zoom with a legibility floor, which fattens a stub into a ramp.
+ *   - OSM "*_link" does NOT mean "freeway ramp". Chicago contains short
+ *     secondary_link turn channels on ordinary downtown streets. Promoting every
+ *     link class to the highway material produced the tan mini-ramps visible on
+ *     Washington/Madison in the showcase screenshots.
  */
 import type { Point } from "@/cities/paths";
 
-export type RoadPresentationClass = "primary" | "secondary" | "detail";
+export type RoadPresentationClass = "primary" | "secondary" | "hidden";
 
 export interface RoadPresentationInput {
   readonly osmClass: string;
   readonly name?: string;
   readonly length: number;
+  readonly bridgeStructure?: boolean;
+  readonly tunnel?: boolean;
+  readonly layer?: number;
 }
 
 /** Pieces shorter than this with no name are map texture, not streets. */
-export const DETAIL_MAX_LENGTH_M = 60;
+export const DETAIL_MAX_LENGTH_M = 30;
 
 /**
  * PRIMARY   the network's structure: expressways, ramps, and Chicago's grid
  *           streets (secondary carries most of the Loop's named avenues).
  * SECONDARY ordinary local streets: tertiary, residential, unclassified.
- * DETAIL    short unnamed stubs. They are real roads and keep routing; they
- *           simply do not earn ink until the camera is close.
+ * HIDDEN    surface-street link channels and tiny unnamed connector pieces.
+ *           They remain simulation topology but do not become standalone map
+ *           objects. At this product's scale they read as a vehicle completing
+ *           a turn/transition, which is more useful than drawing fake ramps.
  */
 export function roadPresentationClass(piece: RoadPresentationInput): RoadPresentationClass {
   const osmClass = piece.osmClass;
+
+  // Never hide physical structure. A short bridge/tunnel/stack segment may be
+  // visually small, but if traffic can occupy it the map must provide a road
+  // underneath that traffic. This is the invariant that prevents "truck in the
+  // river" frames when a short grade-separated OSM piece is traversed.
+  const structural = piece.bridgeStructure || piece.tunnel || (piece.layer ?? 0) !== 0;
+
+  // Only links attached to the expressway hierarchy are visually ramps.
+  // Surface-street link classes are turn/slip channels; they stay routable but
+  // never become standalone cartographic roads. A vehicle traversing one reads
+  // as making a turn through the intersection, which is the useful abstraction.
   if (
     osmClass === "motorway" ||
     osmClass === "trunk" ||
+    osmClass === "motorway_link" ||
+    osmClass === "trunk_link" ||
     osmClass === "primary" ||
-    osmClass === "secondary" ||
-    osmClass.endsWith("_link")
+    osmClass === "secondary"
   ) {
     return "primary";
   }
+  if (structural) {
+    return "secondary";
+  }
+  if (osmClass.endsWith("_link")) {
+    // Surface *_link geometry is usually OSM turn/slip plumbing, not a street
+    // a human would identify as a separate road. The old 45 m threshold leaked
+    // block-length pseudo-ramps back into the Loop. Keep only long, NAMED links
+    // as standalone streets; structural links were already preserved above.
+    return piece.name && piece.length > 120 ? "secondary" : "hidden";
+  }
   if (piece.length < DETAIL_MAX_LENGTH_M && !piece.name) {
-    return "detail";
+    return "hidden";
   }
   return "secondary";
+}
+
+/** True only for the OSM classes that should read as an expressway/ramp. */
+export function isExpresswayClass(osmClass: string): boolean {
+  return (
+    osmClass === "motorway" ||
+    osmClass === "trunk" ||
+    osmClass === "motorway_link" ||
+    osmClass === "trunk_link"
+  );
 }
 
 /** Ray-cast point-in-ring; the rings are metric, like the points. */

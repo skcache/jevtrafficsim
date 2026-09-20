@@ -13,7 +13,16 @@ import type { DirectedPathIndexes } from "./map-geometry";
 import { applyLaneOffset } from "./map-geometry";
 import type { MapModel } from "@/cities/map-model";
 import { CONGESTION_COLORS, type RoadPressure } from "./congestion";
-import { carriagewayPairs, directionalLanes, laneCentreOffsetMetres, LANE_WIDTH_M, widthMetresForRoad, widthPxAt } from "./road-presentation";
+import {
+  VEHICLE_LENGTH_M,
+  carriagewayPairs,
+  directionalLanes,
+  laneCentreOffsetMetres,
+  LANE_WIDTH_M,
+  roadVisualScaleAt,
+  stopLineSetbackMetres,
+  widthMetresForRoad,
+} from "./road-presentation";
 import {
   SIGNAL_HEAD_MINZOOM,
   SIGNAL_STATE_MINZOOM,
@@ -28,11 +37,10 @@ import { metricToLngLat, type Projection } from "@/cities/map-model";
 import {
   hatchSegments,
   signalTierOpacity,
-  vehicleLengthPx,
 } from "./visuals";
-import { iconSizeForLengthPx } from "./vehicle-sprites";
+import { iconSizeForLengthUnits } from "./vehicle-sprites";
+import { roadPresentationClass } from "./road-hierarchy";
 import {
-  signalIconSizeForHousingPx,
   signalSpriteForStage,
   type SignalSpriteId,
   type SignalSpriteSet,
@@ -91,7 +99,10 @@ function meanBearing(model: MapModel, roads: readonly RoadId[]): number {
   return Math.atan2(sy, sx);
 }
 
-const SIGNAL_ARM_MERGE_RAD = (18 * Math.PI) / 180;
+// OSM often splits one physical approach into several near-parallel directed
+// pieces. 24° is wide enough to collapse those artifacts while keeping true
+// orthogonal/Y-junction approaches distinct.
+const SIGNAL_ARM_MERGE_RAD = (24 * Math.PI) / 180;
 
 function bearingDistance(a: number, b: number): number {
   const full = Math.PI * 2;
@@ -105,7 +116,14 @@ function presentationArms(
   pairs: ReturnType<typeof carriagewayPairs>,
 ): SignalArm[] {
   const candidates = roads
-    .filter((roadId) => !!model.city.roads[roadId])
+    .filter((roadId) => {
+      if (!model.city.roads[roadId]) {
+        return false;
+      }
+      const pieceIndex = pairs.pieceOf[roadId] ?? -1;
+      const piece = pieceIndex >= 0 ? model.streets[pieceIndex] : undefined;
+      return !piece || roadPresentationClass(piece) !== "hidden";
+    })
     .map((roadId) => {
       const lanes = directionalLanes(model, roadId);
       return {
@@ -169,9 +187,6 @@ export function buildSignalPlans(model: MapModel): Map<number, SignalPlanEntry> 
   return plans;
 }
 
-/** State gate sits this far before the junction, on the real approach. */
-const SIGNAL_STOP_BAR_OFFSET_M = 3.2;
-
 const SIGNAL_GATE_COLORS: Record<SignalSpriteId, [number, number, number, number]> = {
   "signal-red": [188, 63, 52, 235],
   "signal-yellow": [207, 146, 45, 235],
@@ -215,8 +230,10 @@ export function buildCongestionLayers(
       data,
       getPath: (item) => item.road.path as unknown as LngLat[],
       getColor: (item) => [...CONGESTION_COLORS[item.entry.level]],
-      getWidth: (item) => Math.max(1.4, widthPxAt(zoom, item.road.widthM)),
-      widthUnits: "pixels",
+      getWidth: (item) => item.road.widthM * roadVisualScaleAt(zoom),
+      widthUnits: "meters",
+      widthMinPixels: 1.4,
+      widthMaxPixels: 110,
       pickable: false,
     }),
   ];
@@ -227,49 +244,11 @@ export function buildCongestionLayers(
 /* ------------------------------------------------------------------ */
 
 /**
- * Deterministic sampling: how much of the fleet is worth drawing at a zoom.
- * Below close zoom a thousand equally prominent cars is confetti, so the
- * population thins with distance — but a queued or badly blocked vehicle is
- * never sampled out, because that is the information the frame is carrying.
+ * Vehicle visibility is binary by zoom: once the camera is close enough to
+ * render individual traffic, every active vehicle is drawn. Deterministic
+ * sub-sampling made cars appear/disappear while zooming and destroyed the sense
+ * of one coherent traffic system.
  */
-export function vehicleSampleRatio(zoom: number): number {
-  if (zoom >= 16.8) {
-    return 1;
-  }
-  if (zoom >= 16) {
-    return 0.72;
-  }
-  if (zoom >= 15.2) {
-    return 0.42;
-  }
-  if (zoom >= VEHICLE_MINZOOM) {
-    return 0.18;
-  }
-  return 0;
-}
-
-/** Stable hash, so the same vehicle is drawn or hidden frame after frame. */
-function vehicleHash(id: number): number {
-  let value = (id * 2654435761) >>> 0;
-  value ^= value >>> 13;
-  value = (value * 1274126177) >>> 0;
-  return (value ^ (value >>> 16)) >>> 0;
-}
-
-export function sampleVehicles(
-  vehicles: readonly RenderedVehicle[],
-  zoom: number,
-): RenderedVehicle[] {
-  const ratio = vehicleSampleRatio(zoom);
-  if (ratio >= 1) {
-    return [...vehicles];
-  }
-  const threshold = Math.round(ratio * 0xffffffff);
-  return vehicles.filter(
-    (vehicle) => vehicle.blockedWaitMs > 0 || vehicleHash(vehicle.id) < threshold,
-  );
-}
-
 export function buildVehicleLayers(
   projection: Projection,
   vehicles: readonly RenderedVehicle[],
@@ -281,10 +260,7 @@ export function buildVehicleLayers(
     // visual noise rather than information.
     return [];
   }
-  const visible = sampleVehicles(vehicles, zoom);
-  // Glyph length in pixels per class, at this zoom: a car stays a car and a
-  // truck stays a truck instead of every class shrinking together.
-  const lengthPx = (type: RenderedVehicle["type"]) => vehicleLengthPx(type, zoom);
+  const visible = vehicles;
   const layers: Layer[] = [];
   // One layer per class (three at most, not the seven wait-heat buckets this
   // used to split into): the sprite already carries the class silhouette and
@@ -302,12 +278,18 @@ export function buildVehicleLayers(
         iconMapping: icons.mapping,
         getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        getSize: iconSizeForLengthPx(type, lengthPx(type)),
+        // Physical vehicle size in map metres. This is the missing zoom
+        // contract: a 4.6 m car grows on screen as the camera descends instead
+        // of staying a ~14 px annotation forever.
+        // Map-space sizing is authoritative. The small pixel floor is only
+        // for legibility; after that vehicles keep growing with camera zoom.
+        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * 1.15),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
-        sizeUnits: "pixels",
+        sizeUnits: "meters",
+        sizeMinPixels: type === "bicycle" ? 4 : type === "truck" ? 10 : 7,
+        sizeMaxPixels: type === "bicycle" ? 52 : type === "truck" ? 140 : 96,
         billboard: false,
         pickable: false,
-        updateTriggers: { getSize: zoom },
       }),
     );
   }
@@ -331,10 +313,6 @@ export function buildSignalLayers(
   zoom: number,
   sprites: SignalSpriteSet | null = null,
 ): Layer[] {
-  // Signals are a street-zoom instrument. At far and mid zoom this returns
-  // nothing at all: a city-wide field of coloured dots is debug state, and
-  // congestion is carried by the road overlay instead. There is never a glyph
-  // in the middle of a junction — heads sit on the real approaches.
   if (!snapshot || zoom < SIGNAL_STATE_MINZOOM) {
     return [];
   }
@@ -342,16 +320,21 @@ export function buildSignalLayers(
 
   interface Head {
     position: LngLat;
-    /** Which signal sprite this approach shows: its state, or red if not active. */
     sprite: SignalSpriteId;
   }
   interface Bar {
     path: LngLat[];
     sprite: SignalSpriteId;
   }
-  const heads: Head[] = [];
-  const bars: Bar[] = [];
+  interface Glyph {
+    cx: number;
+    cy: number;
+    bearing: number;
+    bar: Bar;
+    head: Head | null;
+  }
 
+  const raw: Glyph[] = [];
   for (const signal of snapshot.signals) {
     const plan = plans.get(signal.intersectionId);
     if (!plan || plan.groupIncoming.length === 0) {
@@ -360,22 +343,22 @@ export function buildSignalLayers(
     const groupCount = plan.groupIncoming.length;
     const activeGroup =
       signal.stage === "all-red" ? -1 : ((signal.phaseIndex % groupCount) + groupCount) % groupCount;
+
     plan.groupArms.forEach((arms, groupIndex) => {
-      // The coloured gate is the primary signal language: state is painted
-      // directly at the stop line, so the user does not have to decode a tiny
-      // roadside object. Physical housings are progressive close-zoom detail.
       const sprite = signalSpriteForStage(signal.stage, groupIndex === activeGroup);
       for (const arm of arms) {
         const index = indexes[arm.roadId];
-        if (!index || index.total < SIGNAL_STOP_BAR_OFFSET_M + 1) {
+        const setbackM = stopLineSetbackMetres(directionalLanes(model, arm.roadId));
+        if (!index || index.total < setbackM + 1) {
           continue;
         }
-        const stopProgress = index.total - SIGNAL_STOP_BAR_OFFSET_M;
+
+        const stopProgress = index.total - setbackM;
         const sample = samplePathIndex(index, stopProgress);
         const laneCenter = applyLaneOffset(sample, arm.laneOffsetM);
         const nx = -Math.sin(sample.heading);
         const ny = Math.cos(sample.heading);
-        bars.push({
+        const bar: Bar = {
           sprite,
           path: [
             toLngLat(
@@ -389,24 +372,76 @@ export function buildSignalLayers(
               laneCenter.y + ny * arm.halfWidthM,
             ),
           ],
-        });
+        };
+
+        let head: Head | null = null;
         if (zoom >= SIGNAL_HEAD_MINZOOM) {
           const headSample = applyLaneOffset(
-            samplePathIndex(index, Math.max(0, stopProgress - 2.4)),
-            arm.laneOffsetM + arm.halfWidthM + 1.2,
+            samplePathIndex(index, Math.min(index.total, stopProgress + 0.35)),
+            arm.laneOffsetM + arm.halfWidthM + 1.65,
           );
-          heads.push({
+          head = {
             position: toLngLat(projection, headSample.x, headSample.y),
             sprite,
-          });
+          };
         }
+        raw.push({ cx: laneCenter.x, cy: laneCenter.y, bearing: sample.heading, bar, head });
       }
     });
   }
 
+  // Chicago OSM can encode one physical signalized approach as several nearby
+  // logical nodes. Rendering every node produces the stacked red/green ladders
+  // visible in the screenshots. Collapse only near-identical DIRECTIONAL
+  // approaches; opposite directions remain distinct.
+  const deduped: Glyph[] = [];
+  const directionGap = (a: number, b: number) => {
+    const full = Math.PI * 2;
+    const d = Math.abs(a - b) % full;
+    return Math.min(d, full - d);
+  };
+  const stateRank: Record<SignalSpriteId, number> = {
+    "signal-red": 3,
+    "signal-yellow": 2,
+    "signal-green": 1,
+  };
+  for (const glyph of raw) {
+    const match = deduped.find(
+      (candidate) =>
+        Math.hypot(candidate.cx - glyph.cx, candidate.cy - glyph.cy) <= 12 &&
+        directionGap(candidate.bearing, glyph.bearing) <= (18 * Math.PI) / 180,
+    );
+    if (!match) {
+      deduped.push(glyph);
+      continue;
+    }
+    // When duplicate logical nodes disagree for a frame, use the restrictive
+    // state. One physical stop line must never simultaneously look red+green.
+    if (stateRank[glyph.bar.sprite] > stateRank[match.bar.sprite]) {
+      match.bar = glyph.bar;
+      match.head = glyph.head;
+    }
+  }
+
+  const bars = deduped.map((glyph) => glyph.bar);
+  const heads = deduped.flatMap((glyph) => (glyph.head ? [glyph.head] : []));
   const layers: Layer[] = [];
+
   if (bars.length > 0) {
     layers.push(
+      new PathLayer<Bar>({
+        id: "signals-state-gate-backing",
+        data: bars,
+        getPath: (bar) => bar.path,
+        getColor: [52, 55, 58, Math.round(205 * opacity)],
+        getWidth: 1.55,
+        widthUnits: "meters",
+        widthMinPixels: 2.25,
+        widthMaxPixels: 18,
+        capRounded: true,
+        pickable: false,
+        updateTriggers: { getWidth: zoom },
+      }),
       new PathLayer<Bar>({
         id: "signals-state-gates",
         data: bars,
@@ -415,21 +450,18 @@ export function buildSignalLayers(
           const [r, g, b, a] = SIGNAL_GATE_COLORS[bar.sprite];
           return [r, g, b, Math.round(a * opacity)];
         },
-        getWidth: 3,
-        widthUnits: "pixels",
+        getWidth: 0.78,
+        widthUnits: "meters",
+        widthMinPixels: 1.4,
+        widthMaxPixels: 10,
         capRounded: true,
         pickable: false,
+        updateTriggers: { getWidth: zoom },
       }),
     );
   }
+
   if (heads.length > 0 && sprites) {
-    // One sprite per approach: a graphite housing with the active lamp lit and
-    // its companions dim. The sprite carries the state, so there is no coloured
-    // dot anywhere in this layer.
-    //
-    // When the atlas is missing (no DOM) the heads are hidden rather than
-    // substituted: a coloured circle is the debug language this replaced. The
-    // map component reports the missing atlas in its debug tooling.
     layers.push(
       new IconLayer<Head>({
         id: "signals-heads",
@@ -438,19 +470,21 @@ export function buildSignalLayers(
         iconMapping: sprites.mapping,
         getIcon: (head) => head.sprite,
         getPosition: (head) => head.position,
-        // The state gate already communicates approach direction. The housing
-        // is therefore screen-aligned like a map annotation, which keeps the
-        // familiar red/yellow/green stack instantly recognizable at any street
-        // angle instead of turning into a tiny rotated black dash.
-        getSize: signalIconSizeForHousingPx(zoom >= 17.8 ? 15 : 13),
+        // Signal heads are semantic instrumentation, not literal street
+        // furniture. Size them in map space so they grow as the camera descends,
+        // with generous pixel bounds so the state remains obvious.
+        getSize: 11.5,
         getAngle: 0,
         opacity,
-        sizeUnits: "pixels",
+        sizeUnits: "meters",
+        sizeMinPixels: 10,
+        sizeMaxPixels: 110,
         billboard: true,
         pickable: false,
       }),
     );
   }
+
   return layers;
 }
 
@@ -602,8 +636,10 @@ export function buildIncidentLayers(
         data: closedPaths,
         getPath: (path) => path,
         getColor: [176, 57, 43, 175],
-        getWidth: 5,
-        widthUnits: "pixels",
+        getWidth: 5.5,
+        widthUnits: "meters",
+        widthMinPixels: 4,
+        widthMaxPixels: 30,
         capRounded: true,
         pickable: false,
       }),
@@ -612,8 +648,10 @@ export function buildIncidentLayers(
         data: closedHatches,
         getPath: (path) => path,
         getColor: [255, 253, 249, 220],
-        getWidth: 2,
-        widthUnits: "pixels",
+        getWidth: 1.1,
+        widthUnits: "meters",
+        widthMinPixels: 1.2,
+        widthMaxPixels: 7,
         pickable: false,
       }),
     );
@@ -625,8 +663,10 @@ export function buildIncidentLayers(
         data: closedBridgePaths,
         getPath: (path) => path,
         getColor: [176, 57, 43, 195],
-        getWidth: 7,
-        widthUnits: "pixels",
+        getWidth: 7.5,
+        widthUnits: "meters",
+        widthMinPixels: 5,
+        widthMaxPixels: 38,
         capRounded: true,
         pickable: false,
       }),
@@ -638,8 +678,10 @@ export function buildIncidentLayers(
         id: "closed-roundels",
         data: closedRoundels,
         getPosition: (position) => position,
-        getRadius: 4,
-        radiusUnits: "pixels",
+        getRadius: 2.8,
+        radiusUnits: "meters",
+        radiusMinPixels: 4,
+        radiusMaxPixels: 18,
         getFillColor: [255, 253, 249, 250],
         stroked: true,
         getLineColor: [176, 57, 43, 250],
@@ -661,8 +703,10 @@ export function buildIncidentLayers(
         getPosition: (center) => center.position,
         // Sized to read at neighborhood zoom: a 4 px dot vanished into the
         // basemap, and an incident marker nobody can see is not a marker.
-        getRadius: 5,
-        radiusUnits: "pixels",
+        getRadius: 3.5,
+        radiusUnits: "meters",
+        radiusMinPixels: 5,
+        radiusMaxPixels: 22,
         filled: true,
         getFillColor: [176, 126, 68, 240],
         stroked: true,
@@ -681,16 +725,20 @@ export function buildIncidentLayers(
         getSourcePosition: (line) => line[0],
         getTargetPosition: (line) => line[1],
         getColor: [33, 29, 24, 150],
-        getWidth: 1.5,
-        widthUnits: "pixels",
+        getWidth: 0.9,
+        widthUnits: "meters",
+        widthMinPixels: 1.2,
+        widthMaxPixels: 6,
         pickable: false,
       }),
       new ScatterplotLayer<(typeof crashMarkers)[number]>({
         id: "crash-markers",
         data: crashMarkers,
         getPosition: (marker) => marker.position,
-        getRadius: 6,
-        radiusUnits: "pixels",
+        getRadius: 4,
+        radiusUnits: "meters",
+        radiusMinPixels: 5,
+        radiusMaxPixels: 24,
         getFillColor: [176, 57, 43, 245],
         stroked: true,
         getLineColor: [255, 253, 249, 250],

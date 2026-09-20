@@ -31,6 +31,7 @@
 import type { LayerSpecification, StyleSpecification } from "maplibre-gl";
 import type { ShowcaseGeoJson } from "./map-geojson";
 import { CLOSE_TIER_MINZOOM, MID_TIER_MINZOOM } from "./zoom-grammar";
+import { roadVisualScaleAt } from "./road-presentation";
 
 /* ------------------------------------------------------------------ */
 /* Palette                                                             */
@@ -103,8 +104,6 @@ export const MAP_ZOOM = {
   buildings: 16.6,
   buildingsAll: 17.4,
   buildingsOutline: 17.9,
-  /** Short unnamed stubs earn ink only when the camera is close. */
-  roadsDetail: 18,
   /** Park edges, like building outlines, are a close-zoom instrument. */
   parksEdge: 17,
   landmarks: 16.4,
@@ -147,7 +146,14 @@ const AREA_MID_ZOOM = 13.5;
 /* ------------------------------------------------------------------ */
 
 const METRES_PER_PIXEL_AT_Z0 = 156543.03392 * Math.cos((41.881 * Math.PI) / 180);
-const FLOOR_PX: Record<number, number> = { 9: 0.7, 11: 1.0, 13: 1.3, 15: 1.6, 17: 1.8 };
+const FLOOR_PX: Record<number, number> = {
+  9: 0.7,
+  11: 1.0,
+  13: 1.3,
+  15: 1.6,
+  17: 1.8,
+  19.5: 2.0,
+};
 
 /**
  * Data-driven road width: a feature's physical width in metres converted to
@@ -162,7 +168,7 @@ const FLOOR_PX: Record<number, number> = { 9: 0.7, 11: 1.0, 13: 1.3, 15: 1.6, 17
  */
 export function roadWidthPx(extraPx = 0, floorScale = 1): number {
   const at = (zoom: number) => {
-    const pixels: unknown[] = ["/", ["*", ["get", "widthM"], 2 ** zoom], METRES_PER_PIXEL_AT_Z0];
+    const pixels: unknown[] = ["/", ["*", ["get", "widthM"], roadVisualScaleAt(zoom), 2 ** zoom], METRES_PER_PIXEL_AT_Z0];
     const withExtra = extraPx > 0 ? ["+", pixels, extraPx] : pixels;
     // Far zoom exaggerates for legibility, and the exaggeration has to be
     // class-aware: with a shared floor every road collapses to ~1 px and the
@@ -183,6 +189,8 @@ export function roadWidthPx(extraPx = 0, floorScale = 1): number {
     at(15),
     17,
     at(17),
+    19.5,
+    at(19.5),
   ] as unknown as number;
 }
 
@@ -223,7 +231,6 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
     "roads-local": { type: "geojson", data: geo.roadsLocal as never },
-    "roads-detail": { type: "geojson", data: geo.roadsDetail as never },
     "roads-arterial": { type: "geojson", data: geo.roadsArterial as never },
     "roads-highway": { type: "geojson", data: geo.roadsHighway as never },
     bridges: { type: "geojson", data: geo.bridges as never },
@@ -286,6 +293,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "roads-local-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-local",
       minzoom: MAP_ZOOM.localRoads,
       paint: {
@@ -297,6 +305,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "roads-local",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-local",
       minzoom: MAP_ZOOM.localRoads,
       paint: {
@@ -305,41 +314,31 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
         "line-opacity": ["interpolate", ["linear"], ["zoom"], MAP_ZOOM.localRoads, 0, 13.6, 1],
       },
     },
-    // Short unnamed stubs: real roads that keep routing, but they only earn ink
-    // once the camera is close. Drawing them at neighborhood zoom is what made
-    // ordinary street pieces read as fake ramps.
-    {
-      id: "roads-detail",
-      type: "line",
-      source: "roads-detail",
-      minzoom: MAP_ZOOM.roadsDetail,
-      paint: {
-        "line-color": palette.localSurface,
-        "line-width": roadWidthPx(0.4),
-        "line-opacity": 0.9,
-      },
-    },
     {
       id: "roads-arterial-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
       paint: { "line-color": palette.arterialCasing, "line-width": roadWidthPx(2, 1.35) },
     },
     {
       id: "roads-arterial",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-arterial",
       paint: { "line-color": palette.arterialSurface, "line-width": roadWidthPx(0, 1.45) },
     },
     {
       id: "roads-highway-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
       paint: { "line-color": palette.highwayCasing, "line-width": roadWidthPx(2.8, 3.6) },
     },
     {
       id: "roads-highway",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "roads-highway",
       paint: { "line-color": palette.highwaySurface, "line-width": roadWidthPx(0, 3.35) },
     },
@@ -358,14 +357,16 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     {
       id: "bridges-casing",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
-      paint: { "line-color": palette.bridgeCasing, "line-width": zoomWidth(4.4, 9.8, 15.6) },
+      paint: { "line-color": palette.bridgeCasing, "line-width": roadWidthPx(3.2, 1.2) },
     },
     {
       id: "bridges",
       type: "line",
+      layout: { "line-cap": "round", "line-join": "round" },
       source: "bridges",
-      paint: { "line-color": palette.bridgeSurface, "line-width": zoomWidth(3.4, 7.8, 12.6) },
+      paint: { "line-color": palette.bridgeSurface, "line-width": roadWidthPx(0, 1.05) },
     },
     {
       id: "road-markings-highway",

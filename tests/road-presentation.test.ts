@@ -9,6 +9,7 @@ import {
   directionalLanes,
   isSharedCarriageway,
   laneCentreOffsetMetres,
+  roadVisualScaleAt,
   widthMetresForRoad,
   LANE_WIDTH_M,
   RAMP_WIDTH_FACTOR,
@@ -17,6 +18,14 @@ import { carriagewayWidthMetres } from "@/cities/map-model";
 import { chicagoModel } from "./chicago-support";
 
 describe("road width by lanes and class", () => {
+  it("grows presentation width materially as inspection zoom increases", () => {
+    expect(roadVisualScaleAt(13)).toBeCloseTo(1.06, 6);
+    expect(roadVisualScaleAt(17)).toBeCloseTo(1.4, 6);
+    expect(roadVisualScaleAt(18.5)).toBeCloseTo(1.75, 6);
+    expect(roadVisualScaleAt(19.5)).toBeCloseTo(2.05, 6);
+    expect(roadVisualScaleAt(19.5)).toBeGreaterThan(roadVisualScaleAt(15));
+  });
+
   it("scales with lane count, never one fixed width", () => {
     const one = carriagewayWidthMetres(1, false);
     const two = carriagewayWidthMetres(2, false);

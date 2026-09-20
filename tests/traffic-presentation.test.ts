@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { assignQueueRanks } from "@/worker/presentation-snapshot";
-import { buildVehicleLayers, sampleVehicles, vehicleSampleRatio } from "@/render/deck-layers";
+import { buildVehicleLayers } from "@/render/deck-layers";
 import { buildIncidentLayers } from "@/render/deck-layers";
 import { buildDirectedPathIndexes, type DirectedPathIndexes } from "@/render/map-geometry";
 import { interpolateVehicles, type RenderedVehicle } from "@/render/interpolate";
@@ -113,30 +113,26 @@ describe("vehicle zoom strategy", () => {
     expect(buildVehicleLayers(chicagoModel(2).projection, fleet, null as never, VEHICLE_MINZOOM - 0.1)).toEqual([]);
   });
 
-  it("samples deterministically, and never samples out a blocked vehicle", () => {
+  it("never randomly samples active vehicles once the fleet is visible", () => {
     const fleet = Array.from({ length: 200 }, (_, index) =>
       rendered(index, index % 20 === 0 ? 9000 : 0),
     );
-    const first = sampleVehicles(fleet, 14.5).map((entry) => entry.id);
-    const second = sampleVehicles(fleet, 14.5).map((entry) => entry.id);
-    expect(first).toEqual(second);
-    expect(first.length).toBeLessThan(fleet.length);
-    // Every blocked vehicle survives sampling at every band.
-    for (const zoom of [13.5, 14.5, 15.5]) {
-      const kept = new Set(sampleVehicles(fleet, zoom).map((entry) => entry.id));
-      for (const entry of fleet) {
-        if (entry.blockedWaitMs > 0) {
-          expect(kept.has(entry.id), `blocked ${entry.id} at z${zoom}`).toBe(true);
-        }
-      }
+    const icons = {
+      atlas: "data:image/png;base64,",
+      mapping: {
+        car: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+        truck: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+        bicycle: { x: 0, y: 0, width: 1, height: 1, anchorX: 0, anchorY: 0, mask: false },
+      },
+    } as never;
+    for (const zoom of [VEHICLE_MINZOOM, 15.5, 17, 19]) {
+      const layers = buildVehicleLayers(chicagoModel(2).projection, fleet, icons, zoom);
+      const count = layers.reduce(
+        (sum, layer) => sum + ((layer as unknown as { props: { data: unknown[] } }).props.data.length ?? 0),
+        0,
+      );
+      expect(count, `full fleet at z${zoom}`).toBe(fleet.length);
     }
-  });
-
-  it("thins with distance and is complete only at true close zoom", () => {
-    expect(vehicleSampleRatio(13.5)).toBeLessThan(vehicleSampleRatio(14.5));
-    expect(vehicleSampleRatio(14.5)).toBeLessThan(vehicleSampleRatio(15.5));
-    expect(vehicleSampleRatio(15.5)).toBeLessThan(vehicleSampleRatio(16.5));
-    expect(vehicleSampleRatio(16.8)).toBe(1);
   });
 });
 
@@ -304,8 +300,9 @@ describe("authoritative queue packing", () => {
   const model = chicagoModel(2);
   const indexes = buildDirectedPathIndexes(model);
   const laneOffsets = model.city.roads.map(() => 0);
-  // A road long enough to hold a queue; its end is the stop line side.
-  const roadId = model.city.roads.findIndex((road) => road.length > 60);
+  // Keep these rank-order tests on one physical lane. Multi-lane packing has
+  // its own regression test; this block isolates the worker's queue ordering.
+  const roadId = model.city.roads.findIndex((road) => road.length > 60 && road.lanes === 1);
   expect(roadId).toBeGreaterThanOrEqual(0);
   const index = indexes[roadId]!;
   const roadEnd = samplePathIndex(index, index.total);
@@ -395,7 +392,7 @@ describe("authoritative queue packing", () => {
   });
 
   it("orders each road's queue independently", () => {
-    const other = model.city.roads.findIndex((road, id) => id !== roadId && road.length > 40);
+    const other = model.city.roads.findIndex((road, id) => id !== roadId && road.length > 40 && road.lanes === 1);
     expect(other).toBeGreaterThanOrEqual(0);
     const vehicles = [
       queued(11, 1, 30, "car", other),

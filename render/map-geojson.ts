@@ -9,7 +9,7 @@
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
 import type { Point } from "@/cities/paths";
-import { pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
+import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
 
 export type LngLat = readonly [number, number];
 
@@ -127,13 +127,13 @@ const SLIVER_COMPACTNESS = 0.05;
  * triangles: wedges left where a polygon meets a diagonal street. A building
  * sliver is at least architecture; a grass or water sliver is debris.
  */
-const AREA_SLIVER_COMPACTNESS = 0.12;
 /**
  * The simulator is not a general-purpose basemap. Tiny extracted land-use
  * fragments are valid OSM data but visual noise here, so only geography large
  * enough to orient the traffic view reaches presentation.
  */
-const PRESENTATION_WATER_MIN_AREA_M2 = 5_000;
+const PRESENTATION_WATER_MIN_AREA_M2 = 2_500;
+const PRESENTATION_WATER_COMPACTNESS = 0.08;
 const PRESENTATION_PARK_MIN_AREA_M2 = 12_000;
 const PRESENTATION_PARK_COMPACTNESS = 0.16;
 
@@ -172,8 +172,6 @@ export interface ShowcaseGeoJson {
   readonly roadsLocal: FeatureCollection<LineGeometry>;
   readonly roadsArterial: FeatureCollection<LineGeometry>;
   readonly roadsHighway: FeatureCollection<LineGeometry>;
-  /** Short unnamed stubs: real roads, shown only when the camera is close. */
-  readonly roadsDetail: FeatureCollection<LineGeometry>;
   readonly bridges: FeatureCollection<LineGeometry>;
   readonly landmarks: FeatureCollection<PolygonGeometry>;
   readonly labels: FeatureCollection<PointGeometry>;
@@ -205,11 +203,21 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: model.water
-      .filter(
-        (entry) =>
+      .filter((entry) => {
+        // The Chicago River is intentionally long and thin, so compactness is
+        // the wrong metric for the major water that actually orients the city.
+        // Keep named semantic water and polygons with islands/holes; only apply
+        // debris filtering to generic extracted water fragments.
+        if (entry.kind === "lake" || entry.kind === "river" || entry.rings.length > 1) {
+          return true;
+        }
+        const outer = entry.rings[0];
+        return (
           entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
-          compactnessOf(entry.rings[0]) >= AREA_SLIVER_COMPACTNESS,
-      )
+          outer.length >= 6 &&
+          compactnessOf(outer) >= PRESENTATION_WATER_COMPACTNESS
+        );
+      })
       .map((entry, index) =>
       polygonFeature(projection, entry.rings, {
         id: `water-${index}`,
@@ -278,7 +286,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const local: Feature<LineGeometry>[] = [];
   const arterial: Feature<LineGeometry>[] = [];
   const highway: Feature<LineGeometry>[] = [];
-  const detail: Feature<LineGeometry>[] = [];
   const bridge: Feature<LineGeometry>[] = [];
   for (const piece of model.streets) {
     // One line per PHYSICAL street piece: the two directed roads are the same
@@ -299,13 +306,16 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       layer: piece.layer,
       oneway: piece.oneway,
     });
-    if (presentation === "detail") {
-      detail.push(feature);
+    if (presentation === "hidden") {
+      // Surface-street turn channels are routing topology, not cartography.
+      // Hiding the line makes a vehicle read as turning through the junction
+      // instead of driving along a tiny tan/white pseudo-ramp.
       continue;
     }
-    // Hierarchy follows the OSM class, never "it is a bridge": a motorway
-    // bridge stays a motorway on screen.
-    if (piece.osmClass === "motorway" || piece.osmClass === "trunk" || piece.osmClass.endsWith("_link")) {
+    // Hierarchy follows the actual road family. In particular, a generic
+    // OSM "*_link" is not automatically a highway: secondary_link is usually a
+    // downtown turn channel, and those were the fake tan "ramps" in the old UI.
+    if (isExpresswayClass(piece.osmClass)) {
       highway.push(feature);
     } else if (
       piece.osmClass === "primary" ||
@@ -333,7 +343,6 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     roadsLocal: { ...roadsLocal, features: local },
     roadsArterial: { ...roadsArterial, features: arterial },
     roadsHighway: { ...roadsHighway, features: highway },
-    roadsDetail: { type: "FeatureCollection", features: detail },
     bridges: { ...bridges, features: bridge },
     landmarks: {
       type: "FeatureCollection",

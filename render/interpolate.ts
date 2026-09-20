@@ -15,6 +15,7 @@ import type { PathIndex } from "@/cities/paths";
 import { samplePathIndex } from "@/cities/paths";
 import type { DirectedPathIndexes } from "@/render/map-geometry";
 import { applyLaneOffset } from "@/render/map-geometry";
+import { vehicleLaneOffsetMetres } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
 
@@ -95,7 +96,7 @@ export interface InterpolateOptions {
   readonly nowMs: number;
   /** When the current snapshot arrived. */
   readonly receivedAtMs: number;
-  /** Per-road lane-centre offsets in metres (see render/road-presentation). */
+  /** Per-road direction-group centre offsets; per-vehicle lane slots are added here. */
   readonly laneOffsets: readonly number[];
   /** Road connectivity, for path-aware turns through junctions. */
   readonly city: City;
@@ -123,7 +124,7 @@ export function interpolateVehicles(
   const fade = clamp01((options.nowMs - options.receivedAtMs) / SPAWN_FADE_IN_MS);
   const rendered: RenderedVehicle[] = [];
   for (const vehicle of current.vehicles) {
-    const offset = vehicle.roadId === null ? 0 : options.laneOffsets[vehicle.roadId] ?? 0;
+    const offset = vehicle.roadId === null ? 0 : vehicleLaneOffsetMetres(options.city, options.laneOffsets, vehicle.id, vehicle.roadId);
     const currentPosition = positionForRoad(indexes, vehicle.roadId, vehicle.progress, offset);
     if (!currentPosition) {
       continue;
@@ -141,13 +142,21 @@ export function interpolateVehicles(
         // instead of snapping at the junction.
         heading = lerpAngle(transition.fromHeading, transition.toHeading, t);
       }
-    } else if (before) {
-      const beforeOffset = before.roadId === null ? 0 : options.laneOffsets[before.roadId] ?? 0;
-      const beforePosition = positionForRoad(indexes, before.roadId, before.progress, beforeOffset);
-      if (beforePosition) {
-        x = beforePosition.x + (currentPosition.x - beforePosition.x) * t;
-        y = beforePosition.y + (currentPosition.y - beforePosition.y) * t;
-        heading = lerpAngle(beforePosition.heading, currentPosition.heading, t);
+    } else if (before && before.roadId !== null && before.roadId === vehicle.roadId) {
+      // Same-road motion interpolates scalar progress and resamples the
+      // authoritative polyline. x/y lerp cuts across curves between snapshots.
+      const progress = before.progress + (vehicle.progress - before.progress) * t;
+      const laneOffset = vehicleLaneOffsetMetres(
+        options.city,
+        options.laneOffsets,
+        vehicle.id,
+        vehicle.roadId,
+      );
+      const alongRoad = positionForRoad(indexes, vehicle.roadId, progress, laneOffset);
+      if (alongRoad) {
+        x = alongRoad.x;
+        y = alongRoad.y;
+        heading = alongRoad.heading;
       }
     }
     rendered.push({
@@ -166,39 +175,13 @@ export function interpolateVehicles(
   return rendered;
 }
 
-/** Half-width of the turn window on each road, in metres. */
-const TURN_WINDOW_M = 9;
-
-/** Quadratic Bézier point. */
-function quadAt(
-  p0: WorldPosition,
-  p1: WorldPosition,
-  p2: WorldPosition,
-  u: number,
-): { x: number; y: number; heading: number } {
-  const w = 1 - u;
-  const x = w * w * p0.x + 2 * w * u * p1.x + u * u * p2.x;
-  const y = w * w * p0.y + 2 * w * u * p1.y + u * u * p2.y;
-  // Tangent of a quadratic Bézier: B'(u) = 2(1-u)(P1-P0) + 2u(P2-P1).
-  const dx = 2 * w * (p1.x - p0.x) + 2 * u * (p2.x - p1.x);
-  const dy = 2 * w * (p1.y - p0.y) + 2 * u * (p2.y - p1.y);
-  return { x, y, heading: Math.atan2(dy, dx) };
-}
-
 /**
  * Position and heading while crossing from one road to the next.
  *
- * The turn is a quadratic curve: it leaves the old lane centre, bends through
- * the junction and arrives on the new lane centre, with heading taken from the
- * curve tangent. Walking the two roads and blending headings (what this did
- * before) kept position continuous but made the heading read as a snap, and it
- * cut the corner whenever the two lane centres were offset differently — which
- * is every real turn.
- *
- * The curve spans a bounded window either side of the junction, so a short
- * segment simply shrinks the window instead of producing nonsense. Returns null
- * when the two roads are not joined: the caller then keeps the current position,
- * which beats drawing a line through a block.
+ * Position is constrained to one of the two authoritative road paths at every
+ * frame. This deliberately gives up free-space Bézier smoothing: a renderer may
+ * not invent drivable geometry that the basemap does not contain. Returns null
+ * when the two roads are not joined; the caller then keeps the current position.
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
@@ -220,77 +203,45 @@ function transitionPosition(
   if (!previousRoad || !currentRoad || previousRoad.to !== currentRoad.from) {
     return null;
   }
-  const laneOffsets = options.laneOffsets;
+
   const remaining = Math.max(0, previousIndex.total - before.progress);
   const travelled = Math.max(0, current.progress);
   const total = remaining + travelled;
   if (total <= 0) {
     return null;
   }
-  const distance = t * total;
-  const previousOffset = laneOffsets[before.roadId] ?? 0;
-  const currentOffset = laneOffsets[current.roadId] ?? 0;
-  // The window shrinks on a short segment rather than overshooting the road.
-  const window = Math.min(TURN_WINDOW_M, remaining, travelled);
-  if (window < 0.5) {
-    // Not enough room to curve: follow the geometry exactly.
-    if (distance <= remaining) {
-      const position = applyLaneOffset(
-        samplePathIndex(previousIndex, before.progress + distance),
-        previousOffset,
-      );
-      return { ...position, fromHeading: position.heading, toHeading: position.heading };
-    }
-    const position = applyLaneOffset(
-      samplePathIndex(currentIndex, distance - remaining),
-      currentOffset,
-    );
-    return { ...position, fromHeading: position.heading, toHeading: position.heading };
-  }
-  const turnStart = remaining - window;
-  const turnEnd = remaining + window;
-  if (distance < turnStart) {
-    const position = applyLaneOffset(
-      samplePathIndex(previousIndex, before.progress + distance),
-      previousOffset,
-    );
-    return { ...position, fromHeading: position.heading, toHeading: position.heading };
-  }
-  if (distance > turnEnd) {
-    const position = applyLaneOffset(
-      samplePathIndex(currentIndex, distance - remaining),
-      currentOffset,
-    );
-    return { ...position, fromHeading: position.heading, toHeading: position.heading };
-  }
-  const u = (distance - turnStart) / (2 * window);
-  const start = applyLaneOffset(
-    samplePathIndex(previousIndex, previousIndex.total - window),
-    previousOffset,
-  );
-  const end = applyLaneOffset(samplePathIndex(currentIndex, window), currentOffset);
-  // Control point: where the two lane-centre lines meet. That is what makes the
-  // curve leave and arrive tangent to the roads; when the lines are parallel
-  // (a straight-through movement) the junction midpoint is the honest control.
-  const control = laneLineIntersection(start, end);
-  const point = quadAt(start, control, end, u);
-  return { ...point, fromHeading: point.heading, toHeading: point.heading };
-}
 
-/**
- * Intersection of the line through `start` along its heading with the line
- * through `end` along its heading. Parallel or degenerate inputs fall back to
- * the midpoint, which keeps a straight movement straight.
- */
-function laneLineIntersection(start: WorldPosition, end: WorldPosition): WorldPosition {
-  const ax = Math.cos(start.heading);
-  const ay = Math.sin(start.heading);
-  const bx = Math.cos(end.heading);
-  const by = Math.sin(end.heading);
-  const denominator = ax * by - ay * bx;
-  if (Math.abs(denominator) < 1e-6) {
-    return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2, heading: start.heading };
+  // Position is never interpolated through free space. It walks the old road
+  // to its actual endpoint, then walks the new road from its actual start.
+  // This is intentionally stricter than a cosmetic Bezier: a renderer may not
+  // invent drivable geometry that the map itself does not contain.
+  const distance = clamp01(t) * total;
+  const previousOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, before.id, before.roadId);
+  const currentOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, current.id, current.roadId);
+  const fromHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
+  const toHeading = samplePathIndex(currentIndex, 0).heading;
+
+  // Lane centres on two roads generally do not meet at exactly the same
+  // coordinate. Taper each lane offset into the junction centre, then back out
+  // on the next road. This preserves lane identity away from the junction while
+  // guaranteeing a continuous path through the shared node.
+  const laneTaperM = 8;
+  if (distance <= remaining) {
+    const progress = before.progress + distance;
+    const distanceToJunction = Math.max(0, previousIndex.total - progress);
+    const taper = Math.min(1, distanceToJunction / laneTaperM);
+    const position = applyLaneOffset(
+      samplePathIndex(previousIndex, progress),
+      previousOffset * taper,
+    );
+    return { ...position, fromHeading, toHeading };
   }
-  const t = ((end.x - start.x) * by - (end.y - start.y) * bx) / denominator;
-  return { x: start.x + ax * t, y: start.y + ay * t, heading: start.heading };
+
+  const outgoingProgress = Math.min(currentIndex.total, distance - remaining);
+  const taper = Math.min(1, Math.max(0, outgoingProgress) / laneTaperM);
+  const position = applyLaneOffset(
+    samplePathIndex(currentIndex, outgoingProgress),
+    currentOffset * taper,
+  );
+  return { ...position, fromHeading, toHeading };
 }

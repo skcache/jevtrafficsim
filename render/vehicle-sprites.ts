@@ -160,8 +160,13 @@ export function spriteLengthUnits(type: VehicleType): number {
  * LENGTH along the road. This converts the target length into the value
  * `getSize` wants, from the sprite's own proportions.
  */
+export function iconSizeForLengthUnits(type: VehicleType, length: number): number {
+  return (length * CELL_HEIGHT) / SPRITE_UNITS[type].length;
+}
+
+/** Backward-compatible alias for tests/helpers that still speak in pixels. */
 export function iconSizeForLengthPx(type: VehicleType, lengthPx: number): number {
-  return (lengthPx * CELL_HEIGHT) / SPRITE_UNITS[type].length;
+  return iconSizeForLengthUnits(type, lengthPx);
 }
 
 /** Aspect (length : height) of a class's sprite, for pixel sizing. */

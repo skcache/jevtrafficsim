@@ -333,21 +333,52 @@ function piecePhysicals(
   };
 }
 
+function roadPointAtFraction(road: ChicagoRoadRecord, fraction: number): Point {
+  const target = Math.max(0, Math.min(1, fraction)) * road.lengthM;
+  const cumulative = road.cumulative;
+  const points = road.points;
+  if (points.length === 0) {
+    return [0, 0];
+  }
+  for (let index = 0; index + 1 < points.length; index += 1) {
+    const from = cumulative[index] ?? 0;
+    const to = cumulative[index + 1] ?? road.lengthM;
+    if (target <= to || index + 2 === points.length) {
+      const span = Math.max(1e-9, to - from);
+      const t = Math.max(0, Math.min(1, (target - from) / span));
+      return [
+        points[index][0] + (points[index + 1][0] - points[index][0]) * t,
+        points[index][1] + (points[index + 1][1] - points[index][1]) * t,
+      ];
+    }
+  }
+  return [points[points.length - 1][0], points[points.length - 1][1]];
+}
+
 function sameCarriageway(a: ChicagoRoadRecord, b: ChicagoRoadRecord): boolean {
   const longest = Math.max(a.lengthM, b.lengthM);
   if (longest <= 0) {
     return true;
   }
-  if (Math.abs(a.lengthM - b.lengthM) / longest > 0.05) {
+  if (Math.abs(a.lengthM - b.lengthM) / longest > 0.02) {
     return false;
   }
+
+  // Two directed records share ONE rendered carriageway only when their actual
+  // polylines coincide in reverse. Endpoint proximity alone is not enough:
+  // Chicago's divided roads often rejoin the same logical intersections while
+  // their physical centre-lines are several metres apart. Pairing those caused
+  // us to add another lane offset on top of an already separate OSM geometry,
+  // which visibly pushed cars into sidewalks and water.
+  const toleranceM = 1.5;
   const near = (p: readonly number[], q: readonly number[]) =>
-    Math.hypot(p[0] - q[0], p[1] - q[1]) <= 8;
-  const aStart = a.points[0];
-  const aEnd = a.points[a.points.length - 1];
-  const bStart = b.points[0];
-  const bEnd = b.points[b.points.length - 1];
-  return near(aStart, bEnd) && near(aEnd, bStart);
+    Math.hypot(p[0] - q[0], p[1] - q[1]) <= toleranceM;
+  for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+    if (!near(roadPointAtFraction(a, fraction), roadPointAtFraction(b, 1 - fraction))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface ChicagoMetadata {

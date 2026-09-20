@@ -10,6 +10,7 @@
  */
 import type { Point } from "@/cities/paths";
 import type { VehicleType } from "@/sim/types";
+import { SIGNAL_HEAD_MINZOOM, SIGNAL_STATE_MINZOOM } from "./zoom-grammar";
 
 /* ------------------------------------------------------------------ */
 /* Vehicles                                                            */
@@ -69,10 +70,10 @@ export type SignalTier = "hidden" | "mid" | "close";
  * close zoom may add the physical three-lamp head.
  */
 export function signalTier(zoom: number): SignalTier {
-  if (!Number.isFinite(zoom) || zoom < 15.8) {
+  if (!Number.isFinite(zoom) || zoom < SIGNAL_STATE_MINZOOM) {
     return "hidden";
   }
-  return zoom < 16.5 ? "mid" : "close";
+  return zoom < SIGNAL_HEAD_MINZOOM ? "mid" : "close";
 }
 
 /** 0..1 opacity for signal state. Once visible it never fades back out. */
@@ -80,8 +81,45 @@ export function signalTierOpacity(zoom: number): number {
   if (signalTier(zoom) === "hidden") {
     return 0;
   }
-  return Math.min(1, Math.max(0, (zoom - 15.8) / 0.4));
+  return Math.min(1, Math.max(0, (zoom - SIGNAL_STATE_MINZOOM) / 0.35));
 }
+
+/**
+ * The stop/go gate scales continuously with zoom instead of jumping between
+ * arbitrary pixel sizes. It stays subordinate to the road at neighborhood
+ * zoom and becomes explicit at street zoom.
+ */
+function zoomProgress(zoom: number, start: number, end: number): number {
+  if (!Number.isFinite(zoom)) {
+    return 0.5;
+  }
+  const t = Math.min(1, Math.max(0, (zoom - start) / (end - start)));
+  // Smoothstep avoids a mechanical linear feel while remaining deterministic.
+  return t * t * (3 - 2 * t);
+}
+
+export function signalGateWidthPx(zoom: number): number {
+  const t = zoomProgress(zoom, SIGNAL_STATE_MINZOOM, 19.6);
+  return 3.1 + t * 3.4;
+}
+
+/** A same-path dark keyline behind the coloured gate, never a second bar. */
+export function signalGateBackingWidthPx(zoom: number): number {
+  return signalGateWidthPx(zoom) + 2;
+}
+
+/**
+ * Traffic-light housing height in screen pixels. Unlike vehicles, the housing
+ * is interaction chrome: it must remain recognizable and grow assertively as
+ * the user zooms into an intersection.
+ */
+export function signalHeadHeightPx(zoom: number): number {
+  const t = zoomProgress(zoom, SIGNAL_HEAD_MINZOOM, 19.5);
+  const minPx = 22;
+  const maxPx = 56;
+  return minPx * Math.pow(maxPx / minPx, t);
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Incidents                                                           */

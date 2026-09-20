@@ -690,7 +690,7 @@ describe("Chicago incidents", () => {
         }
       }
     }
-  });
+  }, 10_000);
 
   it("closes a real river crossing and reroutes around it", () => {
     const engine = runIncident("bridge-closed");

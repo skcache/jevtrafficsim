@@ -8,11 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
+import { isExpresswayClass, roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
-import { buildSignalLayers, buildSignalPlans } from "@/render/deck-layers";
+import { buildSignalLayers, buildSignalPlans, buildVehicleLayers } from "@/render/deck-layers";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import { carriagewayPairs } from "@/render/road-presentation";
 import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
 import { chicagoModel } from "./chicago-support";
 
@@ -26,35 +27,45 @@ describe("road presentation hierarchy", () => {
     // Ramps are structure, however short: they stay visible.
     expect(roadPresentationClass({ osmClass: "motorway_link", length: 40 })).toBe("primary");
     expect(roadPresentationClass({ osmClass: "trunk_link", length: 30 })).toBe("primary");
-    // Ordinary streets are secondary; short unnamed stubs are detail.
+    // A surface-street link is a turn channel, not an expressway ramp.
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 30 })).toBe("hidden");
+    expect(roadPresentationClass({ osmClass: "secondary_link", name: "West Harrison Street", length: 80 })).toBe("hidden");
+    // A long named connector can be a real street; unnamed routing plumbing
+    // stays hidden even when OSM stretches it across most of a block.
+    expect(roadPresentationClass({ osmClass: "secondary_link", length: 180 })).toBe("hidden");
+    expect(roadPresentationClass({ osmClass: "secondary_link", name: "Connector Road", length: 180 })).toBe("secondary");
+    expect(
+      roadPresentationClass({
+        osmClass: "secondary_link",
+        length: 70,
+        bridgeStructure: true,
+      }),
+    ).toBe("secondary");
+    expect(isExpresswayClass("secondary_link")).toBe(false);
+    expect(isExpresswayClass("motorway_link")).toBe(true);
+    // Ordinary streets are secondary; short unnamed stubs are hidden visual topology.
     expect(roadPresentationClass({ osmClass: "residential", name: "West Polk Street", length: 80 })).toBe("secondary");
     expect(roadPresentationClass({ osmClass: "tertiary", length: 200 })).toBe("secondary");
-    expect(roadPresentationClass({ osmClass: "tertiary", length: DETAIL_MAX_LENGTH_M - 5 })).toBe("detail");
+    expect(roadPresentationClass({ osmClass: "tertiary", length: DETAIL_MAX_LENGTH_M - 5 })).toBe("hidden");
     // A named short piece is a real street: it stays.
     expect(roadPresentationClass({ osmClass: "tertiary", name: "Honoré Street", length: 20 })).toBe("secondary");
   });
 
-  it("hides detail roads below close zoom and never hides ramps", () => {
+  it("never renders micro-connectors, while real expressway ramps stay visible", () => {
     const geo = buildShowcaseGeoJson(model);
     const style = buildChicagoStyle(geo);
     const byId = new Map(style.layers.map((layer) => [layer.id, layer]));
 
-    const detail = byId.get("roads-detail")!;
-    expect(detail).toBeTruthy();
-    expect((detail as { minzoom?: number }).minzoom ?? 0).toBeGreaterThanOrEqual(16);
-    // The ordinary local network appears earlier than the stubs do.
-    const local = byId.get("roads-local")! as { minzoom?: number };
-    expect(local.minzoom ?? 0).toBeLessThan((detail as { minzoom?: number }).minzoom ?? 99);
+    expect(byId.has("roads-detail")).toBe(false);
 
-    // Ramps and expressways carry no minzoom: they are visible at every zoom.
     for (const id of ["roads-highway", "roads-highway-casing"] as const) {
       const layer = byId.get(id)! as { minzoom?: number };
       expect(layer.minzoom ?? 0).toBeLessThanOrEqual(1);
     }
-    // And a ramp actually reaches the highway source rather than the stubs.
-    const ramp = geo.roadsHighway.features.find((feature) => String(feature.properties.osmClass).endsWith("_link"));
+    const ramp = geo.roadsHighway.features.find((feature) =>
+      ["motorway_link", "trunk_link"].includes(String(feature.properties.osmClass)),
+    );
     expect(ramp).toBeTruthy();
-    expect(geo.roadsDetail.features).not.toContain(ramp);
   });
 
   it("keeps routing intact while hiding a piece from the map", () => {
@@ -65,7 +76,8 @@ describe("road presentation hierarchy", () => {
     const hidden = [];
     for (let scale = 0; scale < 5; scale += 1) {
       for (const piece of chicagoModel(scale).streets) {
-        if (roadPresentationClass(piece) === "detail") {
+        const presentation = roadPresentationClass(piece);
+        if (presentation === "hidden") {
           hidden.push({ scale, piece });
         }
       }
@@ -78,17 +90,25 @@ describe("road presentation hierarchy", () => {
         expect(city.roads[roadId].capacity).toBeGreaterThan(0);
       }
     }
-    // Whatever is in the detail collection must obey the rule that put it there.
-    for (const feature of buildShowcaseGeoJson(model).roadsDetail.features) {
-      expect(
-        roadPresentationClass({
-          osmClass: String(feature.properties.osmClass),
-          name: String(feature.properties.name) || undefined,
-          length: 0,
-        }),
-      ).toBe("detail");
-    }
-  });
+    // Surface-street links do not leak into any static road source. Pin this
+    // against Metro, where the imported Chicago asset actually contains them,
+    // so the assertion cannot pass vacuously on a smaller crop.
+    const metro = chicagoModel(4);
+    expect(metro.streets.some((piece) => piece.osmClass === "secondary_link")).toBe(true);
+    const metroGeo = buildShowcaseGeoJson(metro);
+    const visible = [
+      ...metroGeo.roadsLocal.features,
+      ...metroGeo.roadsArterial.features,
+      ...metroGeo.roadsHighway.features,
+    ];
+    // Unnamed downtown turn channels never leak back into cartography.
+    const visibleSecondaryLinks = visible.filter(
+      (feature) => String(feature.properties.osmClass) === "secondary_link",
+    );
+    expect(
+      visibleSecondaryLinks.every((feature) => String(feature.properties.name ?? "").length > 0),
+    ).toBe(true);
+  }, 10_000);
 
   it("gives bridge material only to pieces that cross water", () => {
     const geo = buildShowcaseGeoJson(model);
@@ -105,9 +125,56 @@ describe("road presentation hierarchy", () => {
   });
 });
 
+describe("vehicle presentation stays coherent", () => {
+  it("renders the full active fleet once individual vehicles are visible", () => {
+    const vehicles = Array.from({ length: 24 }, (_, id) => ({
+      id,
+      roadId: 0,
+      type: "car" as const,
+      state: "moving" as const,
+      x: model.city.intersections[0].x,
+      y: model.city.intersections[0].y,
+      headingRadians: 0,
+      blockedWaitMs: 0,
+      fade: 1,
+      queueRank: -1,
+    }));
+    const icons = {
+      atlas: "data:image/png;base64,",
+      mapping: {
+        car: { x: 0, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+        truck: { x: 128, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+        bicycle: { x: 256, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
+      },
+    } as never;
+    const layers = buildVehicleLayers(model.projection, vehicles, icons, 16);
+    const car = layers.find((layer) => layer.id === "vehicle-body-car") as unknown as {
+      props: { data: unknown[]; sizeUnits: string; getSize: number };
+    };
+    expect(car.props.data).toHaveLength(vehicles.length);
+    expect(car.props.sizeUnits).toBe("meters");
+    expect(car.props.getSize).toBeGreaterThan(0);
+  });
+});
+
 describe("signal presentation stays simulation-first", () => {
   const indexes = buildDirectedPathIndexes(model);
   const plans = buildSignalPlans(model);
+
+  it("never draws signal furniture on a hidden micro-connector", () => {
+    const pairs = carriagewayPairs(model);
+    for (const plan of plans.values()) {
+      for (const arms of plan.groupArms) {
+        for (const arm of arms) {
+          const pieceIndex = pairs.pieceOf[arm.roadId] ?? -1;
+          if (pieceIndex < 0) {
+            continue;
+          }
+          expect(roadPresentationClass(model.streets[pieceIndex])).not.toBe("hidden");
+        }
+      }
+    }
+  });
 
   it("draws one colored state gate per physical approach arm", () => {
     const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2)!;
@@ -126,7 +193,7 @@ describe("signal presentation stays simulation-first", () => {
     } as never;
     const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17.5, sprites);
     const ids = layers.map((layer) => layer.id).sort();
-    expect(ids).toEqual(["signals-heads", "signals-state-gates"]);
+    expect(ids).toEqual(["signals-heads", "signals-state-gate-backing", "signals-state-gates"]);
     const bars = (layers.find((layer) => layer.id === "signals-state-gates") as unknown as {
       props: { data: unknown[] };
     }).props.data;
@@ -234,7 +301,6 @@ describe("product shell contracts", () => {
       "water",
       "parks",
       "roads-local",
-      "roads-detail",
       "roads-arterial",
       "roads-highway",
       "bridges",
