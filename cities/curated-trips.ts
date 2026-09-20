@@ -23,7 +23,6 @@ export {
   CURATED_TRIPS,
   CURATED_TRIP_IDS,
   DEFAULT_CURATED_TRIP_ID,
-  challengeScenarioKey as _unused,
 } from "@/cities/trip-catalog";
 export type {
   CuratedTrip,
