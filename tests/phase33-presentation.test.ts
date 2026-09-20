@@ -11,10 +11,14 @@ import { readFileSync } from "node:fs";
 import { isExpresswayClass, roadPresentationClass, pieceCrossesWater, DETAIL_MAX_LENGTH_M } from "@/render/road-hierarchy";
 import { buildShowcaseGeoJson } from "@/render/map-geojson";
 import { buildChicagoStyle, AREA_MIN } from "@/render/chicago-style";
-import { buildSignalLayers, buildSignalPlans, buildVehicleLayers } from "@/render/deck-layers";
-import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import { buildVehicleLayers } from "@/render/deck-layers";
 import { carriagewayPairs } from "@/render/road-presentation";
-import type { PresentationSnapshot, PresentationSignal } from "@/worker/presentation-snapshot";
+import { buildPathIndex } from "@/cities/paths";
+import { deriveContextualControls } from "@/render/contextual-controls";
+import { createEngine, runEngine } from "@/sim/engine";
+import { createFixedController } from "@/controllers/fixed";
+import { buildPresentationSnapshot } from "@/worker/presentation-snapshot";
+import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { chicagoModel } from "./chicago-support";
 
 const model = chicagoModel(2);
@@ -158,61 +162,50 @@ describe("vehicle presentation stays coherent", () => {
 });
 
 describe("signal presentation stays simulation-first", () => {
-  const indexes = buildDirectedPathIndexes(model);
-  const plans = buildSignalPlans(model);
-
-  it("never draws signal furniture on a hidden micro-connector", () => {
-    const pairs = carriagewayPairs(model);
-    for (const plan of plans.values()) {
-      for (const arms of plan.groupArms) {
-        for (const arm of arms) {
-          const pieceIndex = pairs.pieceOf[arm.roadId] ?? -1;
-          if (pieceIndex < 0) {
-            continue;
-          }
-          expect(roadPresentationClass(model.streets[pieceIndex])).not.toBe("hidden");
-        }
+  it("never places a control on a hidden micro-connector", () => {
+    // Issue #26 replacement for the old plan-arm guard: whatever the ego is
+    // about to meet, the road carrying it must be one the presentation draws.
+    const metro = chicagoModel(4);
+    const { spawn } = materializeChallengeTrip(metro, "united-center-to-navy-pier", 5);
+    const engine = createEngine({
+      city: metro.city,
+      controller: createFixedController(),
+      spawns: [spawn],
+    });
+    runEngine(engine, 5_000);
+    const snapshot = buildPresentationSnapshot(engine, 0, "united-center-to-navy-pier");
+    const controls = deriveContextualControls({
+      model: metro,
+      indexes: metro.directedPaths.map((points) => (points ? buildPathIndex(points) : null)),
+      laneOffsets: metro.city.roads.map(() => 0),
+      trip: snapshot.trip,
+      ego: snapshot.ego ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress } : null,
+      routeControls: snapshot.routeControls,
+    });
+    expect(controls.length).toBeGreaterThanOrEqual(0);
+    const pairs = carriagewayPairs(metro);
+    const route = snapshot.trip?.routeRoadIds ?? [];
+    for (const control of controls) {
+      const incoming = route.find((roadId) => metro.city.roads[roadId]?.to === control.intersectionId);
+      expect(incoming).toBeDefined();
+      const pieceIndex = pairs.pieceOf[incoming!] ?? -1;
+      if (pieceIndex >= 0) {
+        expect(roadPresentationClass(metro.streets[pieceIndex])).not.toBe("hidden");
       }
     }
   });
 
-  it("draws one colored state gate per physical approach arm", () => {
-    const entry = [...plans.entries()].find(([, plan]) => plan.groupIncoming.length >= 2)!;
-    const signals: PresentationSignal[] = [
-      { intersectionId: entry[0], phaseIndex: 0, stage: "green" },
-    ];
-    // Issue #24: the renderer reads route-filtered control state.
-    const snapshot: PresentationSnapshot = {
-      sequence: 1,
-      timeMs: 1000,
-      controller: "fixed",
-      ego: null,
-      roadTraffic: [],
-      routeControls: signals,
-      trip: null,
-      roadConditions: [],
-      incidents: [],
-    };
-    const sprites = {
-      atlas: "data:image/png;base64,",
-      mapping: Object.fromEntries(
-        ["signal-red", "signal-yellow", "signal-green"].map((id) => [
-          id,
-          { x: 0, y: 0, width: 10, height: 10, anchorX: 5, anchorY: 5, mask: false },
-        ]),
-      ),
-    } as never;
-    const layers = buildSignalLayers(model.projection, model, snapshot, plans, indexes, 17.5, sprites);
-    const ids = layers.map((layer) => layer.id).sort();
-    expect(ids).toEqual(["signals-heads", "signals-state-gate-backing", "signals-state-gates"]);
-    const bars = (layers.find((layer) => layer.id === "signals-state-gates") as unknown as {
-      props: { data: unknown[] };
-    }).props.data;
-    const heads = (layers.find((layer) => layer.id === "signals-heads") as unknown as {
-      props: { data: unknown[] };
-    }).props.data;
-    // State gates and optional housings share the same deduped physical arms.
-    expect(bars.length).toBe(heads.length);
+  it("challenge mode renders contextual controls, never the old signal stack", () => {
+    // Issue #26: the citywide/route-wide gate + head layers are gone from
+    // production. The map component builds contextual controls instead, and the
+    // old modules no longer exist to be wired back in.
+    const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
+    expect(map).toContain("buildControlLayers");
+    expect(map).toContain("deriveContextualControls");
+    expect(map).not.toContain("buildSignalLayers");
+    expect(map).not.toContain("buildSignalPlans");
+    expect(map).not.toContain("createSignalSprites");
+    expect(() => readFileSync(new URL("../render/signal-sprites.ts", import.meta.url), "utf8")).toThrow();
   });
 });
 

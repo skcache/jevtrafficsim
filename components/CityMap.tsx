@@ -50,8 +50,6 @@ import {
   buildCongestionLayers,
   buildIncidentLayers,
   type CongestionRoad,
-  buildSignalLayers,
-  buildSignalPlans,
   buildVehicleLayers,
   type IncidentExtras,
 } from "@/render/deck-layers";
@@ -66,7 +64,13 @@ import { applyRoadFocus } from "@/render/chicago-style";
 import { buildRouteSegments, routeTrafficMix, type RouteSegment } from "@/render/route-path";
 import { classifySnapshotRoads, type RouteTrafficClass } from "@/render/route-traffic";
 import { buildDestinationLayers, buildRouteLayers } from "@/render/route-layers";
-import { createSignalSprites, type SignalSpriteSet } from "@/render/signal-sprites";
+import { createControlSprites, type ControlSpriteSet } from "@/render/control-sprites";
+import {
+  deriveContextualControls,
+  upcomingControl,
+  type ContextualControl,
+} from "@/render/contextual-controls";
+import { buildControlLayers } from "@/render/control-layers";
 import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
@@ -116,7 +120,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const overlayRef = useRef<MapLibreOverlay | null>(null);
   const zoomRef = useRef(16);
   const iconsRef = useRef<VehicleIconSet | null>(null);
-  const signalSpritesRef = useRef<SignalSpriteSet | null>(null);
+  const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
   /** Per-road lng/lat paths + physical widths, for the congestion overlay. */
@@ -136,6 +140,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const easeGuardUntilRef = useRef(0);
   const lastRenderAtRef = useRef(0);
   const routeSegmentsRef = useRef<RouteSegment[]>([]);
+  /** Controls the ego is about to meet this frame (at most a couple). */
+  const controlsRef = useRef<ContextualControl[]>([]);
   /** Last interpolated car position in map metres (for recenter). */
   const lastEgoMetricRef = useRef<{ x: number; y: number; headingRadians: number } | null>(null);
   const routeMixRef = useRef<Record<RouteTrafficClass, number>>({ free: 0, slowed: 0, congested: 0 });
@@ -172,10 +178,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   }, [scaleIndex]);
 
   const geo = useMemo(() => (model ? buildShowcaseGeoJson(model) : null), [model]);
-  const signalPlans = useMemo(() => (model ? buildSignalPlans(model) : null), [model]);
   const modelRef = useRef<MapModel | null>(model);
   const geoRef = useRef(geo);
-  const plansRef = useRef(signalPlans);
   useEffect(() => {
     modelRef.current = model;
     geoRef.current = geo;
@@ -197,8 +201,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       laneOffsetsRef.current = null;
       congestionRoadsRef.current = [];
     }
-    plansRef.current = signalPlans;
-  }, [model, geo, signalPlans]);
+  }, [model, geo]);
 
   // Map lifecycle: created once, as soon as the frozen geography is loaded.
   useEffect(() => {
@@ -232,7 +235,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     zoomRef.current = map.getZoom();
     // Sprites are built once, never per frame.
     iconsRef.current = createVehicleSprites();
-    signalSpritesRef.current = createSignalSprites();
+    controlSpritesRef.current = createControlSprites();
     destSpritesRef.current = createDestinationSprites();
     if (window.location.search.includes("debug")) {
       // Dev-only diagnostics (URL-gated).
@@ -526,6 +529,19 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           }
         }
         routeSegmentsRef.current = segments;
+        // Contextual controls, derived from the CURRENT route so a reroute
+        // swaps them automatically and a passed control retires at once.
+        const controls = deriveContextualControls({
+          model: buffer.model,
+          indexes: buffer.paths,
+          laneOffsets,
+          trip: snapshot?.trip ?? null,
+          ego: snapshot?.ego
+            ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
+            : null,
+          routeControls: snapshot?.routeControls ?? [],
+        });
+        controlsRef.current = controls;
         routeMixRef.current = routeTrafficMix(segments);
         lastEgoMetricRef.current = egoRendered
           ? { x: egoRendered.x, y: egoRendered.y, headingRadians: egoRendered.headingRadians }
@@ -567,15 +583,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
                 zoomRef.current,
               ),
-              ...buildSignalLayers(
-                projection,
-                buffer.model,
-                buffer.current,
-                plansRef.current ?? new Map(),
-                buffer.paths,
-                zoomRef.current,
-                signalSpritesRef.current,
-              ),
+              // Contextual road controls: only what the ego is about to meet.
+              ...buildControlLayers(projection, controls, controlSpritesRef.current),
               ...incidents.layers,
             ];
         overlayRef.current?.setProps({ layers });
@@ -601,6 +610,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           // any more, so report the ego and the road state that replaced it.
           const ego = buffer.current?.ego ?? null;
           const trip = buffer.current?.trip ?? null;
+          const upcoming = upcomingControl(controls);
           (window as unknown as { __jevLayers?: unknown }).__jevLayers = {
             hottest: hotspots[0] ?? null,
             hotspots,
@@ -616,6 +626,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             occupiedRoadsWithQueues:
               buffer.current?.roadTraffic.filter((road) => road.queuedCount > 0).length ?? 0,
             routeControls: buffer.current?.routeControls.length ?? 0,
+            // Contextual controls (Issue #26): the ego's near-term road
+            // controls, never the citywide signal forest.
+            visibleControlCount: controls.length,
+            upcomingControlKind: upcoming?.kind ?? null,
+            upcomingControlIntersectionId: upcoming?.intersectionId ?? null,
+            upcomingControlDistanceM: upcoming ? Math.round(upcoming.distanceAheadM) : null,
+            upcomingControlProminence: upcoming?.prominence ?? null,
+            upcomingSignalStage: upcoming?.signal?.stage ?? null,
+            egoApproachPermitted: upcoming?.signal?.egoApproachPermitted ?? null,
             routeSegments: segments.length,
             routeMix: routeMixRef.current,
             routeTrafficByRoad: segments.slice(0, 12).map((segment) => `${segment.roadId}:${segment.traffic}`),
@@ -624,9 +643,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             cameraCenter: [Math.round(mapRef.current?.getCenter().lng ?? 0), Math.round(mapRef.current?.getCenter().lat ?? 0)],
             snapshotBytes: buffer.current ? JSON.stringify(buffer.current).length : 0,
             layerIds: layers.map((layer) => layer.id),
-            // Signals hide themselves when the atlas is missing rather than
+            // Controls hide themselves when the atlas is missing rather than
             // falling back to a coloured dot, so debug reports it explicitly.
-            signalSprites: signalSpritesRef.current ? "ok" : "missing",
+            controlSprites: controlSpritesRef.current ? "ok" : "missing",
             waitBuckets: buckets,
             maxWaitMs: vehicles.reduce(
               (max, vehicle) => Math.max(max, vehicle.blockedWaitMs),

@@ -51,3 +51,23 @@ export const FOLLOW_SCALE = {
   /** One-shot ease when the user presses Follow/Recenter. */
   recenterEaseMs: 650,
 } as const;
+
+/**
+ * Contextual road controls (Issue #26). The head and the sign are WORLD
+ * objects: sized in metres, with a pixel floor so they stay readable at
+ * follow-camera zoom and a cap so they never smear when the camera descends.
+ * The preview band is deliberately smaller and quieter than the primary one.
+ */
+export const CONTROL_SCALE = {
+  /**
+   * Legibility floor while a control is primary / preview. Sized so all three
+   * lamp positions resolve at follow-camera zoom, not just the lit one.
+   */
+  minPixels: 36,
+  previewMinPixels: 26,
+  /** Safety cap: never larger than this on screen. */
+  maxPixels: 96,
+  /** Preview controls draw at this fraction of their primary size. */
+  previewSizeScale: 0.78,
+  previewOpacity: 0.72,
+} as const;
