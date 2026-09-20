@@ -297,8 +297,13 @@ describe("product shell contracts", () => {
     expect(map.toLowerCase()).toContain("attribution");
   });
 
-  it("keeps onboarding traffic-free even while the worker is prewarmed", () => {
+  it("shows city traffic during setup without leaking the private challenge route", () => {
+    expect(map).toContain("networkContextLayers");
+    expect(map).toContain("challengeLayers");
     expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
+    expect(map).toContain("const layers: Layer[] = [...networkContextLayers, ...challengeLayers]");
+    // Incident plates and route-specific incident chrome still belong only to
+    // the live challenge, not the prewarmed setup background.
     expect(map).toContain("visiblePlates = showDynamicMapState ? incidents.extras.plates : []");
   });
 
