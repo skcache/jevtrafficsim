@@ -129,10 +129,10 @@ describe("road presentation hierarchy", () => {
   });
 });
 
-describe("vehicle presentation stays coherent", () => {
-  it("renders the full active fleet once individual vehicles are visible", () => {
-    const vehicles = Array.from({ length: 24 }, (_, id) => ({
-      id,
+describe("ego vehicle presentation stays coherent", () => {
+  it("renders the supplied ego in map space without reintroducing a fleet contract", () => {
+    const ego = [{
+      id: 0,
       roadId: 0,
       type: "car" as const,
       state: "moving" as const,
@@ -142,7 +142,7 @@ describe("vehicle presentation stays coherent", () => {
       blockedWaitMs: 0,
       fade: 1,
       queueRank: -1,
-    }));
+    }];
     const icons = {
       atlas: "data:image/png;base64,",
       mapping: {
@@ -151,13 +151,14 @@ describe("vehicle presentation stays coherent", () => {
         bicycle: { x: 256, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
       },
     } as never;
-    const layers = buildVehicleLayers(model.projection, vehicles, icons, 16);
+    const layers = buildVehicleLayers(model.projection, ego, icons, 16);
     const car = layers.find((layer) => layer.id === "vehicle-body-car") as unknown as {
-      props: { data: unknown[]; sizeUnits: string; getSize: number };
+      props: { data: unknown[]; sizeUnits: string; getSize: number; sizeMinPixels: number };
     };
-    expect(car.props.data).toHaveLength(vehicles.length);
+    expect(car.props.data).toHaveLength(1);
     expect(car.props.sizeUnits).toBe("meters");
     expect(car.props.getSize).toBeGreaterThan(0);
+    expect(car.props.sizeMinPixels).toBeLessThan(20);
   });
 });
 
