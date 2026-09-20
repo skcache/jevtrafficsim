@@ -158,7 +158,8 @@ describe("ego vehicle presentation stays coherent", () => {
     expect(car.props.data).toHaveLength(1);
     expect(car.props.sizeUnits).toBe("meters");
     expect(car.props.getSize).toBeGreaterThan(0);
-    expect(car.props.sizeMinPixels).toBeLessThan(20);
+    expect(car.props.sizeMinPixels).toBeGreaterThanOrEqual(18);
+    expect(car.props.sizeMinPixels).toBeLessThanOrEqual(24);
   });
 });
 
