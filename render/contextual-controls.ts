@@ -29,7 +29,7 @@ import {
   stopLineSetbackMetres,
 } from "@/render/road-presentation";
 import { samplePathIndex } from "@/cities/paths";
-import { deriveApproachGroups, type SignalStage } from "@/sim/signals";
+import { canApproachProceedForPhase, deriveApproachGroups, type SignalStage } from "@/sim/signals";
 import type { IntersectionId, RoadId } from "@/sim/types";
 import type {
   PresentationSignal,
@@ -42,7 +42,7 @@ export type ControlProminence = "primary" | "preview";
 export interface ContextualControl {
   readonly intersectionId: IntersectionId;
   readonly kind: ControlKind;
-  /** Metres ahead along the ego's route to the stop line. */
+  /** Metres ahead along the ego's route to the physical stop line. */
   readonly distanceAheadM: number;
   /** Local map metres of the control glyph (kerbside, before the stop line). */
   readonly x: number;
@@ -76,20 +76,6 @@ export const CONTROL_REVEAL = {
   /** Gap between the lane-group edge and the control glyph, in metres. */
   kerbGapM: 2.1,
 } as const;
-
-/** The engine's permission rule, applied to the presentation payload. */
-export function egoApproachPermitted(
-  groups: readonly (readonly RoadId[])[],
-  stage: SignalStage,
-  phaseIndex: number,
-  incomingRoadId: RoadId,
-): boolean {
-  if (stage !== "green") {
-    return false; // yellow and all-red block new entries (documented policy)
-  }
-  const group = groups[phaseIndex];
-  return group !== undefined && group.includes(incomingRoadId);
-}
 
 export interface ContextualControlInput {
   readonly model: MapModel;
@@ -156,9 +142,12 @@ export function deriveContextualControls(input: ContextualControlInput): Context
         ? Math.max(0, road.length - (ego.roadId === roadId ? ego.progress : 0))
         : road.length;
     aheadM += remainingM;
-    // The intersection at the END of this road is `aheadM` away: stop walking
-    // once that is past the preview band.
-    if (aheadM > CONTROL_REVEAL.previewM) {
+    const stopSetbackM = stopLineSetbackMetres(directionalLanes(model, roadId));
+    // Reveal distance is to the PHYSICAL stop line, not the graph node. Once a
+    // car has crossed that line but has not changed roads yet, keep the control
+    // at 0 m until the route index advances and retires it.
+    const controlDistanceM = Math.max(0, aheadM - stopSetbackM);
+    if (controlDistanceM > CONTROL_REVEAL.previewM) {
       break;
     }
     const intersection = city.intersections[road.to];
@@ -196,7 +185,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
     controls.push({
       intersectionId: intersection.id,
       kind,
-      distanceAheadM: aheadM,
+      distanceAheadM: controlDistanceM,
       x: placement.x,
       y: placement.y,
       bearing: placement.bearing,
