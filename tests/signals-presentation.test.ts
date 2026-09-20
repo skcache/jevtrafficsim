@@ -188,9 +188,9 @@ describe("signal rendering", () => {
     const head19 = at19.find((layer) => layer.id === "signals-heads") as unknown as HeadLayer;
     for (const head of [head17, head19]) {
       expect(head.props.sizeUnits).toBe("meters");
-      expect(head.props.getSize).toBe(7.5);
-      expect(head.props.sizeMinPixels).toBe(30);
-      expect(head.props.sizeMaxPixels).toBe(72);
+      expect(head.props.getSize).toBe(11.5);
+      expect(head.props.sizeMinPixels).toBe(10);
+      expect(head.props.sizeMaxPixels).toBe(110);
     }
   });
 
