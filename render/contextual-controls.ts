@@ -51,6 +51,11 @@ export interface ContextualControl {
   readonly bearing: number;
   /** Nearest control is primary inside the primary band; others stay quieter. */
   readonly prominence: ControlProminence;
+  /**
+   * Continuous 0..1 approach emphasis. The renderer uses this to grow the
+   * contextual control smoothly out of the tiny citywide signal system.
+   */
+  readonly emphasis: number;
   /** Signal state for the ego's own approach, or null for a stop sign. */
   readonly signal: ContextualSignalState | null;
 }
@@ -190,19 +195,38 @@ export function deriveContextualControls(input: ContextualControlInput): Context
       y: placement.y,
       bearing: placement.bearing,
       prominence: "preview",
+      emphasis: 0,
       signal,
     });
   }
 
   controls.sort((a, b) => a.distanceAheadM - b.distanceAheadM);
   // Two controlled intersections can sit unusually close together: the nearest
-  // is primary, AT MOST one second stays quieter. More than that would be a
-  // corridor covered in heads, which is exactly what this issue forbids.
-  return controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => ({
-    ...control,
-    prominence:
-      index === 0 && control.distanceAheadM <= CONTROL_REVEAL.primaryM ? "primary" : "preview",
-  }));
+  // is primary, AT MOST one second stays quieter. Emphasis grows continuously
+  // from the preview boundary to the primary band so the citywide micro-signal
+  // feels like it enlarges as the ego approaches instead of popping in.
+  return controls.slice(0, CONTROL_REVEAL.maxVisible).map((control, index) => {
+    const raw =
+      control.distanceAheadM <= CONTROL_REVEAL.primaryM
+        ? 1
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              (CONTROL_REVEAL.previewM - control.distanceAheadM) /
+                (CONTROL_REVEAL.previewM - CONTROL_REVEAL.primaryM),
+            ),
+          );
+    const eased = raw * raw * (3 - 2 * raw);
+    return {
+      ...control,
+      prominence:
+        index === 0 && control.distanceAheadM <= CONTROL_REVEAL.primaryM
+          ? "primary"
+          : "preview",
+      emphasis: eased * (index === 0 ? 1 : 0.58),
+    };
+  });
 }
 
 /** The control the ego is about to meet, or null when the road ahead is clear. */
