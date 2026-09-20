@@ -29,6 +29,8 @@ import { scaleIndexForSize } from "./ui-model";
 
 interface JevDebugHook {
   config: unknown;
+  incidentPlan: unknown;
+  incidentFingerprint: string | null;
   snapshot: {
     sequence: number;
     timeMs: number;
@@ -59,11 +61,24 @@ function updateDebugHook(event: WorkerEvent): void {
   const target = window as unknown as { __jevDebug?: JevDebugHook };
   const store = useUiStore.getState();
   const hook: JevDebugHook =
-    target.__jevDebug ?? { config: null, snapshot: null, metrics: null, error: null };
+    target.__jevDebug ?? {
+      config: null,
+      incidentPlan: null,
+      incidentFingerprint: null,
+      snapshot: null,
+      metrics: null,
+      error: null,
+    };
   switch (event.type) {
     case "READY":
       hook.config = { ...event.config, scaleIndex: event.scaleIndex, scaleLabel: event.scaleLabel };
+      hook.incidentPlan = event.incidentPlan;
+      hook.incidentFingerprint = event.incidentFingerprint;
       hook.snapshot = null;
+      hook.error = null;
+      break;
+    case "INCIDENT_RESOLVED":
+      hook.incidentFingerprint = event.incidentFingerprint;
       hook.error = null;
       break;
     case "SNAPSHOT": {
@@ -153,6 +168,10 @@ export function TrafficSimulator() {
             // while the onboarding surface fades away.
             mapHandleRef.current?.flyToCentral();
           }
+          break;
+        }
+        case "INCIDENT_RESOLVED": {
+          store.setFeedback(data.label);
           break;
         }
         case "SNAPSHOT": {
