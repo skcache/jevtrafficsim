@@ -34,8 +34,6 @@ export interface ControlIconDefinition {
 export interface ControlSpriteSet {
   readonly atlas: string;
   readonly mapping: Record<ControlSpriteId, ControlIconDefinition>;
-  /** Sprite height in metres, per id: the layer sizes icons by height. */
-  readonly heightM: Record<ControlSpriteId, number>;
 }
 
 const SIGNAL_CELL_W = 128;
@@ -198,13 +196,6 @@ export function createControlSprites(): ControlSpriteSet | null {
         anchorY: STOP_CELL * SCALE,
         mask: false,
       },
-    },
-    // Comically large on purpose: the head has to be readable at follow zoom.
-    heightM: {
-      "control-signal-red": 38,
-      "control-signal-yellow": 38,
-      "control-signal-green": 38,
-      "control-stop": 26,
     },
   };
 }
