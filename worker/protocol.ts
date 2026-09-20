@@ -5,6 +5,7 @@
  * React, no simulation execution — the worker owns all of that.
  */
 import type { IncidentKind } from "@/sim/incidents";
+import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type {
   PresentationMetrics,
@@ -51,6 +52,7 @@ export type WorkerCommand =
       readonly type: "INIT";
       readonly citySize: CitySize;
       readonly trafficLevel: TrafficLevel;
+      readonly tripId: CuratedTripId;
       readonly controller: ControllerChoice;
       readonly seed: number;
       readonly durationMs?: number;
@@ -66,6 +68,7 @@ export type WorkerCommand =
 export interface RunConfig {
   readonly citySize: CitySize;
   readonly trafficLevel: TrafficLevel;
+  readonly tripId: CuratedTripId;
   readonly controller: ControllerChoice;
   readonly seed: number;
   readonly durationMs: number;
@@ -134,6 +137,7 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
         record.trafficLevel,
         TRAFFIC_LEVEL_CHOICES,
       );
+      const tripId = readChoice("INIT.tripId", record.tripId, CURATED_TRIP_IDS);
       const controller = readChoice(
         "INIT.controller",
         record.controller,
@@ -152,7 +156,7 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
         }
         durationMs = record.durationMs;
       }
-      return { type, citySize, trafficLevel, controller, seed, durationMs };
+      return { type, citySize, trafficLevel, tripId, controller, seed, durationMs };
     }
     case "START":
     case "PAUSE":
