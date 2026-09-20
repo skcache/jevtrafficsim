@@ -1,6 +1,7 @@
 /**
- * Route geometry (Issue #25): the ego's CURRENT remaining route as a list of
- * per-road polylines, each tagged with its traffic class.
+ * Route geometry: the ego's CURRENT remaining route as a list of per-road
+ * polylines. Traffic class stays attached for ETA/debug summaries, while the
+ * visible navigation band is intentionally one consistent blue.
  *
  * The geometry comes from the presentation frame's trip payload — which is
  * rebuilt from the vehicle's own route every frame — so an incident reroute
@@ -86,9 +87,9 @@ export function buildRouteSegments(
 }
 
 /**
- * Distance-weighted share of the remaining route in each traffic class. Used by
- * tests and the HUD's summary line, so both read the same numbers the map
- * paints.
+ * Remaining-route membership by traffic class. This is diagnostic/summary
+ * state; the citywide traffic overlay communicates traffic visually while the
+ * navigation band itself stays one colour.
  */
 export function routeTrafficMix(
   segments: readonly RouteSegment[],
