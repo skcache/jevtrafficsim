@@ -332,6 +332,7 @@ export function buildChallengeIncidentPlan(
   const count = CHALLENGE_INCIDENT_COUNTS[trafficLevel];
   const entries: IncidentScriptEntry[] = [];
   const usedKinds = new Set<IncidentKind>();
+  let usedClosure = false;
   let previousAtMs = 0;
 
   for (let index = 0; index < count; index += 1) {
@@ -345,6 +346,7 @@ export function buildChallengeIncidentPlan(
       for (let offset = 0; offset < AUTOMATIC_KIND_ORDER.length; offset += 1) {
         const kind = AUTOMATIC_KIND_ORDER[(start + offset) % AUTOMATIC_KIND_ORDER.length];
         if (requireFresh && usedKinds.has(kind)) continue;
+        if (usedClosure && (kind === "close-road" || kind === "bridge-closed")) continue;
         const candidate = automaticEntryForKind(model, trip, kind, atMs, incidentSeed, index);
         if (candidate) {
           chosen = candidate;
@@ -357,6 +359,9 @@ export function buildChallengeIncidentPlan(
     if (chosen) {
       entries.push(chosen);
       usedKinds.add(chosen.kind);
+      if (chosen.kind === "close-road" || chosen.kind === "bridge-closed") {
+        usedClosure = true;
+      }
       previousAtMs = chosen.atMs;
     }
   }
