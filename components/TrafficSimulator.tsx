@@ -157,11 +157,19 @@ export function TrafficSimulator() {
           void loadChicagoCity(data.scaleIndex).then((model) => {
             setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
           });
-          if (prewarmRef.current) {
-            // Landing preview: live traffic behind the title, no chrome.
+          if (
+            prewarmRef.current &&
+            (store.phase === "landing" || store.phase === "config")
+          ) {
+            // Landing/config preview: live traffic behind the UI, no chrome.
+            // Phase is part of the guard because a preview build can be
+            // superseded by Enter City while Chicago is still loading. In that
+            // race, the surviving READY belongs to the live run and must not
+            // be swallowed by a stale prewarm flag.
             prewarmRef.current = false;
             break;
           }
+          prewarmRef.current = false;
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
           lastScaleRef.current = data.scaleIndex;
