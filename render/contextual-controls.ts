@@ -225,14 +225,32 @@ export function deriveContextualControls(input: ContextualControlInput): Context
             ),
           );
     const eased = raw * raw * (3 - 2 * raw);
+    const emphasis = eased * (index === 0 ? 1 : 0.58);
+    const intersection = city.intersections[control.intersectionId];
+
+    // Quiet network signals live at the intersection node. Blend the live
+    // contextual signal from that exact position out to its physical kerbside
+    // control point as emphasis grows. This makes the handoff a real animation,
+    // not "tiny icon disappears here, giant icon appears over there".
+    const x =
+      control.kind === "signal" && intersection
+        ? intersection.x + (control.x - intersection.x) * emphasis
+        : control.x;
+    const y =
+      control.kind === "signal" && intersection
+        ? intersection.y + (control.y - intersection.y) * emphasis
+        : control.y;
+
     return {
       ...control,
+      x,
+      y,
       prominence:
         index === 0 && control.distanceAheadM <= CONTROL_REVEAL.primaryM
           ? "primary" as const
           : "preview" as const,
       lifecycle: "upcoming" as const,
-      emphasis: eased * (index === 0 ? 1 : 0.58),
+      emphasis,
     };
   });
 
@@ -261,12 +279,20 @@ export function deriveContextualControls(input: ContextualControlInput): Context
       if (placement) {
         const raw = Math.max(0, 1 - ego.progress / CONTROL_REVEAL.retireM);
         const eased = raw * raw * (3 - 2 * raw);
+        const x =
+          kind === "signal"
+            ? previousIntersection.x + (placement.x - previousIntersection.x) * eased
+            : placement.x;
+        const y =
+          kind === "signal"
+            ? previousIntersection.y + (placement.y - previousIntersection.y) * eased
+            : placement.y;
         upcoming.push({
           intersectionId: previousIntersection.id,
           kind,
           distanceAheadM: -ego.progress,
-          x: placement.x,
-          y: placement.y,
+          x,
+          y,
           bearing: placement.bearing,
           prominence: "preview",
           lifecycle: "retiring",
