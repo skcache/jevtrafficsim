@@ -419,7 +419,6 @@ function handleCommand(command: WorkerCommand): void {
       return;
     }
   }
-}  }
 }
 
 scope.onmessage = (event: MessageEvent) => {
