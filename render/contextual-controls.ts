@@ -174,7 +174,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
       signal = {
         stage: state.stage,
         phaseIndex: state.phaseIndex,
-        egoApproachPermitted: egoApproachPermitted(
+        egoApproachPermitted: canApproachProceedForPhase(
           deriveApproachGroups(city, intersection.id),
           state.stage,
           state.phaseIndex,
