@@ -12,6 +12,7 @@ import type { MapModel } from "@/cities/map-model";
 import { buildPathIndex, type Point } from "@/cities/paths";
 import {
   canApproachProceed,
+  canApproachProceedForPhase,
   createSignalState,
   deriveApproachGroups,
   stepSignal,
@@ -24,7 +25,6 @@ import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import {
   CONTROL_REVEAL,
   deriveContextualControls,
-  egoApproachPermitted,
   upcomingControl,
   type ContextualControl,
 } from "@/render/contextual-controls";
@@ -355,10 +355,10 @@ describe("contextual controls: ego approach semantics", () => {
   it("permits the ego only when its own group is green", () => {
     const egoGroup = groups.findIndex((group) => group.includes(horizontal));
     const otherGroup = (egoGroup + 1) % groups.length;
-    expect(egoApproachPermitted(groups, "green", egoGroup, horizontal)).toBe(true);
-    expect(egoApproachPermitted(groups, "green", otherGroup, horizontal)).toBe(false);
-    expect(egoApproachPermitted(groups, "yellow", egoGroup, horizontal)).toBe(false);
-    expect(egoApproachPermitted(groups, "all-red", egoGroup, horizontal)).toBe(false);
+    expect(canApproachProceedForPhase(groups, "green", egoGroup, horizontal)).toBe(true);
+    expect(canApproachProceedForPhase(groups, "green", otherGroup, horizontal)).toBe(false);
+    expect(canApproachProceedForPhase(groups, "yellow", egoGroup, horizontal)).toBe(false);
+    expect(canApproachProceedForPhase(groups, "all-red", egoGroup, horizontal)).toBe(false);
   });
 
   it("shows green only for the permitted approach and red for the other group", () => {
@@ -396,7 +396,7 @@ describe("contextual controls: ego approach semantics", () => {
     for (let phase = 0; phase < groups.length; phase += 1) {
       for (let step = 0; step < 60; step += 1) {
         const enginePermits = canApproachProceed(state, horizontal);
-        const presentationPermits = egoApproachPermitted(
+        const presentationPermits = canApproachProceedForPhase(
           state.groups,
           state.stage,
           state.phaseIndex,
@@ -404,7 +404,7 @@ describe("contextual controls: ego approach semantics", () => {
         );
         expect(presentationPermits).toBe(enginePermits);
         const enginePermitsVertical = canApproachProceed(state, vertical);
-        const presentationVertical = egoApproachPermitted(
+        const presentationVertical = canApproachProceedForPhase(
           state.groups,
           state.stage,
           state.phaseIndex,
@@ -455,12 +455,6 @@ describe("contextual controls: placement and scale", () => {
       mapping: Object.fromEntries(
         CONTROL_SPRITE_IDS.map((id) => [id, { x: 0, y: 0, width: 8, height: 8, anchorX: 4, anchorY: 8, mask: false }]),
       ),
-      heightM: {
-        "control-signal-red": 10,
-        "control-signal-yellow": 10,
-        "control-signal-green": 10,
-        "control-stop": 7,
-      },
     } as never;
     const layers = buildControlLayers(model.projection, controls, sprites);
     expect(layers.map((layer) => layer.id)).toEqual(["control-primary"]);
@@ -468,8 +462,11 @@ describe("contextual controls: placement and scale", () => {
     expect(props.sizeUnits).toBe("meters");
     expect(props.sizeMinPixels).toBe(CONTROL_SCALE.minPixels);
     expect(props.sizeMaxPixels).toBe(CONTROL_SCALE.maxPixels);
-    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBe(10);
+    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBe(CONTROL_SCALE.signalHeightM);
     expect(controlPixelBounds().minPixels).toBeGreaterThan(0);
+    expect(CONTROL_SCALE.minPixels).toBeLessThan(50);
+    expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
+    expect(props.billboard).toBe(true);
 
     // A preview control draws smaller and quieter.
     const previewOnly = [{ ...controls[0], prominence: "preview" as const }];
@@ -477,7 +474,7 @@ describe("contextual controls: placement and scale", () => {
     const previewProps = (previewLayers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.previewMinPixels);
     expect(previewProps.opacity).toBeCloseTo(CONTROL_SCALE.previewOpacity, 5);
-    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeLessThan(10);
+    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeCloseTo(CONTROL_SCALE.signalHeightM * CONTROL_SCALE.previewSizeScale, 6);
   });
 
   it("draws nothing when the atlas is missing", () => {
