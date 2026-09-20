@@ -37,27 +37,41 @@ interface RouteRun {
 
 const ROUTE_JOIN_EPSILON_DEG = 2e-6;
 
+function sameRoutePoint(a: LngLat, b: LngLat): boolean {
+  return (
+    Math.abs(a[0] - b[0]) <= ROUTE_JOIN_EPSILON_DEG &&
+    Math.abs(a[1] - b[1]) <= ROUTE_JOIN_EPSILON_DEG
+  );
+}
+
+function cleanRoutePath(path: readonly LngLat[]): LngLat[] {
+  const cleaned: LngLat[] = [];
+  for (const point of path) {
+    if (cleaned.length === 0 || !sameRoutePoint(cleaned[cleaned.length - 1], point)) {
+      cleaned.push(point);
+    }
+  }
+  return cleaned;
+}
+
 export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
   const runs: Array<{ path: LngLat[] }> = [];
   for (const segment of segments) {
-    const path = segment.path as readonly LngLat[];
+    const path = cleanRoutePath(segment.path as readonly LngLat[]);
     if (path.length < 2) continue;
     const previous = runs[runs.length - 1];
-    if (previous) {
-      const a = previous.path[previous.path.length - 1];
-      const b = path[0];
-      const joined =
-        Math.abs(a[0] - b[0]) <= ROUTE_JOIN_EPSILON_DEG &&
-        Math.abs(a[1] - b[1]) <= ROUTE_JOIN_EPSILON_DEG;
-      if (joined) {
-        // Use the next road's first point as the shared junction exactly once.
-        // This avoids stacked caps/circles while never inventing a connector
-        // across a genuine geometry gap.
-        previous.path.push(...path.slice(1));
-        continue;
+    if (previous && sameRoutePoint(previous.path[previous.path.length - 1], path[0])) {
+      // The junction point exists exactly once. Removing near-duplicate
+      // consecutive points also prevents zero-length vertices from turning
+      // into round/dot artifacts in deck.gl.
+      for (const point of path.slice(1)) {
+        if (!sameRoutePoint(previous.path[previous.path.length - 1], point)) {
+          previous.path.push(point);
+        }
       }
+      continue;
     }
-    runs.push({ path: [...path] });
+    runs.push({ path });
   }
   return runs;
 }
