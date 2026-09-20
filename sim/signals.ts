@@ -360,16 +360,35 @@ export function stepSignal(
   }
 }
 
+/**
+ * Authoritative signal-entry rule for any serialized/grouped signal state.
+ * Presentation and simulation both call this function so "can the ego go?"
+ * cannot drift into a second traffic-law implementation.
+ */
+export function canApproachProceedForPhase(
+  groups: readonly (readonly RoadId[])[],
+  stage: SignalStage,
+  phaseIndex: number,
+  incomingRoadId: RoadId,
+): boolean {
+  if (stage !== "green") {
+    return false; // yellow and all-red block new entries (documented policy)
+  }
+  const group = groups[phaseIndex];
+  return group !== undefined && group.includes(incomingRoadId);
+}
+
 /** Whether a vehicle on `incomingRoadId` may enter during the current stage. */
 export function canApproachProceed(
   state: SignalState,
   incomingRoadId: RoadId,
 ): boolean {
-  if (state.stage !== "green") {
-    return false; // yellow and all-red block new entries (documented policy)
-  }
-  const group = state.groups[state.phaseIndex];
-  return group !== undefined && group.includes(incomingRoadId);
+  return canApproachProceedForPhase(
+    state.groups,
+    state.stage,
+    state.phaseIndex,
+    incomingRoadId,
+  );
 }
 
 /** Approach roads currently allowed to enter (green stage only). */
