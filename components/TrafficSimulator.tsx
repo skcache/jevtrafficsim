@@ -30,6 +30,7 @@ import { scaleIndexForSize } from "./ui-model";
 interface JevDebugHook {
   config: unknown;
   incidentPlan: unknown;
+  incidentHistory: unknown[];
   incidentFingerprint: string | null;
   snapshot: {
     sequence: number;
@@ -64,6 +65,7 @@ function updateDebugHook(event: WorkerEvent): void {
     target.__jevDebug ?? {
       config: null,
       incidentPlan: null,
+      incidentHistory: [],
       incidentFingerprint: null,
       snapshot: null,
       metrics: null,
@@ -73,11 +75,13 @@ function updateDebugHook(event: WorkerEvent): void {
     case "READY":
       hook.config = { ...event.config, scaleIndex: event.scaleIndex, scaleLabel: event.scaleLabel };
       hook.incidentPlan = event.incidentPlan;
+      hook.incidentHistory = [...event.incidentHistory];
       hook.incidentFingerprint = event.incidentFingerprint;
       hook.snapshot = null;
       hook.error = null;
       break;
     case "INCIDENT_RESOLVED":
+      hook.incidentHistory = [...event.incidentHistory];
       hook.incidentFingerprint = event.incidentFingerprint;
       hook.error = null;
       break;
