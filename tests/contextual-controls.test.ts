@@ -460,24 +460,35 @@ describe("contextual controls: placement and scale", () => {
       ),
     } as never;
     const layers = buildControlLayers(model.projection, controls, sprites);
-    expect(layers.map((layer) => layer.id)).toEqual(["control-primary"]);
+    expect(layers.map((layer) => layer.id)).toEqual(["control-contextual"]);
     const props = (layers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(props.sizeUnits).toBe("meters");
     expect(props.sizeMinPixels).toBe(CONTROL_SCALE.minPixels);
     expect(props.sizeMaxPixels).toBe(CONTROL_SCALE.maxPixels);
-    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBe(CONTROL_SCALE.signalHeightM);
+    expect((props.getSize as (control: ContextualControl) => number)(controls[0])).toBeCloseTo(
+      CONTROL_SCALE.signalHeightM,
+      6,
+    );
     expect(controlPixelBounds().minPixels).toBeGreaterThan(0);
-    expect(CONTROL_SCALE.minPixels).toBeLessThan(50);
+    expect(CONTROL_SCALE.minPixels).toBeLessThan(12);
     expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
     expect(props.billboard).toBe(true);
 
-    // A preview control draws smaller and quieter.
+    // At the reveal boundary the contextual head starts at the same quiet
+    // network scale, then grows continuously instead of popping between layers.
     const previewOnly = [{ ...controls[0], prominence: "preview" as const, emphasis: 0 }];
     const previewLayers = buildControlLayers(model.projection, previewOnly, sprites);
     const previewProps = (previewLayers[0] as unknown as { props: Record<string, unknown> }).props;
-    expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.previewMinPixels);
-    expect(previewProps.opacity).toBeCloseTo(CONTROL_SCALE.previewOpacity, 5);
-    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeCloseTo(CONTROL_SCALE.signalHeightM * CONTROL_SCALE.previewSizeScale, 6);
+    expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.minPixels);
+    expect((previewProps.getSize as (control: ContextualControl) => number)(previewOnly[0])).toBeCloseTo(
+      CONTROL_SCALE.signalBaseHeightM,
+      6,
+    );
+    const half = { ...previewOnly[0], emphasis: 0.5 };
+    expect((previewProps.getSize as (control: ContextualControl) => number)(half)).toBeCloseTo(
+      (CONTROL_SCALE.signalBaseHeightM + CONTROL_SCALE.signalHeightM) / 2,
+      6,
+    );
   });
 
   it("draws nothing when the atlas is missing", () => {
