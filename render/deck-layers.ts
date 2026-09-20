@@ -63,10 +63,15 @@ export function buildCongestionLayers(
       data,
       getPath: (item) => item.road.path as unknown as LngLat[],
       getColor: (item) => [...CONGESTION_COLORS[item.entry.level]],
-      getWidth: (item) => item.road.widthM * roadVisualScaleAt(zoom),
+      // Traffic mode is a centre stripe over the authored road, not a second
+      // full-width road surface. This keeps the city readable while making
+      // moving/slow/heavy background traffic visible at every challenge zoom.
+      getWidth: (item) =>
+        Math.max(2.2, Math.min(6.5, item.road.widthM * 0.34)) *
+        roadVisualScaleAt(zoom),
       widthUnits: "meters",
-      widthMinPixels: 1.4,
-      widthMaxPixels: 110,
+      widthMinPixels: 1.25,
+      widthMaxPixels: 28,
       pickable: false,
     }),
   ];
