@@ -72,7 +72,9 @@ export const CONTROL_SCALE = {
   stopHeightM: 10.5,
   minPixels: 4,
   maxPixels: 72,
-  opacityFloor: 0.5,
+  // Match the quiet network marker at emphasis=0, then fade to full strength
+  // as the ego approaches. This makes the handoff visually continuous.
+  opacityFloor: 0.3,
 } as const;
 
 /** Tiny neutral signal heads that prove the whole-city control system exists. */
