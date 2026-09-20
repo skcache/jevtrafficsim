@@ -31,6 +31,7 @@ import {
 import { samplePathIndex } from "@/cities/paths";
 import { canApproachProceedForPhase, deriveApproachGroups, type SignalStage } from "@/sim/signals";
 import type { IntersectionId, RoadId } from "@/sim/types";
+import { presentationRouteIndex } from "@/render/route-path";
 import type {
   PresentationSignal,
   PresentationTripProgress,
@@ -139,7 +140,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
   }
 
   const controls: ContextualControl[] = [];
-  const startIndex = Math.max(0, Math.min(trip.routeIndex, trip.routeRoadIds.length));
+  const startIndex = presentationRouteIndex(trip, ego);
   let aheadM = 0;
   for (let index = startIndex; index < trip.routeRoadIds.length; index += 1) {
     const roadId = trip.routeRoadIds[index];
