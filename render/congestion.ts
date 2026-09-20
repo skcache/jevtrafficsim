@@ -13,7 +13,7 @@
  */
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 
-export type CongestionLevel = "warm" | "bad" | "severe";
+export type CongestionLevel = "flowing" | "warm" | "bad" | "severe";
 
 export interface RoadPressure {
   readonly roadId: number;
@@ -44,14 +44,23 @@ const LEVELS: readonly {
   { level: "warm", minQueued: 1, minWaitMs: 5_000, minOccupancyRatio: 0.46 },
 ];
 
-/** Restrained overlay colours: amber -> orange -> red, never neon. */
-export const CONGESTION_COLORS: Record<CongestionLevel, readonly [number, number, number, number]> = {
+/**
+ * City traffic-mode colours. Flowing roads get a quiet green proof-of-life;
+ * pressure graduates through amber/orange/red. The ego route is filtered out
+ * by CityMap and keeps its own blue/amber/red language.
+ */
+export const CONGESTION_COLORS: Record<
+  CongestionLevel,
+  readonly [number, number, number, number]
+> = {
+  flowing: [79, 143, 104, 72],
   warm: [217, 168, 92, 120],
   bad: [214, 124, 58, 150],
   severe: [178, 58, 44, 170],
 };
 
 function levelFor(
+  active: number,
   queued: number,
   maxBlockedWaitMs: number,
   occupancyRatio: number,
@@ -65,7 +74,9 @@ function levelFor(
       return rule.level;
     }
   }
-  return null;
+  // A road carrying moving background vehicles is still part of the traffic
+  // system. Draw it quietly instead of making the city look empty until a jam.
+  return active > 0 ? "flowing" : null;
 }
 
 /**
@@ -94,7 +105,7 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
 
   const pressure: RoadPressure[] = [];
   for (const [roadId, entry] of [...stats.entries()].sort((a, b) => a[0] - b[0])) {
-    const level = levelFor(entry.queued, entry.maxWait, entry.occupancyRatio);
+    const level = levelFor(entry.active, entry.queued, entry.maxWait, entry.occupancyRatio);
     if (level === null) {
       continue;
     }
