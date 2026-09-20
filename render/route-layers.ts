@@ -11,7 +11,6 @@
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Projection } from "@/cities/map-model";
-import { ROUTE_TRAFFIC_COLORS } from "./route-traffic";
 import type { RouteSegment } from "./route-path";
 import { DESTINATION_SCALE, ROUTE_SCALE } from "./scale";
 import type { LngLat } from "./deck-layers";
@@ -23,39 +22,42 @@ function color(hex: readonly [number, number, number], alpha = 255): [number, nu
 }
 
 /**
- * One continuous-looking route band.
+ * One visually continuous route band.
  *
- * The old casing + core design doubled the visual stroke and, because route
- * geometry arrives per directed road, round caps stacked into visible circles
- * at intersections. We now coalesce consecutive roads with the same traffic
- * class and draw ONE band with butt caps. Traffic can still transition
- * blue/amber/red, but there is never a second outline colour underneath it.
+ * The route is deliberately ONE colour now. Traffic pressure belongs to the
+ * citywide traffic layer underneath the trip experience; changing the route
+ * stroke itself at every road boundary created visual seams and bulbous
+ * intersection artefacts. We still keep per-road traffic classes in
+ * RouteSegment for ETA/debugging, but the navigation path itself reads as one
+ * coherent object.
  */
 interface RouteRun {
-  readonly traffic: RouteSegment["traffic"];
   readonly path: readonly LngLat[];
 }
 
+const ROUTE_JOIN_EPSILON_DEG = 2e-6;
+
 export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
-  const runs: Array<{ traffic: RouteSegment["traffic"]; path: LngLat[] }> = [];
+  const runs: Array<{ path: LngLat[] }> = [];
   for (const segment of segments) {
     const path = segment.path as readonly LngLat[];
     if (path.length < 2) continue;
     const previous = runs[runs.length - 1];
-    if (previous && previous.traffic === segment.traffic) {
+    if (previous) {
       const a = previous.path[previous.path.length - 1];
       const b = path[0];
       const joined =
-        Math.abs(a[0] - b[0]) < 1e-7 &&
-        Math.abs(a[1] - b[1]) < 1e-7;
+        Math.abs(a[0] - b[0]) <= ROUTE_JOIN_EPSILON_DEG &&
+        Math.abs(a[1] - b[1]) <= ROUTE_JOIN_EPSILON_DEG;
       if (joined) {
+        // Use the next road's first point as the shared junction exactly once.
+        // This avoids stacked caps/circles while never inventing a connector
+        // across a genuine geometry gap.
         previous.path.push(...path.slice(1));
         continue;
       }
     }
-    // Never bridge a geometry gap merely because traffic colour matches.
-    // That would draw a fake straight connector across the block.
-    runs.push({ traffic: segment.traffic, path: [...path] });
+    runs.push({ path: [...path] });
   }
   return runs;
 }
@@ -68,17 +70,17 @@ export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
       id: "route-band",
       data: runs,
       getPath: (run) => run.path as LngLat[],
-      getColor: (run) =>
+      getColor: () =>
         color(
-          ROUTE_TRAFFIC_COLORS[run.traffic],
+          ROUTE_SCALE.color,
           Math.round(ROUTE_SCALE.opacity * 255),
         ),
       getWidth: ROUTE_SCALE.widthM,
       widthUnits: "meters",
       widthMinPixels: ROUTE_SCALE.minPixels,
       widthMaxPixels: ROUTE_SCALE.maxPixels,
-      // Butt caps are intentional: round caps on per-road paths were the
-      // mysterious circles visible at intersections.
+      // One run spans contiguous intersections, so there are no stacked
+      // per-road end caps to turn into the old mystery circles.
       capRounded: false,
       jointRounded: true,
       pickable: false,
