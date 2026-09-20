@@ -50,9 +50,15 @@ export function buildCongestionLayers(
   if (pressure.length === 0) {
     return [];
   }
-  const byId = new Map(roads.map((road) => [road.roadId, road]));
+  // Road ids are dense/index-aligned in the compiled Chicago model. Use
+  // direct indexed lookup here: this function runs at display rate and should
+  // not allocate a 5k-entry Map on every animation frame.
   const data = pressure
-    .map((entry) => ({ entry, road: byId.get(entry.roadId) }))
+    .map((entry) => {
+      const candidate = roads[entry.roadId];
+      const road = candidate?.roadId === entry.roadId ? candidate : undefined;
+      return { entry, road };
+    })
     .filter((item): item is { entry: RoadPressure; road: CongestionRoad } => !!item.road?.path.length);
   if (data.length === 0) {
     return [];
