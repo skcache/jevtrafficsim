@@ -72,8 +72,8 @@ describe("Issue #27 challenge incident planning", () => {
   });
 
   it("targets automatic road adversity ahead on the canonical route", () => {
-    const first = automaticTargetRoads(trip.route.roadIds, 0);
-    const second = automaticTargetRoads(trip.route.roadIds, 1);
+    const first = automaticTargetRoads(model.city, trip.route.roadIds, 0);
+    const second = automaticTargetRoads(model.city, trip.route.roadIds, 1);
     const indexOf = new Map(trip.route.roadIds.map((roadId, index) => [roadId, index]));
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
@@ -83,6 +83,29 @@ describe("Issue #27 challenge incident planning", () => {
     expect(Math.min(...second.map((roadId) => indexOf.get(roadId) ?? -1))).toBeGreaterThan(
       trip.route.roadIds.length * 0.6,
     );
+  });
+
+  it("targets by free-flow progress rather than raw road index", () => {
+    const first = automaticTargetRoads(model.city, trip.route.roadIds, 0);
+    const second = automaticTargetRoads(model.city, trip.route.roadIds, 1);
+    const midpointFraction = (roadId: number) => {
+      const route = trip.route.roadIds;
+      const durations = route.map((id) => {
+        const road = model.city.roads[id];
+        return road.length / road.speedLimit;
+      });
+      const total = durations.reduce((sum, value) => sum + value, 0);
+      let elapsed = 0;
+      for (let index = 0; index < route.length; index += 1) {
+        const duration = durations[index];
+        const midpoint = (elapsed + duration / 2) / total;
+        if (route[index] === roadId) return midpoint;
+        elapsed += duration;
+      }
+      return -1;
+    };
+    expect(first.every((roadId) => midpointFraction(roadId) > 0.35)).toBe(true);
+    expect(second.every((roadId) => midpointFraction(roadId) > 0.62)).toBe(true);
   });
 
   it("fully resolves automatic incidents before engine execution", () => {
@@ -164,27 +187,38 @@ describe("Issue #27 challenge incident planning", () => {
     }
   });
 
-  it("gives Fixed and Adaptive the exact same automatic script", () => {
+  it("gives Fixed and Adaptive the exact same automatic script and resolved adversity", () => {
     const plan = buildChallengeIncidentPlan(model, trip, "rush-hour", 91);
     const { spawn } = materializeChallengeTrip(
       model,
       "united-center-to-navy-pier",
       91,
     );
-    const fixed = createEngine({
-      city: model.city,
-      controller: createFixedController(),
-      spawns: [spawn],
-      incidents: { seed: plan.incidentSeed, script: [...plan.entries] },
-    });
-    const adaptive = createEngine({
-      city: model.city,
-      controller: createAdaptiveController(),
-      spawns: [spawn],
-      incidents: { seed: plan.incidentSeed, script: [...plan.entries] },
-    });
+    const make = (adaptive: boolean) =>
+      createEngine({
+        city: model.city,
+        controller: adaptive ? createAdaptiveController() : createFixedController(),
+        spawns: [spawn],
+        incidents: { seed: plan.incidentSeed, script: [...plan.entries] },
+      });
+    const fixed = make(false);
+    const adaptive = make(true);
     expect(fixed.incidentConfig.script).toEqual(adaptive.incidentConfig.script);
     expect(fixed.incidentConfig.seed).toBe(adaptive.incidentConfig.seed);
+
+    const horizon = Math.max(...plan.entries.map((entry) => entry.atMs), 0) + 500;
+    runEngine(fixed, horizon);
+    runEngine(adaptive, horizon);
+    const resolved = (engine: ReturnType<typeof make>) =>
+      engine.incidents.records.map((record) => ({
+        id: record.id,
+        kind: record.kind,
+        scheduledAtMs: record.scheduledAtMs,
+        roadIds: [...record.roadIds],
+        eventCenterIntersectionId: record.eventCenterIntersectionId,
+        status: record.status,
+      }));
+    expect(resolved(fixed)).toEqual(resolved(adaptive));
   });
 
   it("keeps the incident plan unchanged across an in-place controller switch", () => {
