@@ -79,7 +79,7 @@ describe("citywide traffic-system presentation", () => {
     expect(["bad", "severe"]).toContain(pressure[0].level);
   });
 
-  it("leaves genuinely free roads out of the traffic overlay", () => {
+  it("shows moving background traffic quietly, not only jams", () => {
     const snapshot = {
       roadTraffic: [
         {
@@ -87,6 +87,24 @@ describe("citywide traffic-system presentation", () => {
           occupancy: 1,
           capacity: 10,
           vehicleCount: 1,
+          queuedCount: 0,
+          maxBlockedWaitMs: 0,
+        },
+      ],
+    } as unknown as PresentationSnapshot;
+    expect(roadPressure(snapshot)).toEqual([
+      expect.objectContaining({ roadId: 4, level: "flowing" }),
+    ]);
+  });
+
+  it("leaves a truly empty road out of the sparse traffic overlay", () => {
+    const snapshot = {
+      roadTraffic: [
+        {
+          roadId: 4,
+          occupancy: 0,
+          capacity: 10,
+          vehicleCount: 0,
           queuedCount: 0,
           maxBlockedWaitMs: 0,
         },
