@@ -110,6 +110,7 @@ export function TrafficSimulator() {
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
   const citySize = useUiStore((state) => state.citySize);
+  const tripId = useUiStore((state) => state.tripId);
   /** True while the landing's background run is the one on screen. */
   const prewarmRef = useRef(false);
 
@@ -179,6 +180,7 @@ export function TrafficSimulator() {
       type: "INIT",
       citySize: defaults.citySize,
       trafficLevel: defaults.trafficLevel,
+      tripId: defaults.tripId,
       controller: defaults.controller,
       seed: defaults.seed,
     } satisfies WorkerCommand);
@@ -201,6 +203,7 @@ export function TrafficSimulator() {
         type: "INIT",
         citySize: overrides.citySize ?? state.citySize,
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
+        tripId: state.tripId,
         controller: state.controller,
         seed: overrides.seed ?? state.seed,
       });
@@ -209,8 +212,10 @@ export function TrafficSimulator() {
   );
 
   const enterCity = useCallback(() => {
-    useUiStore.getState().setPhase("entering");
-    startRun();
+    const store = useUiStore.getState();
+    store.setCitySize("large");
+    store.setPhase("entering");
+    startRun({ citySize: "large" });
   }, [startRun]);
 
   const onPause = useCallback(() => {
