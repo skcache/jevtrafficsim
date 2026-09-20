@@ -15,7 +15,7 @@ import type {
   IncidentScriptEntry,
   PhysicalSegment,
 } from "@/sim/incidents";
-import { physicalSegments } from "@/sim/incidents";
+import { physicalSegments, reachableIntersectionCount } from "@/sim/incidents";
 import { createRng } from "@/sim/rng";
 import type {
   City,
@@ -168,12 +168,14 @@ function safeRouteClosureSegments(
     const segment = byRoad.get(roadId);
     if (!segment || seen.has(segment.key)) continue;
     seen.add(segment.key);
+    const excluded = new Set(segment.roadIds);
     if (
+      reachableIntersectionCount(city, excluded) === reachableIntersectionCount(city) &&
       tripReachableExcluding(
         city,
         trip.originIntersectionId,
         trip.destinationIntersectionId,
-        new Set(segment.roadIds),
+        excluded,
       )
     ) {
       candidates.push(segment);
@@ -194,12 +196,15 @@ function routeBridgeSegments(
     const segment = byRoad.get(bridge.roadId);
     if (!segment || seen.has(segment.key)) continue;
     if (!segment.roadIds.some((roadId) => route.has(roadId))) continue;
+    const excluded = new Set(segment.roadIds);
     if (
+      reachableIntersectionCount(model.city, excluded) !==
+        reachableIntersectionCount(model.city) ||
       !tripReachableExcluding(
         model.city,
         trip.originIntersectionId,
         trip.destinationIntersectionId,
-        new Set(segment.roadIds),
+        excluded,
       )
     ) {
       continue;
@@ -388,12 +393,15 @@ function manualSafeClosureCandidates(input: ManualChallengeIncidentInput): Physi
     const segment = byRoad.get(roadId);
     if (!segment || seen.has(segment.key)) continue;
     seen.add(segment.key);
+    const excluded = new Set(segment.roadIds);
     if (
+      reachableIntersectionCount(input.city, excluded) ===
+        reachableIntersectionCount(input.city) &&
       tripReachableExcluding(
         input.city,
         rerouteOrigin,
         input.destinationIntersectionId,
-        new Set(segment.roadIds),
+        excluded,
       )
     ) {
       candidates.push(segment);
