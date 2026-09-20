@@ -32,10 +32,6 @@ export const MID_TIER_MINZOOM = 11.8;
  * is the whole point of the far band.
  */
 export const VEHICLE_MINZOOM = 14.4;
-/** Signal state bars become useful at true neighborhood/street zoom. */
-export const SIGNAL_STATE_MINZOOM = 15.8;
-/** Physical three-lamp housings are detail, not the primary state channel. */
-export const SIGNAL_HEAD_MINZOOM = 16.5;
 
 export function detailTier(zoom: number): DetailTier {
   if (zoom >= CLOSE_TIER_MINZOOM) {

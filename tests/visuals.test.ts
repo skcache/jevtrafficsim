@@ -1,21 +1,18 @@
 /**
- * Presentation-logic tests: the vehicle sizing language, the signal tier fade,
- * incident hatching and the sparkline are pure functions — pinned here so the
- * map cannot quietly regress into unreadable chips or hard zoom cuts.
+ * Presentation-logic tests: the vehicle sizing language, incident hatching and
+ * the sparkline are pure functions — pinned here so the map cannot quietly
+ * regress into unreadable chips or hard zoom cuts.
  *
- * The Phase-2 ring/halo, signal-axis-bar and event-egress-arrow helpers were
- * deleted with the layers that drew them, and their tests went with them: a
- * test that preserves visual behaviour the product intentionally removed is
- * not coverage, it is a trap for the next person.
+ * Helpers deleted with the layers that drew them (ring/halo, signal-axis bars,
+ * event-egress arrows, the old signal tier fade) took their tests with them: a
+ * test that preserves visual behaviour the product intentionally removed is not
+ * coverage, it is a trap for the next person. The signal tier in particular was
+ * replaced wholesale by the contextual controls of issue #26, whose policy is
+ * tested in tests/contextual-controls.test.ts.
  */
 import { describe, expect, it } from "vitest";
 import {
   hatchSegments,
-  signalGateBackingWidthPx,
-  signalGateWidthPx,
-  signalHeadHeightPx,
-  signalTier,
-  signalTierOpacity,
   sparklineLastPoint,
   sparklinePath,
   VEHICLE_BASE_LENGTHS,
@@ -74,34 +71,6 @@ describe("wait heat", () => {
     const highway = [0xf8, 0xce, 0x8b];
     const distance = Math.hypot(r - highway[0], g - highway[1], b - highway[2]);
     expect(distance).toBeGreaterThan(60);
-  });
-});
-
-describe("signal tiers", () => {
-  it("stays absent at map zoom, then fades state in before physical housings", () => {
-    expect(signalTier(15.7)).toBe("hidden");
-    expect(signalTier(15.8)).toBe("mid");
-    expect(signalTier(17)).toBe("close");
-    expect(signalTierOpacity(15.7)).toBe(0);
-    expect(signalTierOpacity(15.8)).toBe(0);
-    expect(signalTierOpacity(16.2)).toBeCloseTo(1, 5);
-    expect(signalTierOpacity(16.5)).toBeCloseTo(1, 5);
-    expect(signalTierOpacity(17.5)).toBeCloseTo(1, 5);
-  });
-
-  it("scales both semantic gates and physical heads continuously with zoom", () => {
-    expect(signalGateWidthPx(15.8)).toBeCloseTo(3.1, 3);
-    expect(signalGateWidthPx(19.5)).toBeGreaterThan(6.3);
-    expect(signalGateBackingWidthPx(17)).toBeGreaterThan(signalGateWidthPx(17));
-    expect(signalHeadHeightPx(16.5)).toBeCloseTo(22, 5);
-    expect(signalHeadHeightPx(19.5)).toBeCloseTo(56, 5);
-    expect(signalHeadHeightPx(19)).toBeGreaterThan(signalHeadHeightPx(18));
-
-    let previousGate = signalGateWidthPx(15.8);
-    for (let zoom = 15.9; zoom <= 19.5; zoom += 0.1) {
-      expect(signalGateWidthPx(zoom)).toBeGreaterThanOrEqual(previousGate - 1e-9);
-      previousGate = signalGateWidthPx(zoom);
-    }
   });
 });
 

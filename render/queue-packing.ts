@@ -36,7 +36,7 @@ import {
 } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
 import type { PresentationSignal } from "@/worker/presentation-snapshot";
-import { deriveApproachGroups } from "@/sim/signals";
+import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 
 /**
  * Queued means the authoritative rank says so (`>= 0`; the renderer uses -1 for
@@ -89,9 +89,14 @@ export function clampVehiclesAtSignals(
     if (groupIndex < 0 || groups.length === 0) {
       return vehicle;
     }
-    const activeGroup = ((signal.phaseIndex % groups.length) + groups.length) % groups.length;
-    // Engine policy: yellow blocks NEW entries. The renderer must agree.
-    const approachPermitted = signal.stage === "green" && groupIndex === activeGroup;
+    // Engine policy: yellow blocks NEW entries. The renderer must agree, so it
+    // asks the SAME helper the contextual controls ask (issue #26).
+    const approachPermitted = canApproachProceedForPhase(
+      groups,
+      signal.stage,
+      ((signal.phaseIndex % groups.length) + groups.length) % groups.length,
+      vehicle.roadId,
+    );
     if (approachPermitted) {
       return vehicle;
     }
