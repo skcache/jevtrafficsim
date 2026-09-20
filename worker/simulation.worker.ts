@@ -255,6 +255,7 @@ function handleCommand(command: WorkerCommand): void {
       buildRun({
         citySize: command.citySize,
         trafficLevel: command.trafficLevel,
+        tripId: command.tripId,
         controller: command.controller,
         seed: command.seed,
         durationMs: command.durationMs ?? LIVE_RUN_HORIZON_MS,
