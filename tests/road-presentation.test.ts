@@ -20,8 +20,9 @@ import { chicagoModel } from "./chicago-support";
 describe("road width by lanes and class", () => {
   it("grows presentation width materially as inspection zoom increases", () => {
     expect(roadVisualScaleAt(13)).toBeCloseTo(1.06, 6);
-    expect(roadVisualScaleAt(17)).toBeCloseTo(1.32, 6);
-    expect(roadVisualScaleAt(19.5)).toBeCloseTo(1.55, 6);
+    expect(roadVisualScaleAt(17)).toBeCloseTo(1.4, 6);
+    expect(roadVisualScaleAt(18.5)).toBeCloseTo(1.75, 6);
+    expect(roadVisualScaleAt(19.5)).toBeCloseTo(2.05, 6);
     expect(roadVisualScaleAt(19.5)).toBeGreaterThan(roadVisualScaleAt(15));
   });
 
