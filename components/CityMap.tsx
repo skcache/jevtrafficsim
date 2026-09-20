@@ -465,9 +465,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // the evidence that the ego is moving through a real traffic system,
         // not a private route animation: dense/queued roads stay amber/red
         // even when the camera is close enough to inspect the ego car.
-        const routeRoadIds = new Set(
-          buffer.current?.trip?.routeRoadIds ?? [],
-        );
+        const routeRoadIds = liveRef.current
+          ? new Set(buffer.current?.trip?.routeRoadIds ?? [])
+          : new Set<number>();
         const congestion =
           !trafficHiddenRef.current && buffer.current
             ? buildCongestionLayers(
@@ -559,9 +559,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           routeControls: snapshot?.routeControls ?? [],
         });
         controlsRef.current = controls;
-        const contextualIntersectionIds = new Set(
-          controls.map((control) => control.intersectionId),
-        );
+        const contextualIntersectionIds = liveRef.current
+          ? new Set(controls.map((control) => control.intersectionId))
+          : new Set<number>();
         const quietNetworkSignals = networkSignalsRef.current.filter(
           (marker) => !contextualIntersectionIds.has(marker.intersectionId),
         );
@@ -588,35 +588,40 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
-        const layers: Layer[] = trafficHiddenRef.current || !liveRef.current
+        const networkContextLayers: Layer[] = trafficHiddenRef.current
           ? []
           : [
-              // Road pressure is the macro layer and belongs BELOW the things
-              // the user is actually inspecting. Landing/configuration stays
-              // deliberately traffic-free; simulation state appears only after
-              // Enter City so the first live frame has a clear semantic shift.
+              // Traffic mode is visible even before the user enters a trip.
+              // This is deliberate proof that the challenge sits on top of a
+              // live citywide system rather than animating one private route.
               ...congestion,
-              // Quiet neutral signal heads show the citywide control network.
-              // Live right-of-way is still reserved for contextual controls.
               ...buildNetworkSignalLayers(
                 projection,
                 quietNetworkSignals,
                 controlSpritesRef.current,
                 zoomRef.current,
               ),
-              // One smooth traffic-coloured route band, then destination + ego.
-              ...buildRouteLayers(segments),
-              ...buildDestinationLayers(projection, destination, destSpritesRef.current),
-              ...buildVehicleLayers(
-                projection,
-                settled,
-                iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
-                zoomRef.current,
-              ),
-              // Contextual road controls: only what the ego is about to meet.
-              ...buildControlLayers(projection, controls, controlSpritesRef.current),
-              ...incidents.layers,
             ];
+        const challengeLayers: Layer[] =
+          trafficHiddenRef.current || !liveRef.current
+            ? []
+            : [
+                // The challenge adds ONE route and ONE ego on top of the same
+                // city traffic layer already visible during setup.
+                ...buildRouteLayers(segments),
+                ...buildDestinationLayers(projection, destination, destSpritesRef.current),
+                ...buildVehicleLayers(
+                  projection,
+                  settled,
+                  iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
+                  zoomRef.current,
+                ),
+                // Contextual controls take over from the tiny network marker as
+                // the ego approaches, then retire back to network scale.
+                ...buildControlLayers(projection, controls, controlSpritesRef.current),
+                ...incidents.layers,
+              ];
+        const layers: Layer[] = [...networkContextLayers, ...challengeLayers];
         overlayRef.current?.setProps({ layers });
         const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
         const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
