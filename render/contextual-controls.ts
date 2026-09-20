@@ -131,6 +131,11 @@ export function deriveContextualControls(input: ContextualControlInput): Context
   if (!trip || !ego) {
     return [];
   }
+  // Arrival: the trip is over. The vehicle rests on its last road, so a walk
+  // would still find that road's endpoint — there is nothing ahead to meet.
+  if (trip.completed) {
+    return [];
+  }
   const city = model.city;
   const signals = new Map<IntersectionId, PresentationSignal>();
   for (const signal of routeControls) {

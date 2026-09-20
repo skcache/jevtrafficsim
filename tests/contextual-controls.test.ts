@@ -270,9 +270,21 @@ describe("contextual controls: route distance", () => {
   });
 
   it("has nothing to show when the trip is complete", () => {
+    // The real arrival shape: the ego rests on its LAST road (routeIndex
+    // length-1) with the trip marked complete — no control may remain.
+    const resting = deriveContextualControls({
+      model,
+      indexes: model.directedPaths.map((points) => (points ? buildPathIndex(points) : null)),
+      laneOffsets: model.city.roads.map(() => 0),
+      trip: { ...trip([0, 1, 2], 2, 3), completed: true, intersectionsCleared: 2 },
+      ego: { roadId: 2, progress: 100 },
+      routeControls: [{ intersectionId: 3, phaseIndex: 0, stage: "green" }],
+    });
+    expect(resting).toEqual([]);
+    expect(upcomingControl(resting)).toBeNull();
+    // Past the end of the route entirely.
     const done = derive(model, [0, 1, 2], 3, { roadId: 2, progress: 100 }, []);
     expect(done).toEqual([]);
-    expect(upcomingControl(done)).toBeNull();
   });
 
   it("never shows a corridor of controls", () => {
