@@ -15,6 +15,7 @@ import type { PathIndex } from "@/cities/paths";
 import { samplePathIndex } from "@/cities/paths";
 import type { DirectedPathIndexes } from "@/render/map-geometry";
 import { applyLaneOffset } from "@/render/map-geometry";
+import { vehicleLaneOffsetMetres } from "@/render/road-presentation";
 import type { City } from "@/sim/types";
 import type { PresentationSnapshot, PresentationVehicle } from "@/worker/presentation-snapshot";
 
@@ -95,7 +96,7 @@ export interface InterpolateOptions {
   readonly nowMs: number;
   /** When the current snapshot arrived. */
   readonly receivedAtMs: number;
-  /** Per-road lane-centre offsets in metres (see render/road-presentation). */
+  /** Per-road direction-group centre offsets; per-vehicle lane slots are added here. */
   readonly laneOffsets: readonly number[];
   /** Road connectivity, for path-aware turns through junctions. */
   readonly city: City;
@@ -123,7 +124,7 @@ export function interpolateVehicles(
   const fade = clamp01((options.nowMs - options.receivedAtMs) / SPAWN_FADE_IN_MS);
   const rendered: RenderedVehicle[] = [];
   for (const vehicle of current.vehicles) {
-    const offset = vehicle.roadId === null ? 0 : options.laneOffsets[vehicle.roadId] ?? 0;
+    const offset = vehicle.roadId === null ? 0 : vehicleLaneOffsetMetres(options.city, options.laneOffsets, vehicle.id, vehicle.roadId);
     const currentPosition = positionForRoad(indexes, vehicle.roadId, vehicle.progress, offset);
     if (!currentPosition) {
       continue;
@@ -141,13 +142,21 @@ export function interpolateVehicles(
         // instead of snapping at the junction.
         heading = lerpAngle(transition.fromHeading, transition.toHeading, t);
       }
-    } else if (before) {
-      const beforeOffset = before.roadId === null ? 0 : options.laneOffsets[before.roadId] ?? 0;
-      const beforePosition = positionForRoad(indexes, before.roadId, before.progress, beforeOffset);
-      if (beforePosition) {
-        x = beforePosition.x + (currentPosition.x - beforePosition.x) * t;
-        y = beforePosition.y + (currentPosition.y - beforePosition.y) * t;
-        heading = lerpAngle(beforePosition.heading, currentPosition.heading, t);
+    } else if (before && before.roadId !== null && before.roadId === vehicle.roadId) {
+      // Same-road motion interpolates scalar progress and resamples the
+      // authoritative polyline. x/y lerp cuts across curves between snapshots.
+      const progress = before.progress + (vehicle.progress - before.progress) * t;
+      const laneOffset = vehicleLaneOffsetMetres(
+        options.city,
+        options.laneOffsets,
+        vehicle.id,
+        vehicle.roadId,
+      );
+      const alongRoad = positionForRoad(indexes, vehicle.roadId, progress, laneOffset);
+      if (alongRoad) {
+        x = alongRoad.x;
+        y = alongRoad.y;
+        heading = alongRoad.heading;
       }
     }
     rendered.push({
@@ -207,8 +216,8 @@ function transitionPosition(
   // This is intentionally stricter than a cosmetic Bezier: a renderer may not
   // invent drivable geometry that the map itself does not contain.
   const distance = clamp01(t) * total;
-  const previousOffset = options.laneOffsets[before.roadId] ?? 0;
-  const currentOffset = options.laneOffsets[current.roadId] ?? 0;
+  const previousOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, before.id, before.roadId);
+  const currentOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, current.id, current.roadId);
   const fromHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
   const toHeading = samplePathIndex(currentIndex, 0).heading;
 
