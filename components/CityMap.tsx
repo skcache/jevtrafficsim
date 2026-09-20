@@ -29,7 +29,7 @@ import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import { metricToLngLat, type MapModel } from "@/cities/map-model";
-import { frameAlpha, interpolateVehicles } from "@/render/interpolate";
+import { frameAlpha, interpolateEgoRoadProgress, interpolateVehicles } from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   carriagewayPairs,
@@ -447,10 +447,18 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       if (buffer && activeMap && buffer.model && buffer.paths) {
         const alpha = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
         // One vehicle in the frame now: the ego. Background traffic reaches the
-        // map only as sparse road aggregates.
+        // map only as sparse road aggregates. Route/control presentation uses
+        // the SAME display-time progress as the visible car, otherwise a smooth
+        // car would drag a 5 Hz route/light behind it.
+        const displayEgoProgress = interpolateEgoRoadProgress(
+          buffer.previous,
+          buffer.current,
+          alpha,
+          buffer.paths,
+        );
         const progress = new Map<number, number>();
-        if (buffer.current?.ego) {
-          progress.set(buffer.current.ego.id, buffer.current.ego.progress);
+        if (buffer.current?.ego && displayEgoProgress) {
+          progress.set(buffer.current.ego.id, displayEgoProgress.progress);
         }
         const laneOffsets = laneOffsetsRef.current ?? [];
         // Whole-city traffic remains visible at every challenge zoom. This is
@@ -527,9 +535,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             snapshot.trip,
             // Progress comes from the frame's ego (the rendered vehicle carries
             // display geometry only); roadId decides whether to trim.
-            snapshot.ego
-              ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
-              : null,
+            displayEgoProgress,
             classifySnapshotRoads(snapshot),
           );
           const destinationNode = buffer.model.city.intersections[snapshot.trip.destinationIntersectionId];
@@ -549,9 +555,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           indexes: buffer.paths,
           laneOffsets,
           trip: snapshot?.trip ?? null,
-          ego: snapshot?.ego
-            ? { roadId: snapshot.ego.roadId, progress: snapshot.ego.progress }
-            : null,
+          ego: displayEgoProgress,
           routeControls: snapshot?.routeControls ?? [],
         });
         controlsRef.current = controls;
