@@ -15,7 +15,6 @@ import type { RenderedVehicle } from "./interpolate";
 import type { Projection } from "@/cities/map-model";
 import { metricToLngLat } from "@/cities/map-model";
 import { hatchSegments } from "./visuals";
-import { EGO_SCALE } from "./scale";
 import { iconSizeForLengthUnits } from "./vehicle-sprites";
 import type { VehicleIconSet } from "./vehicle-icons";
 
@@ -111,18 +110,13 @@ export function buildVehicleLayers(
         iconMapping: icons.mapping,
         getIcon: () => type,
         getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        // Physical vehicle size in map metres. This is the missing zoom
-        // contract: a 4.6 m car grows on screen as the camera descends instead
-        // of staying a ~14 px annotation forever.
-        // Map-space sizing is authoritative. The small pixel floor is only
-        // for legibility; after that vehicles keep growing with camera zoom.
-        // The protagonist is drawn comically large (see EGO_SCALE): visible and
-        // watchable at every challenge zoom, still in map metres underneath.
-        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale),
+        // Physical vehicle size in map metres. The ego grows with camera
+        // descent; pixel bounds are only legibility/safety rails.
+        getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * 1.15),
         getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
         sizeUnits: "meters",
-        sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
-        sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],
+        sizeMinPixels: type === "bicycle" ? 4 : type === "truck" ? 10 : 7,
+        sizeMaxPixels: type === "bicycle" ? 52 : type === "truck" ? 140 : 96,
         billboard: false,
         pickable: false,
       }),
