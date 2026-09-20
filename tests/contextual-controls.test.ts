@@ -222,6 +222,9 @@ describe("contextual controls: route distance", () => {
     expect(controls[0].prominence).toBe("primary");
     expect(controls[1].prominence).toBe("preview");
     expect(controls[0].distanceAheadM).toBeLessThanOrEqual(CONTROL_REVEAL.primaryM);
+    expect(controls[0].emphasis).toBe(1);
+    expect(controls[1].emphasis).toBeGreaterThanOrEqual(0);
+    expect(controls[1].emphasis).toBeLessThan(1);
   });
 
   it("retires a control the ego has passed", () => {
@@ -469,7 +472,7 @@ describe("contextual controls: placement and scale", () => {
     expect(props.billboard).toBe(true);
 
     // A preview control draws smaller and quieter.
-    const previewOnly = [{ ...controls[0], prominence: "preview" as const }];
+    const previewOnly = [{ ...controls[0], prominence: "preview" as const, emphasis: 0 }];
     const previewLayers = buildControlLayers(model.projection, previewOnly, sprites);
     const previewProps = (previewLayers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(previewProps.sizeMinPixels).toBe(CONTROL_SCALE.previewMinPixels);
