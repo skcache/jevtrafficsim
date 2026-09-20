@@ -589,27 +589,30 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
-        const networkContextLayers: Layer[] = trafficHiddenRef.current
+        const networkTrafficLayers: Layer[] = trafficHiddenRef.current
           ? []
           : [
               // Traffic mode is visible even before the user enters a trip.
               // This is deliberate proof that the challenge sits on top of a
               // live citywide system rather than animating one private route.
               ...congestion,
-              ...buildNetworkSignalLayers(
-                projection,
-                quietNetworkSignals,
-                controlSpritesRef.current,
-                zoomRef.current,
-              ),
             ];
-        const challengeLayers: Layer[] =
+        const networkSignalLayers: Layer[] = trafficHiddenRef.current
+          ? []
+          : buildNetworkSignalLayers(
+              projection,
+              quietNetworkSignals,
+              controlSpritesRef.current,
+              zoomRef.current,
+            );
+        const routeLayers: Layer[] =
+          trafficHiddenRef.current || !liveRef.current
+            ? []
+            : buildRouteLayers(segments);
+        const challengeTopLayers: Layer[] =
           trafficHiddenRef.current || !liveRef.current
             ? []
             : [
-                // The challenge adds ONE route and ONE ego on top of the same
-                // city traffic layer already visible during setup.
-                ...buildRouteLayers(segments),
                 ...buildDestinationLayers(projection, destination, destSpritesRef.current),
                 ...buildVehicleLayers(
                   projection,
@@ -622,7 +625,17 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 ...buildControlLayers(projection, controls, controlSpritesRef.current),
                 ...incidents.layers,
               ];
-        const layers: Layer[] = [...networkContextLayers, ...challengeLayers];
+
+        // Layer order is intentional. Traffic sits on the roads; the blue route
+        // sits above traffic; tiny citywide signal infrastructure stays visible
+        // above the route until its contextual replacement takes over; the ego
+        // and relevant live control own the top of the visual hierarchy.
+        const layers: Layer[] = [
+          ...networkTrafficLayers,
+          ...routeLayers,
+          ...networkSignalLayers,
+          ...challengeTopLayers,
+        ];
         overlayRef.current?.setProps({ layers });
         const showDynamicMapState = liveRef.current && !trafficHiddenRef.current;
         const visiblePlates = showDynamicMapState ? incidents.extras.plates : [];
