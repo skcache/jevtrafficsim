@@ -12,15 +12,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { useUiStore } from "@/store/ui-store";
 import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
+import { CURATED_TRIPS, curatedTrip } from "@/cities/chicago-trips";
 import {
-  CITY_SIZE_OPTIONS,
   CONTROLLER_OPTIONS,
   TRAFFIC_OPTIONS,
-  citySizeDescription,
-  citySizeLabel,
   diceSeed,
   normalizeSeed,
-  sizeForScaleIndex,
   trafficLabel,
 } from "./ui-model";
 
@@ -33,13 +30,13 @@ const fieldVariants = {
 
 export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
   const phase = useUiStore((state) => state.phase);
-  const citySize = useUiStore((state) => state.citySize);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
+  const tripId = useUiStore((state) => state.tripId);
   const controller = useUiStore((state) => state.controller);
   const seed = useUiStore((state) => state.seed);
   const setPhase = useUiStore((state) => state.setPhase);
-  const setCitySize = useUiStore((state) => state.setCitySize);
   const setTrafficLevel = useUiStore((state) => state.setTrafficLevel);
+  const setTripId = useUiStore((state) => state.setTripId);
   const setController = useUiStore((state) => state.setController);
   const setSeed = useUiStore((state) => state.setSeed);
   const [seedText, setSeedText] = useState(String(seed));
@@ -58,8 +55,8 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
     setSeedText(String(normalized));
   };
 
-  const cityIndex = CITY_SIZE_OPTIONS.findIndex((option) => option.value === citySize);
   const trafficIndex = TRAFFIC_OPTIONS.findIndex((option) => option.value === trafficLevel);
+  const trip = curatedTrip(tripId);
   const configuring = phase === "config" || phase === "entering";
 
   return (
@@ -78,7 +75,7 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
               Jev Traffic Simulator
             </h1>
             <p className="on-map-display mt-3.5 max-w-sm text-ui leading-relaxed text-ink-70">
-              Can you gridlock Chicago?
+              Can your controller beat Chicago traffic?
             </p>
             <button
               type="button"
@@ -107,25 +104,24 @@ export function Onboarding({ onEnterCity }: { onEnterCity: () => void }) {
             >
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
                 <div className="flex items-baseline justify-between">
-                  <span className="label-micro">City size</span>
-                  <span className="text-meta text-ink-52">{citySizeDescription(citySize)}</span>
+                  <span className="label-micro">Trip</span>
+                  <span className="text-meta text-ink-52">Metro Chicago</span>
                 </div>
-                <div className="mt-2.5 flex items-baseline gap-2">
-                  <span className="text-ui font-medium text-ink">{citySizeLabel(citySize)}</span>
-                </div>
-                <div className="mt-3">
-                  <DiscreteSlider
-                    value={cityIndex}
-                    count={CITY_SIZE_OPTIONS.length}
-                    onChange={(index) => setCitySize(sizeForScaleIndex(index))}
-                    ariaLabel="City size"
-                  />
-                  <TickRow
-                    labels={CITY_SIZE_OPTIONS.map((option) => option.label)}
-                    value={cityIndex}
-                    onSelect={(index) => setCitySize(sizeForScaleIndex(index))}
-                  />
-                </div>
+                <label className="mt-2.5 block">
+                  <span className="sr-only">Chicago trip</span>
+                  <select
+                    value={tripId}
+                    onChange={(event) => setTripId(event.target.value as typeof tripId)}
+                    className="h-10 w-full rounded-control border border-hair-strong bg-surface px-3 text-ui font-medium text-ink outline-none transition-colors focus:border-ink-38"
+                  >
+                    {CURATED_TRIPS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-2 text-meta leading-relaxed text-ink-52">{trip.summary}</p>
               </motion.div>
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
