@@ -22,6 +22,7 @@
  */
 import type { EngineState } from "@/sim/engine";
 import { roadSpeedFactor, severityForFactor } from "@/sim/road-traffic";
+import { MIN_TRAFFIC_SPEED_FACTOR } from "@/sim/config";
 import { currentQueueWaitMs } from "@/sim/approach-stats";
 import { computeMetrics, type SimulationMetrics } from "@/sim/metrics";
 import type { SignalStage } from "@/sim/signals";
@@ -86,10 +87,10 @@ export interface PresentationTripProgress {
   readonly completed: boolean;
   /**
    * Deterministic estimate of the time left, derived ONLY from the remaining
-   * route's free-flow times and the current occupancy of those roads
-   * (factor = 1 - 0.8 * occupancy/capacity, floored so a jam never reads as
-   * infinite; a closed road is near-blocked). It ignores signal waits, so it is
-   * an estimate, not a promise — which is why the HUD labels it "Est.".
+   * route's free-flow times and the AUTHORITATIVE per-road traffic state —
+   * the same speed factor that slows vehicles and paints the map (a closed
+   * road is priced at the model's jam floor). It ignores signal waits, so it
+   * is an estimate, not a promise — which is why the HUD labels it "Est.".
    */
   readonly estimatedRemainingMs: number | null;
 }
@@ -278,11 +279,11 @@ function tripProgressOf(
       continue;
     }
     const length = index === ego.routeIndex ? Math.max(0, road.length - ego.progress) : road.length;
-    const ratio =
-      road.capacity > 0
-        ? Math.min(1, (engine.traffic.occupancy.get(road.id) ?? 0) / road.capacity)
-        : 0;
-    const factor = road.closed ? 0.08 : Math.max(0.2, 1 - 0.8 * ratio);
+    // The SAME authoritative speed factor that slows vehicles, prices the
+    // router and paints the map — no second slowdown model in the ETA.
+    const factor = road.closed
+      ? MIN_TRAFFIC_SPEED_FACTOR
+      : roadSpeedFactor(engine.traffic.roadTraffic, road.id);
     etaSeconds += length / road.speedLimit / factor;
   }
   const completed = ego.state === "arrived";
