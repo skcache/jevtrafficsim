@@ -160,7 +160,14 @@ function ScenarioPanel({
               onChange={(index) => onTrafficLevel(TRAFFIC_OPTIONS[index].value)}
               ariaLabel="Traffic level"
             />
-            <TickRow labels={TRAFFIC_OPTIONS.map((option) => option.label)} value={trafficIndex} />
+            <TickRow
+              labels={TRAFFIC_OPTIONS.map((option) => option.label)}
+              value={trafficIndex}
+              // Live mid-trip: this goes through the same handler as the
+              // slider, which applies the new level to the RUNNING world
+              // instead of rebuilding it.
+              onSelect={(index) => onTrafficLevel(TRAFFIC_OPTIONS[index].value)}
+            />
           </div>
         </div>
         <SeedField

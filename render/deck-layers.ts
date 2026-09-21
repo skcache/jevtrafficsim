@@ -15,7 +15,7 @@ import type { RenderedVehicle } from "./interpolate";
 import type { Projection } from "@/cities/map-model";
 import { metricToLngLat } from "@/cities/map-model";
 import { hatchSegments } from "./visuals";
-import { iconSizeForLengthUnits } from "./vehicle-sprites";
+import { iconSizeForLengthUnits, spriteAngleDegrees } from "./vehicle-sprites";
 import { EGO_SCALE } from "./scale";
 import type { VehicleIconSet } from "./vehicle-icons";
 
@@ -128,7 +128,7 @@ export function buildVehicleLayers(
           type,
           VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale,
         ),
-        getAngle: (vehicle) => (vehicle.headingRadians * 180) / Math.PI,
+        getAngle: (vehicle) => spriteAngleDegrees(vehicle.headingRadians),
         sizeUnits: "meters",
         sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
         sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],

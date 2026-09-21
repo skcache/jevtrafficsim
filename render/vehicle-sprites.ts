@@ -18,7 +18,7 @@
  * drift into rainbow vehicles.
  *
  * Convention: every sprite points along +X (front at the right) and is centred
- * in its cell, which is what deck.gl's `getAngle` rotation expects.
+ * in its cell. See `spriteAngleDegrees` for the rotation that follows from it.
  */
 import type { VehicleType } from "@/sim/types";
 import type { VehicleIconDefinition, VehicleIconSet } from "./vehicle-icons";
@@ -173,4 +173,25 @@ export function iconSizeForLengthPx(type: VehicleType, lengthPx: number): number
 export function spriteAspect(type: VehicleType): number {
   const { length, width } = SPRITE_UNITS[type];
   return length / width;
+}
+
+/**
+ * deck.gl IconLayer angle for a vehicle heading.
+ *
+ * The sprite is authored nose-at-+X (east), and deck.gl rotates the icon
+ * CLOCKWISE on screen, so the bearing a sprite ends up pointing at is
+ * `90 + angle`. The vehicle's heading is `atan2(dy, dx)` — 0 = east,
+ * counter-clockwise — whose compass bearing is `90 - heading`. Solving
+ * `90 + angle = 90 - heading` gives:
+ *
+ *     angle = -heading
+ *
+ * Passing `+heading` (as this used to) mirrors every vehicle about the
+ * east-west axis: the nose points into oncoming traffic while the body sits in
+ * the correct lane, which is what "the car is driving on the wrong side of the
+ * road" actually was. East- and west-bound cars were the only ones that looked
+ * right, which is why it survived this long.
+ */
+export function spriteAngleDegrees(headingRadians: number): number {
+  return (-headingRadians * 180) / Math.PI;
 }

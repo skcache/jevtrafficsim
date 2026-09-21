@@ -11,6 +11,7 @@
  * tested in tests/contextual-controls.test.ts.
  */
 import { describe, expect, it } from "vitest";
+import { spriteAngleDegrees } from "@/render/vehicle-sprites";
 import {
   hatchSegments,
   sparklineLastPoint,
@@ -118,5 +119,37 @@ describe("sparkline", () => {
     const point = sparklineLastPoint([0, 10], 100, 20);
     expect(point).toEqual({ x: 100, y: 0 });
     expect(sparklineLastPoint([], 100, 20)).toBeNull();
+  });
+});
+
+describe("vehicle sprite rotation", () => {
+  // Sprites are authored nose-at-+X (east) and deck.gl rotates clockwise on
+  // screen, so the bearing a sprite points at is 90 + angle. Getting this sign
+  // wrong mirrors the car: it drives with its nose in oncoming traffic.
+  const bearingOf = (headingRadians: number): number => {
+    const angle = spriteAngleDegrees(headingRadians);
+    return ((90 + angle) % 360 + 360) % 360;
+  };
+  const expectedBearing = (headingRadians: number): number => {
+    const deg = (headingRadians * 180) / Math.PI;
+    return ((90 - deg) % 360 + 360) % 360;
+  };
+
+  it("points east-bound cars along the road", () => {
+    expect(bearingOf(0)).toBeCloseTo(90, 6); // heading 0 = +x = east
+    expect(spriteAngleDegrees(0)).toBeCloseTo(0, 6); // already nose-right
+  });
+
+  it("points north-bound cars north, not south", () => {
+    // The old `+heading` sent this one to 180 (south) — the reported bug.
+    expect(bearingOf(Math.PI / 2)).toBeCloseTo(0, 6);
+    expect(spriteAngleDegrees(Math.PI / 2)).toBeCloseTo(-90, 6);
+  });
+
+  it("matches the true compass bearing for every heading", () => {
+    for (let deg = 0; deg < 360; deg += 15) {
+      const heading = (deg * Math.PI) / 180;
+      expect(bearingOf(heading)).toBeCloseTo(expectedBearing(heading), 6);
+    }
   });
 });
