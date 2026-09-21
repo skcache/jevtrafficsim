@@ -14,6 +14,7 @@ import type { DriverStrategy } from "@/sim/driver";
 import { computeMetrics } from "@/sim/metrics";
 import type { ControllerChoice } from "@/worker/protocol";
 import { scenarioFingerprint, type ChallengeScenario } from "@/worker/challenge-scenario";
+import { vehicleById } from "@/sim/traffic";
 
 export interface ChallengeTripResult {
   readonly completed: boolean;
@@ -62,7 +63,7 @@ export function buildChallengeResult(
   const ego =
     engine.egoVehicleId === null
       ? null
-      : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId) ?? null;
+      : vehicleById(engine.traffic, engine.egoVehicleId);
   let distanceM = 0;
   if (ego) {
     for (let index = 0; index < ego.route.length; index += 1) {

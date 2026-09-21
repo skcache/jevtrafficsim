@@ -87,8 +87,26 @@ import {
 export interface TrafficState {
   /** Simulation clock in milliseconds; advanced by stepTraffic. */
   timeMs: number;
-  /** Dense vehicle list: vehicles[i].id === i. */
+  /** Dense vehicle list: vehicles[i].id === i. Canonical, append-only history. */
   vehicles: Vehicle[];
+  /**
+   * The vehicles that are NOT arrived, in spawn order (Issue #40).
+   *
+   * `vehicles` is history: it keeps every vehicle that ever spawned, because
+   * arrival records, metrics and result fields are defined over that population.
+   * Hot per-step work must scale with LIVE traffic instead, so the same objects
+   * are indexed here and removed on arrival. Iteration order is insertion order
+   * — the order of `vehicles` — so every consumer that used to scan the history
+   * and skip arrived vehicles sees exactly the same sequence as before.
+   */
+  activeVehicles: Set<Vehicle>;
+  /**
+   * Vehicles that arrived since the engine last drained this queue, in the order
+   * they arrived. Exists so arrival accounting can be O(new arrivals) instead of
+   * a full-history sweep; the engine sorts by id before recording, which keeps
+   * the canonical arrival order (spawn order) identical.
+   */
+  arrivedQueue: Vehicle[];
   /** Footprint units currently occupying each directed road. */
   occupancy: Map<RoadId, number>;
   /** Signal mechanics per signal-controlled intersection (Task 06). */
@@ -105,6 +123,8 @@ export function createTrafficState(): TrafficState {
   return {
     timeMs: 0,
     vehicles: [],
+    activeVehicles: new Set(),
+    arrivedQueue: [],
     occupancy: new Map(),
     signals: new Map(),
     roadTraffic: createRoadTraffic(),
@@ -283,6 +303,27 @@ function arrive(state: TrafficState, vehicle: Vehicle): void {
   leaveRoad(state, vehicle);
   vehicle.state = "arrived";
   vehicle.queuedSinceMs = null;
+  // Out of the live index, into the arrival queue: the vehicle keeps its place
+  // in `vehicles` (history) but stops costing every step that follows.
+  state.activeVehicles.delete(vehicle);
+  state.arrivedQueue.push(vehicle);
+}
+
+/**
+ * By-id lookup in O(1). Vehicle ids are allocated as `vehicles.length`, so the
+ * canonical array is its own index — no search needed anywhere in the codebase.
+ */
+export function vehicleById(state: TrafficState, id: VehicleId | null): Vehicle | null {
+  if (id === null) {
+    return null;
+  }
+  const vehicle = state.vehicles[id];
+  return vehicle !== undefined && vehicle.id === id ? vehicle : null;
+}
+
+/** Number of vehicles that have not arrived. O(1). */
+export function activeVehicleCount(state: TrafficState): number {
+  return state.activeVehicles.size;
 }
 
 /** Advances one moving vehicle, carrying leftover distance across road ends. */
@@ -431,6 +472,13 @@ export function spawnVehicle(
     rerouteCount: 0,
   };
   state.vehicles.push(vehicle);
+  // A route-less vehicle is born arrived: it belongs to history and the arrival
+  // queue, never to the live index.
+  if (vehicle.state === "arrived") {
+    state.arrivedQueue.push(vehicle);
+  } else {
+    state.activeVehicles.add(vehicle);
+  }
   if (vehicle.state === "pending") {
     attemptFirstEntry(city, state, vehicle);
   }
@@ -594,6 +642,25 @@ export function checkTrafficInvariants(
     }
     if (city.intersections[intersectionId]?.control !== "signal") {
       problems.push(`signal state for non-signal intersection ${intersectionId}`);
+    }
+  }
+
+  // The live index must be exactly the non-arrived population, in spawn order.
+  const expectedActive = state.vehicles.filter((vehicle) => vehicle.state !== "arrived");
+  const activeList = [...state.activeVehicles];
+  if (activeList.length !== expectedActive.length) {
+    problems.push(
+      `activeVehicles has ${activeList.length} entries, expected ${expectedActive.length}`,
+    );
+  } else {
+    for (let index = 0; index < activeList.length; index += 1) {
+      if (activeList[index] !== expectedActive[index]) {
+        problems.push(
+          `activeVehicles[${index}] is vehicle ${activeList[index].id}, ` +
+            `expected ${expectedActive[index].id}`,
+        );
+        break;
+      }
     }
   }
 

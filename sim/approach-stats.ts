@@ -76,7 +76,9 @@ export function updateApproachStats(
 ): void {
   const counts = new Map<RoadId, number>();
   const waits = new Map<RoadId, number>();
-  for (const vehicle of state.vehicles) {
+  // Queued vehicles are alive by definition, so the live index is the whole
+  // population this scan can match — the arrived never matched it before either.
+  for (const vehicle of state.activeVehicles) {
     if (vehicle.state !== "queued" || vehicle.roadId === null) {
       continue;
     }

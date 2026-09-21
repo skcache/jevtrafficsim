@@ -56,6 +56,7 @@ import {
   type ManualChallengeIncidentInput,
   type ResolvedChallengeIncident,
 } from "./challenge-incidents";
+import { vehicleById } from "@/sim/traffic";
 import {
   LIVE_RUN_HORIZON_MS,
   nextSeed,
@@ -189,7 +190,7 @@ function manualIncidentInput(
   const ego =
     engine.egoVehicleId === null
       ? null
-      : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId) ?? null;
+      : vehicleById(engine.traffic, engine.egoVehicleId);
   if (!ego) {
     return null;
   }

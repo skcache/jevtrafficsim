@@ -153,10 +153,10 @@ export function recordTick(
   let active = 0;
   let blocked = 0;
   const approachWaits = new Map<RoadId, number>();
-  for (const vehicle of state.vehicles) {
-    if (vehicle.state === "arrived") {
-      continue;
-    }
+  // Live traffic only; the arrived are skipped here exactly as they were in the
+  // history scan. `computeMetrics` still reports over the whole spawned
+  // population, because that is what the metric means.
+  for (const vehicle of state.activeVehicles) {
     active += 1;
     if (vehicle.state === "queued" || vehicle.state === "pending") {
       blocked += 1;

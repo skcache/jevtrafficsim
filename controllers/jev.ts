@@ -56,6 +56,7 @@ import type { CityPartition } from "@/sim/regions";
 import type { SignalDirective, SignalState } from "@/sim/signals";
 import type { TrafficState } from "@/sim/traffic";
 import type { City, IntersectionId, RoadId } from "@/sim/types";
+import { activeVehicleCount } from "@/sim/traffic";
 
 export const JEV_CONSTANTS = {
   /** Simulated ms between citywide policy requests. */
@@ -226,13 +227,8 @@ export interface JevControllerOptions {
 }
 
 function countActiveVehicles(traffic: TrafficState): number {
-  let active = 0;
-  for (const vehicle of traffic.vehicles) {
-    if (vehicle.state !== "arrived") {
-      active += 1;
-    }
-  }
-  return active;
+  // Exactly the non-arrived population; O(1) instead of a history sweep.
+  return activeVehicleCount(traffic);
 }
 
 export function createJevController(options: JevControllerOptions): JevController {

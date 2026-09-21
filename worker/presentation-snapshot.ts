@@ -28,6 +28,7 @@ import { computeMetrics, type SimulationMetrics } from "@/sim/metrics";
 import type { SignalStage } from "@/sim/signals";
 import type { IncidentKind, IncidentRecord } from "@/sim/incidents";
 import type { IntersectionId, RoadId, VehicleId, VehicleState, VehicleType } from "@/sim/types";
+import { activeVehicleCount } from "@/sim/traffic";
 
 /** One directed road carrying visible state. Absent road = free baseline. */
 export interface PresentationRoadTraffic {
@@ -234,8 +235,9 @@ export function aggregateRoadTraffic(engine: EngineState): PresentationRoadTraff
   const vehicleCounts = new Map<RoadId, number>();
   const queuedCounts = new Map<RoadId, number>();
   const maxWaits = new Map<RoadId, number>();
-  for (const vehicle of engine.traffic.vehicles) {
-    if (vehicle.roadId === null || vehicle.state === "arrived") {
+  // Live traffic only: arrived vehicles were skipped by the history scan too.
+  for (const vehicle of engine.traffic.activeVehicles) {
+    if (vehicle.roadId === null) {
       continue;
     }
     vehicleCounts.set(vehicle.roadId, (vehicleCounts.get(vehicle.roadId) ?? 0) + 1);
@@ -429,14 +431,8 @@ export function buildPresentationSnapshot(
 }
 
 export function buildPresentationMetrics(engine: EngineState): PresentationMetrics {
-  let activeVehicles = 0;
-  for (const vehicle of engine.traffic.vehicles) {
-    if (vehicle.state !== "arrived") {
-      activeVehicles += 1;
-    }
-  }
   return {
     ...computeMetrics(engine.metrics, engine.traffic),
-    activeVehicles,
+    activeVehicles: activeVehicleCount(engine.traffic),
   };
 }

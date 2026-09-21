@@ -199,7 +199,9 @@ export function buildObservationFrame(
   const downstream = new Map<RoadId, number>();
   const active = new Set<RoadId>();
 
-  for (const vehicle of traffic.vehicles) {
+  // Live traffic only: an arrived vehicle can be neither moving nor queued, so
+  // this sees exactly the same vehicles the history scan would have kept.
+  for (const vehicle of traffic.activeVehicles) {
     if (vehicle.state !== "moving" && vehicle.state !== "queued") {
       continue;
     }

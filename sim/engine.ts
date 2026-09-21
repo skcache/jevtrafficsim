@@ -135,6 +135,7 @@ import {
   spawnVehicle,
   stepTraffic,
   type TrafficState,
+  vehicleById,
 } from "./traffic";
 import type { TrafficController, TrafficControllerContext } from "@/controllers/contract";
 import type {
@@ -310,8 +311,15 @@ export function createEngine(options: EngineOptions): EngineState {
 
 function recordArrivals(engine: EngineState): void {
   const { city, traffic, metrics } = engine;
-  for (const vehicle of traffic.vehicles) {
-    if (vehicle.state !== "arrived" || metrics.recordedArrivalIds.has(vehicle.id)) {
+  // Only vehicles that arrived since the last tick can be new arrivals, so the
+  // sweep is over new arrivals instead of all of history. Sorted by id, which is
+  // spawn order: the canonical arrival ORDER is unchanged. The id guard stays,
+  // because an arrival is recorded exactly once.
+  const arrivals = traffic.arrivedQueue.filter((vehicle) => !metrics.recordedArrivalIds.has(vehicle.id));
+  traffic.arrivedQueue.length = 0;
+  arrivals.sort((a, b) => a.id - b.id);
+  for (const vehicle of arrivals) {
+    if (metrics.recordedArrivalIds.has(vehicle.id)) {
       continue;
     }
     let routeDistance = 0;
@@ -372,7 +380,7 @@ function maybeReplanEgo(engine: EngineState): void {
   if (engine.driver !== "local" || engine.egoVehicleId === null) {
     return;
   }
-  const ego = engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId);
+  const ego = vehicleById(engine.traffic, engine.egoVehicleId);
   if (!ego || ego.state === "arrived" || ego.state === "pending" || ego.roadId === null) {
     return;
   }
@@ -610,10 +618,7 @@ function applyIncidents(engine: EngineState): void {
   recomputeRoadConditions(engine);
 
   for (const { record, roads } of newlyClosedByRecord) {
-    for (const vehicle of engine.traffic.vehicles) {
-      if (vehicle.state === "arrived") {
-        continue;
-      }
+    for (const vehicle of engine.traffic.activeVehicles) {
       const remaining =
         vehicle.roadId === null ? vehicle.route : vehicle.route.slice(vehicle.routeIndex + 1);
       if (!remaining.some((roadId) => roads.has(roadId))) {
