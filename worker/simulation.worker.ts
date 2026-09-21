@@ -281,8 +281,19 @@ async function buildRun(config: RunConfig): Promise<void> {
   start(); // initial state: automatically running (documented behavior)
 }
 
-function scheduleNextTick(): void {
-  state.timer = setTimeout(runTick, SIM_TICK_MS);
+/**
+ * Schedule the next real tick on a FIXED cadence.
+ *
+ * `setTimeout(runTick, SIM_TICK_MS)` after the work makes every period
+ * SIM_TICK_MS + the cost of the tick itself — measured ~125 ms per 800 ms of
+ * simulated time on the Metro run, so the designed 8x playback arrived at
+ * 6.0-6.4x. Subtracting the tick's own cost holds the period at SIM_TICK_MS
+ * whenever the tick fits inside it, and runs back to back (no artificial delay)
+ * when it does not. Scheduling only: the engine's steps — and therefore every
+ * simulated result — are untouched.
+ */
+function scheduleNextTick(tickCostMs = 0): void {
+  state.timer = setTimeout(runTick, Math.max(0, SIM_TICK_MS - tickCostMs));
 }
 
 function start(): void {
@@ -311,6 +322,7 @@ function handleError(error: unknown): void {
 
 function runTick(): void {
   state.timer = null;
+  const startedAt = performance.now();
   const engine = state.engine;
   const config = state.config;
   if (!engine || !config || !state.running) {
@@ -358,7 +370,7 @@ function runTick(): void {
     });
     return;
   }
-  scheduleNextTick();
+  scheduleNextTick(performance.now() - startedAt);
 }
 
 function handleCommand(command: WorkerCommand): void {
