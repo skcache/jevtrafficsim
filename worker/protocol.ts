@@ -122,6 +122,11 @@ export interface RunConfig {
 export type WorkerEvent =
   | {
       readonly type: "READY";
+    /**
+     * The scenario identity of this run. Two runs are comparable only when
+     * this matches — it is what the UI shows instead of the raw seed.
+     */
+    readonly scenarioFingerprint: string;
       readonly config: RunConfig;
       /** Showcase scale (0..4) — the main thread compiles the same geography. */
       readonly scaleIndex: number;

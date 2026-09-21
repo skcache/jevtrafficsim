@@ -259,6 +259,11 @@ export function comparisonRows(
   ];
 }
 
+/** Short label for chrome ("Tourist", "Local"). */
+export function driverLabel(driver: DriverStrategy): string {
+  return DRIVER_OPTIONS.find((option) => option.value === driver)?.label ?? "Tourist";
+}
+
 export function driverDescription(driver: DriverStrategy): string {
   return DRIVER_DESCRIPTIONS[driver];
 }

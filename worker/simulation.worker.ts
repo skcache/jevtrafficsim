@@ -17,7 +17,11 @@ import { createFixedController } from "@/controllers/fixed";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
-import { buildChallengeScenario, type ChallengeScenario } from "@/worker/challenge-scenario";
+import {
+  buildChallengeScenario,
+  scenarioFingerprint,
+  type ChallengeScenario,
+} from "@/worker/challenge-scenario";
 import { buildChallengeResult } from "@/worker/challenge-result";
 import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
@@ -248,6 +252,16 @@ async function buildRun(config: RunConfig): Promise<void> {
   post({
     type: "READY",
     config,
+    scenarioFingerprint: scenarioFingerprint(
+      state.scenario ??
+        buildChallengeScenario({
+          tripId: config.tripId,
+          trafficLevel: config.trafficLevel,
+          driver: config.driver,
+          seed: config.seed,
+          durationMs: config.durationMs,
+        }),
+    ),
     scaleIndex,
     scaleLabel: CHICAGO_SCALE_LABELS[scaleIndex] ?? "Medium",
     timeMs: engine.traffic.timeMs,

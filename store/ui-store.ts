@@ -38,6 +38,8 @@ export interface UiState {
   controller: ControllerChoice;
   /** Driver behaviour profile (Issue #28) — independent of the controller. */
   driver: DriverStrategy;
+  /** Scenario identity of the running world (Issue #28), shown instead of the seed. */
+  scenarioFingerprint: string | null;
   /** Headless Fixed-vs-Adaptive run of the current scenario, when one exists. */
   comparison: ComparisonState | null;
   comparing: boolean;
@@ -68,6 +70,7 @@ export interface UiState {
   setTripId: (tripId: CuratedTripId) => void;
   setController: (controller: ControllerChoice) => void;
   setDriver: (driver: DriverStrategy) => void;
+  setScenarioFingerprint: (fingerprint: string | null) => void;
   setComparison: (comparison: ComparisonState | null) => void;
   setComparing: (comparing: boolean) => void;
   setSeed: (seed: number) => void;
@@ -97,6 +100,7 @@ export const useUiStore = create<UiState>()((set) => ({
   tripId: "united-center-to-navy-pier",
   controller: "adaptive",
   driver: "tourist",
+  scenarioFingerprint: null,
   comparison: null,
   comparing: false,
   seed: 42,
@@ -122,6 +126,7 @@ export const useUiStore = create<UiState>()((set) => ({
   setTripId: (tripId) => set({ tripId, citySize: "large" }),
   setController: (controller) => set({ controller }),
   setDriver: (driver) => set({ driver }),
+  setScenarioFingerprint: (scenarioFingerprint) => set({ scenarioFingerprint }),
   setComparison: (comparison) => set({ comparison }),
   setComparing: (comparing) => set({ comparing }),
   setSeed: (seed) => set({ seed }),

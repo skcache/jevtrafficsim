@@ -162,6 +162,7 @@ export function TrafficSimulator() {
           break;
         }
         case "READY": {
+          store.setScenarioFingerprint(data.scenarioFingerprint);
           // The frozen Chicago geography loads asynchronously (same committed
           // bytes the worker compiled); frames only start once it is in place.
           void loadChicagoCity(data.scaleIndex).then((model) => {
