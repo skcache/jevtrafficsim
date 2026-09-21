@@ -99,6 +99,29 @@ export interface CrossArm {
  * Arm i contributes approach road 2i (source -> center, bearing angleDeg)
  * and exit road 2i+1 (center -> exit node, continuing outward).
  */
+/**
+ * NOTE for anyone re-baselining tick-exact fixtures after the traffic physics
+ * migration (sim/road-traffic.ts):
+ *
+ * These crossroads fixtures are geometrically ABSTRACT — arms of length 1-4
+ * with speedLimit 10-20 m/s. Under the old motion law (a vehicle ran at
+ * free-flow to the road end and stopped dead) that abstraction produced clean
+ * tick arithmetic, and the fixtures were written against it.
+ *
+ * Real braking makes that geometry impossible: stopping from 10 m/s needs
+ * ~14 m (v^2 / 2a at 3.6 m/s^2), so a 2 m arm cannot be driven the old way at
+ * all — the vehicle is speed-capped by brakingLimitSpeed from the first tick.
+ * An assertion like "queued by tick 12" therefore cannot simply be shifted by
+ * a constant: the fixture has to become physically coherent first.
+ *
+ * The disciplined fix, per file: give the arms a length that is large relative
+ * to the braking distance for the fixture's speed (v^2 / 2a), so cruise-brake
+ * dominates and the trace is derivable again. Two useful closed forms:
+ *   - a vehicle braking to a stop adds v / (2a) of travel time versus free flow
+ *   - with a = 3.6 m/s^2 and dt = 100 ms, that penalty is v / 7.2 seconds
+ * Re-derive each trace from those, and keep the invariants the fixtures exist
+ * to protect (capacity, queue order, signal legality, determinism) intact.
+ */
 export function makeCrossroads(options: {
   control: "signal" | "stop" | "uncontrolled";
   arms: CrossArm[];
