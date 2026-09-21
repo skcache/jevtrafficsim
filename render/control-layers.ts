@@ -34,7 +34,9 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
     return "control-signal-red";
   }
   if (signal.stage === "yellow") {
-    return "control-signal-yellow";
+    // Yellow belongs to the approach that is being cleared. If the ego is not
+    // that approach, this yellow is somebody else's: the ego's light is RED.
+    return signal.egoApproachClearing ? "control-signal-yellow" : "control-signal-red";
   }
   if (signal.stage === "green" && signal.egoApproachPermitted) {
     return "control-signal-green";

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   LIVE_RUN_HORIZON_MS,
-  METRICS_EVERY_TICKS,
   nextSeed,
   parseWorkerCommand,
+  PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
-  SNAPSHOT_EVERY_TICKS,
 } from "@/worker/protocol";
 
 describe("worker protocol validation", () => {
@@ -119,8 +118,10 @@ describe("worker protocol validation", () => {
 
   it("keeps the centralized cadence constants consistent", () => {
     expect(SIM_TICK_MS).toBe(100);
-    expect(SNAPSHOT_EVERY_TICKS).toBe(2); // 5 Hz
-    expect(METRICS_EVERY_TICKS).toBe(5); // 2 Hz
+    // Playback compression must stay well under the tick, and the frame
+    // cadence IS the tick: the renderer interpolates over SIM_TICK_MS.
+    expect(PLAYBACK_STEPS_PER_TICK).toBeGreaterThan(1);
+    expect(PLAYBACK_STEPS_PER_TICK * SIM_TICK_MS).toBeLessThanOrEqual(1_000);
     expect(LIVE_RUN_HORIZON_MS).toBe(600_000);
   });
 

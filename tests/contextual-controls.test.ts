@@ -579,3 +579,77 @@ describe("contextual controls on the curated challenge", () => {
     expect(after.routeControls.every((signal) => ["green", "yellow", "all-red"].includes(signal.stage))).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* The rendered light cycle (reported bug)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A driver only ever sees two transitions: green -> yellow -> red, and
+ * red -> green. Anything else is not a real signal sequence — in particular the
+ * ego must never read ANOTHER approach's yellow as its own, which is what made
+ * the light appear to go red -> yellow -> green.
+ */
+describe("rendered light cycle", () => {
+  const control = (
+    stage: "green" | "yellow" | "all-red",
+    permitted: boolean,
+    clearing: boolean,
+  ): ContextualControl => ({
+    intersectionId: 1,
+    kind: "signal",
+    distanceAheadM: 40,
+    x: 0,
+    y: 0,
+    bearing: 0,
+    prominence: "primary",
+    lifecycle: "upcoming",
+    emphasis: 1,
+    signal: {
+      stage,
+      phaseIndex: 0,
+      egoApproachPermitted: permitted,
+      egoApproachClearing: clearing,
+    },
+  });
+
+  it("shows the ego green -> yellow -> red -> green, with no yellow after red", () => {
+    // The ego's own ring: its green, its clearance yellow, all-red, then green.
+    const ring = [
+      control("green", true, false),
+      control("yellow", false, true),
+      control("all-red", false, false),
+      control("green", true, false),
+    ];
+    expect(ring.map((entry) => controlSpriteFor(entry))).toEqual([
+      "control-signal-green",
+      "control-signal-yellow",
+      "control-signal-red",
+      "control-signal-green",
+    ]);
+    // The only yellow in the cycle is immediately after the ego's green, and
+    // red is followed directly by green.
+    const sprites = ring.map((entry) => controlSpriteFor(entry));
+    expect(sprites.indexOf("control-signal-yellow")).toBe(1);
+    expect(sprites[2]).toBe("control-signal-red");
+    expect(sprites[3]).toBe("control-signal-green");
+  });
+
+  it("does not show another approach's yellow as the ego's light", () => {
+    // Signal is yellow, but it is a DIFFERENT group being cleared: the ego's
+    // light is red, never yellow.
+    expect(controlSpriteFor(control("yellow", false, false))).toBe("control-signal-red");
+    // And a green stage that is not the ego's group is red for the ego.
+    expect(controlSpriteFor(control("green", false, false))).toBe("control-signal-red");
+  });
+
+  it("never renders a blank head for any stage", () => {
+    for (const stage of ["green", "yellow", "all-red"] as const) {
+      for (const permitted of [true, false]) {
+        for (const clearing of [true, false]) {
+          expect(controlSpriteFor(control(stage, permitted, clearing))).not.toBe("control-signal-neutral");
+        }
+      }
+    }
+  });
+});

@@ -33,6 +33,48 @@ export function frameAlpha(nowMs: number, receivedAtMs: number, expectedInterval
   return clamp01((nowMs - receivedAtMs) / expectedIntervalMs);
 }
 
+/**
+ * Time constant of the render clock's low-pass, in real milliseconds.
+ *
+ * Frames arrive when the worker finishes a tick, which is jittery: a tick that
+ * runs long delivers its frame late, and a naive alpha then sits pinned at 1
+ * (a frozen world) before snapping forward. Following the frame clock through a
+ * short low-pass absorbs that jitter and turns lumpy arrivals into continuous
+ * motion. It is deliberately shorter than a frame interval so the car never
+ * feels like it is lagging the simulation.
+ */
+export const RENDER_CLOCK_TAU_MS = 70;
+
+/**
+ * Advance the render clock toward the frame clock.
+ *
+ * The clock is expressed in SIMULATED milliseconds, between the previous and
+ * current frame timestamps, so smoothing can never push a position off its
+ * road: the value still gets converted to a path position by the same
+ * path-aware interpolation as before. A target that jumps further than one
+ * frame interval (a reset, a new scale, a long stall) snaps instead of easing,
+ * because easing across a discontinuity would sweep the car through the city.
+ */
+export function smoothRenderClock(
+  clockMs: number,
+  targetMs: number,
+  dtMs: number,
+  snapDistanceMs: number,
+  tauMs: number = RENDER_CLOCK_TAU_MS,
+): number {
+  if (!Number.isFinite(clockMs)) {
+    return targetMs;
+  }
+  if (Math.abs(targetMs - clockMs) > snapDistanceMs) {
+    return targetMs;
+  }
+  if (tauMs <= 0) {
+    return targetMs;
+  }
+  const k = 1 - Math.exp(-Math.max(0, dtMs) / tauMs);
+  return clockMs + (targetMs - clockMs) * k;
+}
+
 /** Fade-in for vehicles that appeared since the previous frame. */
 export const SPAWN_FADE_IN_MS = 200;
 

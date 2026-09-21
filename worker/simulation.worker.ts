@@ -9,8 +9,8 @@
  * longer than the real-time budget, the run simply advances slower than wall
  * time — ticks are never queued in an unbounded catch-up spiral.
  *
- * Cadence: snapshots every SNAPSHOT_EVERY_TICKS (5 Hz), metrics every
- * METRICS_EVERY_TICKS (2 Hz) — both centralized in worker/protocol.ts.
+ * Cadence: one presentation frame and one metrics sample per real tick, so the
+ * renderer can interpolate between consecutive frames over SIM_TICK_MS.
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
@@ -47,12 +47,10 @@ import {
 } from "./challenge-incidents";
 import {
   LIVE_RUN_HORIZON_MS,
-  METRICS_EVERY_TICKS,
   nextSeed,
   parseWorkerCommand,
   PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
-  SNAPSHOT_EVERY_TICKS,
   type ControllerChoice,
   type RunConfig,
   type WorkerCommand,
@@ -307,14 +305,6 @@ function runTick(): void {
   try {
     for (let step = 0; step < PLAYBACK_STEPS_PER_TICK; step += 1) {
       stepEngine(engine);
-      // Cadence checks live INSIDE the loop: with several steps per real tick
-      // an outer check would fire only when the tick counter happens to align.
-      if (engine.ticks % SNAPSHOT_EVERY_TICKS === 0) {
-        postSnapshot();
-      }
-      if (engine.ticks % METRICS_EVERY_TICKS === 0) {
-        postMetrics();
-      }
       if (engine.traffic.timeMs >= config.durationMs) {
         break;
       }
@@ -323,6 +313,13 @@ function runTick(): void {
     handleError(error);
     return;
   }
+  // ONE frame per real tick, never one per simulated step. The renderer
+  // interpolates between consecutive frames over EXPECTED_FRAME_INTERVAL_MS,
+  // so the cadence has to be the real tick — posting per step floods the buffer
+  // and makes the interpolation window a fraction of the frame interval, which
+  // is exactly what made the car stutter.
+  postSnapshot();
+  postMetrics();
   if (engine.traffic.timeMs >= config.durationMs) {
     state.running = false;
     state.complete = true;

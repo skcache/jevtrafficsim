@@ -30,9 +30,15 @@ export const SIM_TICK_MS = 100;
  * watched in.
  */
 export const PLAYBACK_STEPS_PER_TICK = 8;
-/** Render snapshots at 5 Hz (every 2 ticks); metrics at 2 Hz (every 5). */
-export const SNAPSHOT_EVERY_TICKS = 2;
-export const METRICS_EVERY_TICKS = 5;
+
+/**
+ * Frame cadence: the worker posts exactly ONE presentation frame and one
+ * metrics sample per REAL tick, so the renderer's interpolation window is
+ * SIM_TICK_MS. This used to be expressed as "every N engine ticks", which
+ * silently stopped matching the real interval once a tick could cover several
+ * simulated steps — the renderer then ramped its alpha over a window far longer
+ * than the frame interval and the whole world stuttered. Cadence lives here,
+ * once: SIM_TICK_MS.
 /** One centralized live-run horizon: 10 simulated minutes. */
 export const LIVE_RUN_HORIZON_MS = 600_000;
 
