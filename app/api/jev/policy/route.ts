@@ -18,6 +18,13 @@
  * When the environment is not configured the route says so (503) and returns no
  * policy. It never fabricates one, and it never falls back to a replay or a
  * cached answer — that is Issue #14's territory.
+ *
+ * A failure upstream is reported to the caller as one short sentence and to the
+ * operator as ONE bounded reason (an HTTP status, a timeout, or "unexpected
+ * failure"). Nothing else is ever logged: an upstream body can echo credentials
+ * back, and a free-form error message can carry anything, so neither is allowed
+ * near the log. `failureReason` is the single place that decides what a log line
+ * may say, which is what makes the rule testable.
  */
 import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
 import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
@@ -154,6 +161,26 @@ function readMinConfidence(): number | undefined {
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 }
 
+/** The only error messages this route will ever log: status codes, a timeout. */
+const REPORTABLE_STATUS = /^jev (gateway|service) responded \d{3}$/;
+
+/**
+ * A bounded description of a failed policy request: safe to log, useless to an
+ * attacker. Anything not recognised becomes "unexpected failure" rather than
+ * trusting an error message to be harmless.
+ */
+export function failureReason(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return "timeout";
+    }
+    if (REPORTABLE_STATUS.test(error.message)) {
+      return error.message;
+    }
+  }
+  return "unexpected failure";
+}
+
 export function readJevEnvironment(): JevEnvironment | null {
   const token = process.env.JEV_TOKEN?.trim();
   if (!token) {
@@ -251,7 +278,9 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: parsed.error }, { status: 502 });
     }
     return Response.json({ policy: parsed.value.policy, clamped: parsed.value.clamped });
-  } catch {
+  } catch (error) {
+    // Bounded by construction: a status or the word "timeout", never a body.
+    console.error("[jev-relay] policy request failed:", failureReason(error));
     return Response.json({ error: "jev service request failed" }, { status: 502 });
   }
 }

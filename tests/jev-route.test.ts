@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { POST, readJevEnvironment } from "@/app/api/jev/policy/route";
+import { failureReason, POST, readJevEnvironment } from "@/app/api/jev/policy/route";
 import { JEV_SCHEMA_VERSION } from "@/jev/schema";
 import { DEFAULT_SIGNAL_TIMING } from "@/sim/config";
 import type { JevPolicyRequest } from "@/jev/schema";
@@ -296,10 +296,44 @@ describe("jev server boundary", () => {
     expect(gatewayEnv?.endpoint).toBeNull();
   });
 
-  it("logs nothing at all", () => {
+  it("logs one bounded reason and nothing else", async () => {
     const source = readFileSync(path.join(process.cwd(), "app", "api", "jev", "policy", "route.ts"), "utf8");
-    expect(source).not.toMatch(/console\./);
     expect(source).not.toMatch(/process\.stdout|process\.stderr/);
+    // The only log call takes failureReason(error) — never a body, never a URL.
+    const logs = [...source.matchAll(/console\.error\(([^;]*)\)/g)].map((match) => match[1]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("failureReason(error)");
+
+    // And the reason itself is bounded whatever the upstream did.
+    expect(failureReason(new Error("jev gateway responded 401"))).toBe("jev gateway responded 401");
+    expect(failureReason(new Error("jev service responded 503"))).toBe("jev service responded 503");
+    const timeout = new Error("The operation was aborted");
+    timeout.name = "TimeoutError";
+    expect(failureReason(timeout)).toBe("timeout");
+    // Anything else is replaced outright, so no upstream text can reach a log.
+    expect(failureReason(new Error(`token ${TOKEN} is revoked`))).toBe("unexpected failure");
+    expect(failureReason("not even an error")).toBe("unexpected failure");
+
+    // Whatever is logged on a real failure carries no credential.
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    };
+    try {
+      globalThis.fetch = (async () =>
+        new Response(`upstream said: ${TOKEN} is revoked`, { status: 500 })) as unknown as typeof fetch;
+      const response = await post(request());
+      expect(response.status).toBe(502);
+    } finally {
+      console.error = originalError;
+    }
+    expect(logged).toHaveLength(1);
+    // The configured backend here is the schema service (no JEV_MODEL), so the
+    // reason names that status — the point is that it is a status and nothing else.
+    expect(logged[0]).toContain("jev service responded 500");
+    expect(logged[0]).not.toContain(TOKEN);
+    expect(logged[0]).not.toContain("revoked");
   });
 
   it("uses the shared signal timing rather than its own", () => {
