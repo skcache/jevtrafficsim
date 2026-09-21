@@ -4,7 +4,13 @@
  * against hand-built geometry rather than a screenshot.
  */
 import { describe, expect, it } from "vitest";
-import { angleDelta, interpolateVehicles, lerpAngle, positionForRoad } from "@/render/interpolate";
+import {
+  angleDelta,
+  interpolateVehicles,
+  lerpAngle,
+  positionForRoad,
+  smoothRenderClock,
+} from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   LANE_WIDTH_M,
@@ -12,6 +18,7 @@ import {
   STOP_LINE_CLEARANCE_M,
   VEHICLE_LENGTH_M,
   stopLineSetbackMetres,
+  vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
@@ -174,8 +181,11 @@ describe("turn interpolation", () => {
     )[0];
     // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
     expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    // Lane offset tapers into the shared junction node, so the path stays continuous.
-    expect(beforeJunction.y).toBeCloseTo(-0.53125, 6);
+    // Lane offset tapers into the shared junction node, so the path stays
+    // continuous. The side of the carriageway comes from the authoritative lane
+    // assignment for this vehicle, not a hardcoded sign.
+    const laneOffset = vehicleLaneOffsetMetres(city, laneOffsets, 7, 0);
+    expect(beforeJunction.y).toBeCloseTo(-laneOffset * (2.5 / 8), 6);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,
@@ -466,5 +476,36 @@ describe("queue packing", () => {
     const packed = packQueues(city, indexes, laneOffsets, moving, () => 40);
     expect(packed[0].x).toBe(12);
     expect(packed[0].queueRank).toBe(-1);
+  });
+});
+
+describe("smoothed render clock", () => {
+  it("eases toward the frame clock instead of snapping to it", () => {
+    // The point is to absorb arrival jitter, not to teleport to the target:
+    // a 16 ms step must move only part of the way.
+    const after16ms = smoothRenderClock(0, 800, 16, 800);
+    expect(after16ms).toBeGreaterThan(0);
+    expect(after16ms).toBeLessThan(400);
+    const after100ms = smoothRenderClock(0, 800, 100, 800);
+    expect(after100ms).toBeGreaterThan(after16ms);
+    expect(after100ms).toBeLessThan(800);
+  });
+
+  it("converges on a steady target", () => {
+    let clock = 0;
+    for (let i = 0; i < 60; i += 1) {
+      clock = smoothRenderClock(clock, 800, 16, 800);
+    }
+    // ~1.2 s of real time at tau = 70 ms: within a millisecond of the target,
+    // and strictly behind it (the clock eases, it never leads the sim).
+    expect(clock).toBeGreaterThan(799);
+    expect(clock).toBeLessThan(800);
+  });
+
+  it("snaps across a discontinuity rather than sweeping through the city", () => {
+    // A reset or scale change moves the frame clock further than one interval:
+    // easing there would draw the car across the whole map.
+    expect(smoothRenderClock(0, 60_000, 16, 800)).toBe(60_000);
+    expect(smoothRenderClock(Number.NaN, 1234, 16, 800)).toBe(1234);
   });
 });

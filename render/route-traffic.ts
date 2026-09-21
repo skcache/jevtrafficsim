@@ -20,29 +20,6 @@ import type { RoadId } from "@/sim/types";
 
 export type RouteTrafficClass = "free" | "slowed" | "congested";
 
-export interface RouteTrafficRule {
-  /** Occupancy/capacity ratio at which a road reads as slow. */
-  readonly slowedOccupancyRatio: number;
-  readonly slowedQueued: number;
-  readonly slowedWaitMs: number;
-  readonly congestedOccupancyRatio: number;
-  readonly congestedQueued: number;
-  readonly congestedWaitMs: number;
-}
-
-/**
- * Thresholds, in order of severity. They are presentation policy — the
- * simulation has no opinion about colour — but they are deliberately stated
- * once, here, so the route, the HUD and any future legend cannot disagree.
- */
-export const ROUTE_TRAFFIC_RULES: RouteTrafficRule = {
-  slowedOccupancyRatio: 0.55,
-  slowedQueued: 2,
-  slowedWaitMs: 8_000,
-  congestedOccupancyRatio: 0.85,
-  congestedQueued: 5,
-  congestedWaitMs: 25_000,
-} as const;
 
 /** Blue / amber / red, tuned warm enough to sit on the Chicago basemap. */
 export const ROUTE_TRAFFIC_COLORS: Record<RouteTrafficClass, readonly [number, number, number]> = {
@@ -65,27 +42,21 @@ export function occupancyRatio(entry: PresentationRoadTraffic): number {
 export function classifyRoadTraffic(
   entry: PresentationRoadTraffic | undefined,
   closed = false,
-  rules: RouteTrafficRule = ROUTE_TRAFFIC_RULES,
 ): RouteTrafficClass {
   if (closed) {
     return "congested";
   }
   if (!entry) {
+    // Absent from the sparse frame = free flow. Same contract as the sim.
     return "free";
   }
-  const ratio = occupancyRatio(entry);
-  if (
-    ratio >= rules.congestedOccupancyRatio ||
-    entry.queuedCount >= rules.congestedQueued ||
-    entry.maxBlockedWaitMs >= rules.congestedWaitMs
-  ) {
+  // The severity is the SIMULATION'S OWN (sim/road-traffic): the route paints
+  // the traffic state that is actually slowing vehicles, instead of a second
+  // threshold table that could disagree with it.
+  if (entry.severity === "severe") {
     return "congested";
   }
-  if (
-    ratio >= rules.slowedOccupancyRatio ||
-    entry.queuedCount >= rules.slowedQueued ||
-    entry.maxBlockedWaitMs >= rules.slowedWaitMs
-  ) {
+  if (entry.severity === "slower") {
     return "slowed";
   }
   return "free";

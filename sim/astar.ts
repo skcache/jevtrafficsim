@@ -6,14 +6,13 @@
  *   free-flow travel time  = road.length / effectiveSpeed
  *   effectiveSpeed         = road.speedLimit   (Task 04: no acceleration,
  *                            signals, vehicle classes, or lane behavior)
- *   occupancyRatio         = clamp(occupancy / capacity, 0, MAX_OCCUPANCY_RATIO)
- *   edge cost              = freeFlow * (1 + congestionWeight * occupancyRatio)
+ *   edge cost              = road.length / (road.speedLimit * speedFactor)
  *
- * Occupancy is supplied through an optional read-only source (Map or
- * callback) so the simulator can plug in real queues later without changing
- * the router. Default occupancy is zero (pure free flow). Negative or
- * non-finite weights are rejected; weights above MAX_CONGESTION_WEIGHT are
- * clamped, so edge costs are always finite and non-negative.
+ * The speed factor is the AUTHORITATIVE road traffic state (sim/road-traffic):
+ * the same number that slows vehicles and paints the map. There is no separate
+ * congestion pricing any more — occupancy was a proxy for flow, and pricing a
+ * road by a proxy let the router disagree with the physics. Factors are clamped
+ * into [MIN_TRAFFIC_SPEED_FACTOR, 1], so edge costs are always finite and positive.
  *
  * ## Heuristic (units matter)
  *
@@ -42,24 +41,19 @@
  * Invalid ids are programmer errors and throw RangeError. Closed roads are
  * never traversed, and the router never mutates the city.
  */
-import {
-  DEFAULT_CONGESTION_WEIGHT,
-  MAX_CONGESTION_WEIGHT,
-  MAX_OCCUPANCY_RATIO,
-} from "./config";
+import { MIN_TRAFFIC_SPEED_FACTOR } from "./config";
 import { BinaryHeap } from "./heap";
 import type { City, IntersectionId, Road, RoadId } from "./types";
 
 /** Current vehicle count per directed road: a read-only map or a callback. */
-export type OccupancySource =
-  | ReadonlyMap<RoadId, number>
-  | ((roadId: RoadId) => number);
+export type SpeedFactorSource = ReadonlyMap<RoadId, number> | ((roadId: RoadId) => number);
 
 export interface RouteOptions {
-  /** Occupancy source; missing entries count as zero. Default: all zero. */
-  occupancy?: OccupancySource;
-  /** Bounded congestion multiplier (>= 0). Default DEFAULT_CONGESTION_WEIGHT. */
-  congestionWeight?: number;
+  /**
+   * Authoritative road speed factor source; missing entries count as free
+   * flow. Default: all free.
+   */
+  speedFactor?: SpeedFactorSource;
 }
 
 export interface RouteFound {
@@ -103,18 +97,6 @@ function isNodeId(city: City, id: number): boolean {
   return Number.isInteger(id) && id >= 0 && id < city.intersections.length;
 }
 
-function normalizeWeight(weight: number | undefined): number {
-  if (weight === undefined) {
-    return DEFAULT_CONGESTION_WEIGHT;
-  }
-  if (!Number.isFinite(weight) || weight < 0) {
-    throw new RangeError(
-      `congestionWeight must be a finite number >= 0, received ${weight}`,
-    );
-  }
-  return Math.min(weight, MAX_CONGESTION_WEIGHT);
-}
-
 function maxNetworkSpeed(city: City): number {
   let max = 0;
   for (const road of city.roads) {
@@ -125,37 +107,30 @@ function maxNetworkSpeed(city: City): number {
   return max > 0 ? max : 1; // defensive; only relevant once any road exists
 }
 
-function occupancyCount(
-  occupancy: OccupancySource | undefined,
+function speedFactorAt(
+  source: SpeedFactorSource | undefined,
   roadId: RoadId,
 ): number {
-  if (occupancy === undefined) {
-    return 0;
+  if (source === undefined) {
+    return 1;
   }
-  if (typeof occupancy === "function") {
-    return occupancy(roadId);
+  const raw = typeof source === "function" ? source(roadId) : (source.get(roadId) ?? 1);
+  // Nonsense reads as free flow: a bad value must never price a road as jammed.
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 1;
   }
-  return occupancy.get(roadId) ?? 0;
+  return Math.max(MIN_TRAFFIC_SPEED_FACTOR, Math.min(1, raw));
 }
 
-function occupancyRatio(raw: number, capacity: number): number {
-  if (!Number.isFinite(raw) || capacity <= 0) {
-    return 0;
-  }
-  return Math.max(0, Math.min(MAX_OCCUPANCY_RATIO, raw / capacity));
-}
 
 /** Edge cost per the cost model; exported so callers can recompute costs. */
-export function edgeTravelCost(
-  road: Road,
-  normalizedOccupancyRatio: number,
-  congestionWeight: number,
-): number {
-  const ratio = Number.isFinite(normalizedOccupancyRatio)
-    ? Math.max(0, Math.min(MAX_OCCUPANCY_RATIO, normalizedOccupancyRatio))
-    : 0;
+export function edgeTravelCost(road: Road, speedFactor: number): number {
+  const factor =
+    Number.isFinite(speedFactor) && speedFactor > 0
+      ? Math.max(MIN_TRAFFIC_SPEED_FACTOR, Math.min(1, speedFactor))
+      : 1;
   const freeFlow = road.length / road.speedLimit;
-  return freeFlow * (1 + congestionWeight * ratio);
+  return freeFlow / factor;
 }
 
 /** Total cost of an explicit road path under the given options. */
@@ -164,18 +139,13 @@ export function computePathCost(
   roadIds: readonly RoadId[],
   options: RouteOptions = {},
 ): number {
-  const weight = normalizeWeight(options.congestionWeight);
   let total = 0;
   for (const roadId of roadIds) {
     const road = city.roads[roadId];
     if (!road) {
       throw new RangeError(`unknown road id ${roadId}`);
     }
-    total += edgeTravelCost(
-      road,
-      occupancyRatio(occupancyCount(options.occupancy, roadId), road.capacity),
-      weight,
-    );
+    total += edgeTravelCost(road, speedFactorAt(options.speedFactor, roadId));
   }
   return total;
 }
@@ -221,7 +191,6 @@ export function findRoute(
     return { found: true, roadIds: [], intersectionIds: [from], cost: 0 };
   }
 
-  const weight = normalizeWeight(options.congestionWeight);
   const maxSpeed = maxNetworkSpeed(city);
   const bestG = new Map<IntersectionId, number>();
   const cameFrom = new Map<IntersectionId, RoadId>();
@@ -268,11 +237,7 @@ export function findRoute(
       if (!road || road.closed) {
         continue;
       }
-      const cost = edgeTravelCost(
-        road,
-        occupancyRatio(occupancyCount(options.occupancy, roadId), road.capacity),
-        weight,
-      );
+      const cost = edgeTravelCost(road, speedFactorAt(options.speedFactor, roadId));
       const gNew = current.g + cost;
       const previous = bestG.get(road.to);
       if (previous === undefined || gNew < previous) {

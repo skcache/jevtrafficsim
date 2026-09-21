@@ -21,6 +21,8 @@
  * Deterministic for identical engine state.
  */
 import type { EngineState } from "@/sim/engine";
+import { roadSpeedFactor, severityForFactor } from "@/sim/road-traffic";
+import { MIN_TRAFFIC_SPEED_FACTOR } from "@/sim/config";
 import { currentQueueWaitMs } from "@/sim/approach-stats";
 import { computeMetrics, type SimulationMetrics } from "@/sim/metrics";
 import type { SignalStage } from "@/sim/signals";
@@ -44,6 +46,13 @@ export interface PresentationRoadTraffic {
    * versus a wait field on every vehicle object.
    */
   readonly maxBlockedWaitMs: number;
+  /**
+   * Authoritative flow state from the simulation (sim/road-traffic): the road's
+   * current speed factor and the severity derived from it. Presentation reads
+   * these instead of re-deriving congestion from occupancy.
+   */
+  readonly speedFactor: number;
+  readonly severity: "free" | "slower" | "severe";
 }
 
 /**
@@ -78,10 +87,10 @@ export interface PresentationTripProgress {
   readonly completed: boolean;
   /**
    * Deterministic estimate of the time left, derived ONLY from the remaining
-   * route's free-flow times and the current occupancy of those roads
-   * (factor = 1 - 0.8 * occupancy/capacity, floored so a jam never reads as
-   * infinite; a closed road is near-blocked). It ignores signal waits, so it is
-   * an estimate, not a promise — which is why the HUD labels it "Est.".
+   * route's free-flow times and the AUTHORITATIVE per-road traffic state —
+   * the same speed factor that slows vehicles and paints the map (a closed
+   * road is priced at the model's jam floor). It ignores signal waits, so it
+   * is an estimate, not a promise — which is why the HUD labels it "Est.".
    */
   readonly estimatedRemainingMs: number | null;
 }
@@ -197,16 +206,31 @@ export function aggregateRoadTraffic(engine: EngineState): PresentationRoadTraff
   for (const roadId of queuedCounts.keys()) {
     roadIds.add(roadId);
   }
+  // Roads still RECOVERING in the authoritative state stay in the frame even
+  // though their occupancy has already dropped to zero: the simulation has not
+  // declared them clear yet, so the map must not either.
+  for (const roadId of engine.traffic.roadTraffic.factor.keys()) {
+    roadIds.add(roadId);
+  }
   return [...roadIds]
     .sort((a, b) => a - b)
-    .map((roadId) => ({
-      roadId,
-      occupancy: engine.traffic.occupancy.get(roadId) ?? 0,
-      capacity: engine.city.roads[roadId]?.capacity ?? 0,
-      vehicleCount: vehicleCounts.get(roadId) ?? 0,
-      queuedCount: queuedCounts.get(roadId) ?? 0,
-      maxBlockedWaitMs: maxWaits.get(roadId) ?? 0,
-    }));
+    .map((roadId) => {
+      const factor = roadSpeedFactor(engine.traffic.roadTraffic, roadId);
+      return {
+        roadId,
+        occupancy: engine.traffic.occupancy.get(roadId) ?? 0,
+        capacity: engine.city.roads[roadId]?.capacity ?? 0,
+        vehicleCount: vehicleCounts.get(roadId) ?? 0,
+        queuedCount: queuedCounts.get(roadId) ?? 0,
+        maxBlockedWaitMs: maxWaits.get(roadId) ?? 0,
+        // The simulation's own flow state: how fast traffic actually moves on
+        // this road right now, and the severity that follows from it. Every
+        // consumer paints from these two fields, so colours cannot disagree
+        // with the physics they describe.
+        speedFactor: factor,
+        severity: severityForFactor(factor),
+      };
+    });
 }
 
 /** Intersections the ego still has to pass: the remaining route's endpoints. */
@@ -255,11 +279,11 @@ function tripProgressOf(
       continue;
     }
     const length = index === ego.routeIndex ? Math.max(0, road.length - ego.progress) : road.length;
-    const ratio =
-      road.capacity > 0
-        ? Math.min(1, (engine.traffic.occupancy.get(road.id) ?? 0) / road.capacity)
-        : 0;
-    const factor = road.closed ? 0.08 : Math.max(0.2, 1 - 0.8 * ratio);
+    // The SAME authoritative speed factor that slows vehicles, prices the
+    // router and paints the map — no second slowdown model in the ETA.
+    const factor = road.closed
+      ? MIN_TRAFFIC_SPEED_FACTOR
+      : roadSpeedFactor(engine.traffic.roadTraffic, road.id);
     etaSeconds += length / road.speedLimit / factor;
   }
   const completed = ego.state === "arrived";

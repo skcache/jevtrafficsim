@@ -151,7 +151,18 @@ export function TrafficSimulator() {
       updateDebugHook(data);
       const store = useUiStore.getState();
       switch (data.type) {
+        case "COMPARE_RESULT": {
+          store.setComparison({
+            fixed: data.fixed,
+            adaptive: data.adaptive,
+            verdict: data.verdict,
+            fingerprint: data.fingerprint,
+          });
+          store.setComparing(false);
+          break;
+        }
         case "READY": {
+          store.setScenarioFingerprint(data.scenarioFingerprint);
           // The frozen Chicago geography loads asynchronously (same committed
           // bytes the worker compiled); frames only start once it is in place.
           void loadChicagoCity(data.scaleIndex).then((model) => {
@@ -227,6 +238,7 @@ export function TrafficSimulator() {
       trafficLevel: defaults.trafficLevel,
       tripId: defaults.tripId,
       controller: defaults.controller,
+      driver: defaults.driver,
       seed: defaults.seed,
     } satisfies WorkerCommand);
     return () => {
@@ -250,11 +262,31 @@ export function TrafficSimulator() {
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
         tripId: overrides.tripId ?? state.tripId,
         controller: state.controller,
+        driver: state.driver,
         seed: overrides.seed ?? state.seed,
       });
     },
     [send],
   );
+
+  /**
+   * Run the CURRENT scenario headlessly under both controllers (Issue #28).
+   * The worker builds one world and steps it twice, so the comparison never
+   * depends on how long the user watched the live run.
+   */
+  const compareControllers = useCallback(() => {
+    const state = useUiStore.getState();
+    state.setError(null);
+    state.setComparison(null);
+    state.setComparing(true);
+    send({
+      type: "COMPARE",
+      tripId: state.tripId,
+      trafficLevel: state.trafficLevel,
+      driver: state.driver,
+      seed: state.seed,
+    });
+  }, [send]);
 
   const previewSetup = useCallback(() => {
     // Configuration is a live traffic preview, not a static mock. Mark the
@@ -301,10 +333,18 @@ export function TrafficSimulator() {
 
   const onTrafficLevel = useCallback(
     (trafficLevel: TrafficLevel) => {
-      useUiStore.getState().setTrafficLevel(trafficLevel);
+      const store = useUiStore.getState();
+      store.setTrafficLevel(trafficLevel);
+      // Mid-trip this is a LIVE change: the city gets busier or quieter from
+      // this moment on, and the trip keeps its clock, route and ego. Only a
+      // change made before the run starts (or an explicit trip change) rebuilds.
+      if (store.phase === "city" || store.phase === "entering") {
+        send({ type: "SET_TRAFFIC", trafficLevel });
+        return;
+      }
       startRun({ trafficLevel });
     },
-    [startRun],
+    [send, startRun],
   );
 
   const onSeed = useCallback(
@@ -380,7 +420,7 @@ export function TrafficSimulator() {
           }`}
           aria-hidden="true"
         />
-        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} />
+        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} onCompare={compareControllers} />
         <SimChrome
           following={following}
           onFollow={onFollow}

@@ -75,6 +75,14 @@ import {
   validateVehicleRoute,
   vehicleFootprint,
 } from "./vehicle";
+import {
+  approachSpeed,
+  brakingLimitSpeed,
+  createRoadTraffic,
+  roadSpeedFactor,
+  stepRoadTraffic,
+  type RoadTraffic,
+} from "./road-traffic";
 
 export interface TrafficState {
   /** Simulation clock in milliseconds; advanced by stepTraffic. */
@@ -85,10 +93,22 @@ export interface TrafficState {
   occupancy: Map<RoadId, number>;
   /** Signal mechanics per signal-controlled intersection (Task 06). */
   signals: Map<IntersectionId, SignalState>;
+  /**
+   * Authoritative per-road flow state (speed factor / severity). Vehicle
+   * speed, congestion colours, route colours and traffic-aware routing all
+   * read THIS, so physics and pixels cannot disagree.
+   */
+  roadTraffic: RoadTraffic;
 }
 
 export function createTrafficState(): TrafficState {
-  return { timeMs: 0, vehicles: [], occupancy: new Map(), signals: new Map() };
+  return {
+    timeMs: 0,
+    vehicles: [],
+    occupancy: new Map(),
+    signals: new Map(),
+    roadTraffic: createRoadTraffic(),
+  };
 }
 
 /** Creates signal states for signal-controlled intersections that lack one. */
@@ -184,10 +204,19 @@ function hasCapacity(state: TrafficState, road: Road, footprint: number): boolea
 }
 
 function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {
+  // Read BEFORE the road is assigned: after that there is no way to tell a
+  // first entry (an abstract origin) from a junction transfer.
+  const enteringFromOrigin = vehicle.roadId === null;
   addOccupancy(state, road.id, vehicleFootprint(vehicle.type));
   vehicle.roadId = road.id;
   vehicle.progress = 0;
-  vehicle.speed = effectiveSpeed(road, vehicle.type);
+  // An abstract ORIGIN injects a vehicle already travelling at the road's
+  // speed (Task 05: origins are not junctions). A vehicle TRANSFERRING into
+  // this road keeps its momentum, capped by the new road's limit — it never
+  // gains speed by crossing a junction. From here the per-tick longitudinal
+  // model owns the speed: congestion slows it, a blocked control brakes it.
+  const freeFlow = effectiveSpeed(road, vehicle.type);
+  vehicle.speed = enteringFromOrigin ? freeFlow : Math.min(vehicle.speed, freeFlow);
   vehicle.state = "moving";
   vehicle.queuedSinceMs = null;
 }
@@ -265,6 +294,44 @@ function advance(
   context: IntersectionStepContext,
   onApproachArrival?: (roadId: RoadId) => void,
 ): void {
+  // ---- Longitudinal model ------------------------------------------------
+  // Target speed for THIS tick, approached with bounded acceleration:
+  //
+  //   target = road free-flow speed x vehicle multiplier x road speedFactor
+  //
+  // and, when the next control or road will not admit this vehicle, capped by
+  // what the brakes can achieve over the distance that is left — so a vehicle
+  // brakes to ~0 AT the physical stop line and holds there, instead of running
+  // to the end at full speed and stopping dead. Release is the same model in
+  // reverse: target returns to the traffic speed and the vehicle accelerates.
+  const startRoadId = vehicle.roadId;
+  const startRoad = startRoadId === null ? undefined : city.roads[startRoadId];
+  if (startRoad && startRoadId !== null) {
+    const trafficSpeed =
+      effectiveSpeed(startRoad, vehicle.type) * roadSpeedFactor(state.roadTraffic, startRoadId);
+    const nextRoadId = vehicle.route[vehicle.routeIndex + 1];
+    let blockedAhead = false;
+    if (nextRoadId !== undefined) {
+      const next = city.roads[nextRoadId];
+      blockedAhead =
+        !next ||
+        next.closed ||
+        !hasCapacity(state, next, vehicleFootprint(vehicle.type)) ||
+        evaluateIntersectionControl(
+          city,
+          state,
+          startRoadId,
+          nextRoadId,
+          vehicle.queuedSinceMs,
+          context,
+        ) !== "granted";
+    }
+    const target = blockedAhead
+      ? Math.min(trafficSpeed, brakingLimitSpeed(Math.max(0, startRoad.length - vehicle.progress)))
+      : trafficSpeed;
+    vehicle.speed = approachSpeed(vehicle.speed, target, dtSeconds);
+  }
+
   let remaining = vehicle.speed * dtSeconds;
   let guard = 0;
   while (remaining > 0 && guard <= vehicle.route.length) {
@@ -361,6 +428,7 @@ export function spawnVehicle(
     state: spec.route.length === 0 ? "arrived" : "pending",
     spawnTimeMs,
     queuedSinceMs: null,
+    rerouteCount: 0,
   };
   state.vehicles.push(vehicle);
   if (vehicle.state === "pending") {
@@ -389,6 +457,9 @@ export function stepTraffic(
   dtMs: number = SIMULATION_TIMESTEP_MS,
   options: TrafficStepOptions = {},
 ): void {
+  // Road flow state first: this tick's movement, and the snapshot that
+  // follows it, both read the state produced here.
+  stepRoadTraffic(state, city, dtMs);
   if (!Number.isFinite(dtMs) || dtMs <= 0) {
     throw new RangeError(`dtMs must be a finite positive number, received ${dtMs}`);
   }

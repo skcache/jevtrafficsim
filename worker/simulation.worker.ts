@@ -9,22 +9,31 @@
  * longer than the real-time budget, the run simply advances slower than wall
  * time — ticks are never queued in an unbounded catch-up spiral.
  *
- * Cadence: snapshots every SNAPSHOT_EVERY_TICKS (5 Hz), metrics every
- * METRICS_EVERY_TICKS (2 Hz) — both centralized in worker/protocol.ts.
+ * Cadence: one presentation frame and one metrics sample per real tick, so the
+ * renderer can interpolate between consecutive frames over SIM_TICK_MS.
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
+import {
+  buildChallengeScenario,
+  scenarioFingerprint,
+  type ChallengeScenario,
+} from "@/worker/challenge-scenario";
+import { buildChallengeResult } from "@/worker/challenge-result";
+import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
 import { generateDemand } from "@/sim/demand";
+import { TRAFFIC_LEVELS } from "@/sim/types";
 import {
   createEngine,
   queueIncident,
   setEngineController,
+  injectSpawns,
   stepEngine,
   type EngineState,
   type ScheduledSpawn,
@@ -42,11 +51,10 @@ import {
 } from "./challenge-incidents";
 import {
   LIVE_RUN_HORIZON_MS,
-  METRICS_EVERY_TICKS,
   nextSeed,
   parseWorkerCommand,
+  PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
-  SNAPSHOT_EVERY_TICKS,
   type ControllerChoice,
   type RunConfig,
   type WorkerCommand,
@@ -80,6 +88,10 @@ interface WorkerState {
   incidentHistory: ResolvedChallengeIncident[];
   /** Stable sequence for manual resolution streams. */
   manualIncidentSequence: number;
+  /** The controller-neutral scenario this run realises (issue #28). */
+  scenario: ChallengeScenario | null;
+  /** Human-fired incidents during this run; > 0 makes the result non-comparable. */
+  manualIncidents: number;
   /** Guards against overlapping async builds (fast scale switching). */
   buildToken: number;
 }
@@ -98,6 +110,8 @@ const state: WorkerState = {
   incidentPlan: null,
   incidentHistory: [],
   manualIncidentSequence: 0,
+  scenario: null,
+  manualIncidents: 0,
   buildToken: 0,
 };
 
@@ -200,15 +214,27 @@ async function buildRun(config: RunConfig): Promise<void> {
     config.trafficLevel,
     config.seed,
   );
+  // The scenario is everything about the WORLD: trip, traffic, driver, seed,
+  // duration. Controller identity is deliberately absent from it.
+  const scenario = buildChallengeScenario({
+    tripId: config.tripId,
+    trafficLevel: config.trafficLevel,
+    driver: config.driver,
+    seed: config.seed,
+    durationMs: config.durationMs,
+  });
   const engine = createEngine({
     city,
     controller: makeController(config.controller),
     spawns,
+    driver: config.driver,
     incidents: {
       seed: incidentPlan.incidentSeed,
       script: [...incidentPlan.entries],
     },
   });
+  state.scenario = scenario;
+  state.manualIncidents = 0;
   state.config = config;
   state.engine = engine;
   state.trip = trip;
@@ -226,6 +252,16 @@ async function buildRun(config: RunConfig): Promise<void> {
   post({
     type: "READY",
     config,
+    scenarioFingerprint: scenarioFingerprint(
+      state.scenario ??
+        buildChallengeScenario({
+          tripId: config.tripId,
+          trafficLevel: config.trafficLevel,
+          driver: config.driver,
+          seed: config.seed,
+          durationMs: config.durationMs,
+        }),
+    ),
     scaleIndex,
     scaleLabel: CHICAGO_SCALE_LABELS[scaleIndex] ?? "Medium",
     timeMs: engine.traffic.timeMs,
@@ -245,8 +281,19 @@ async function buildRun(config: RunConfig): Promise<void> {
   start(); // initial state: automatically running (documented behavior)
 }
 
-function scheduleNextTick(): void {
-  state.timer = setTimeout(runTick, SIM_TICK_MS);
+/**
+ * Schedule the next real tick on a FIXED cadence.
+ *
+ * `setTimeout(runTick, SIM_TICK_MS)` after the work makes every period
+ * SIM_TICK_MS + the cost of the tick itself — measured ~125 ms per 800 ms of
+ * simulated time on the Metro run, so the designed 8x playback arrived at
+ * 6.0-6.4x. Subtracting the tick's own cost holds the period at SIM_TICK_MS
+ * whenever the tick fits inside it, and runs back to back (no artificial delay)
+ * when it does not. Scheduling only: the engine's steps — and therefore every
+ * simulated result — are untouched.
+ */
+function scheduleNextTick(tickCostMs = 0): void {
+  state.timer = setTimeout(runTick, Math.max(0, SIM_TICK_MS - tickCostMs));
 }
 
 function start(): void {
@@ -275,32 +322,55 @@ function handleError(error: unknown): void {
 
 function runTick(): void {
   state.timer = null;
+  const startedAt = performance.now();
   const engine = state.engine;
   const config = state.config;
   if (!engine || !config || !state.running) {
     return;
   }
   try {
-    stepEngine(engine);
+    for (let step = 0; step < PLAYBACK_STEPS_PER_TICK; step += 1) {
+      stepEngine(engine);
+      if (engine.traffic.timeMs >= config.durationMs) {
+        break;
+      }
+    }
   } catch (error) {
     handleError(error);
     return;
   }
-  if (engine.ticks % SNAPSHOT_EVERY_TICKS === 0) {
-    postSnapshot();
-  }
-  if (engine.ticks % METRICS_EVERY_TICKS === 0) {
-    postMetrics();
-  }
+  // ONE frame per real tick, never one per simulated step. The renderer
+  // interpolates between consecutive frames over EXPECTED_FRAME_INTERVAL_MS,
+  // so the cadence has to be the real tick — posting per step floods the buffer
+  // and makes the interpolation window a fraction of the frame interval, which
+  // is exactly what made the car stutter.
+  postSnapshot();
+  postMetrics();
   if (engine.traffic.timeMs >= config.durationMs) {
     state.running = false;
     state.complete = true;
     postSnapshot();
     postMetrics();
-    post({ type: "RUN_COMPLETE", timeMs: engine.traffic.timeMs });
+    post({
+      type: "RUN_COMPLETE",
+      timeMs: engine.traffic.timeMs,
+      result: buildChallengeResult(
+        engine,
+        state.scenario ??
+          buildChallengeScenario({
+            tripId: config.tripId,
+            trafficLevel: config.trafficLevel,
+            driver: config.driver,
+            seed: config.seed,
+            durationMs: config.durationMs,
+          }),
+        config.controller,
+        state.manualIncidents,
+      ),
+    });
     return;
   }
-  scheduleNextTick();
+  scheduleNextTick(performance.now() - startedAt);
 }
 
 function handleCommand(command: WorkerCommand): void {
@@ -311,6 +381,7 @@ function handleCommand(command: WorkerCommand): void {
         trafficLevel: command.trafficLevel,
         tripId: command.tripId,
         controller: command.controller,
+        driver: command.driver,
         seed: command.seed,
         durationMs: command.durationMs ?? LIVE_RUN_HORIZON_MS,
       });
@@ -348,6 +419,67 @@ function handleCommand(command: WorkerCommand): void {
       state.config = { ...state.config, controller: command.controller };
       postSnapshot(); // controller id visible immediately
       return;
+    }
+    case "COMPARE": {
+      // Headless: one scenario, two controllers, both results. Never touches
+      // the live run's state — a comparison cannot disturb the city on screen.
+      const model = state.model;
+      if (!model) {
+        post({ type: "ERROR", message: "cannot COMPARE before the city is loaded" });
+        return;
+      }
+      try {
+        const outcome = runComparison(model, {
+          tripId: command.tripId,
+          trafficLevel: command.trafficLevel,
+          driver: command.driver,
+          seed: command.seed,
+          durationMs: command.durationMs ?? LIVE_RUN_HORIZON_MS,
+        });
+        post({
+          type: "COMPARE_RESULT",
+          fingerprint: outcome.fingerprint,
+          driver: outcome.driver,
+          tripId: outcome.tripId,
+          trafficLevel: outcome.trafficLevel,
+          fixed: outcome.fixed,
+          adaptive: outcome.adaptive,
+          verdict: outcome.verdict,
+          incidentEntries: outcome.incidentEntries,
+        });
+      } catch (error) {
+        post({ type: "ERROR", message: `comparison failed: ${String((error as Error)?.message ?? error)}` });
+      }
+      return;
+    }
+    case "SET_TRAFFIC": {
+      const engine = state.engine;
+      const config = state.config;
+      if (!engine || !config || config.trafficLevel === command.trafficLevel) {
+        break;
+      }
+      // Live change: the run, its clock, its trip and the ego stay exactly as
+      // they are. Only NEW demand appears, generated for the new level over the
+      // remaining horizon with a seed derived from (run seed, new level, now) —
+      // so the same change at the same simulated time always adds the same cars.
+      const nowMs = engine.traffic.timeMs;
+      const horizonMs = Math.max(0, config.durationMs - nowMs);
+      if (horizonMs > 0) {
+        const levelIndex = Math.max(0, TRAFFIC_LEVELS.indexOf(command.trafficLevel));
+        const derivedSeed = (config.seed + 0x9e37 + levelIndex * 7919 + Math.floor(nowMs / 1000)) >>> 0;
+        const extra = generateDemand({
+          city: engine.baseCity,
+          level: command.trafficLevel,
+          seed: derivedSeed,
+          durationMs: horizonMs,
+        })
+          .filter((spawn) => spawn.timeMs > 0)
+          .map((spawn) => ({ ...spawn, timeMs: spawn.timeMs + nowMs }));
+        injectSpawns(engine, extra);
+      }
+      state.config = { ...config, trafficLevel: command.trafficLevel };
+      postSnapshot();
+      break;
     }
     case "INCIDENT": {
       const engine = state.engine;
@@ -419,6 +551,9 @@ function handleCommand(command: WorkerCommand): void {
         entry: resolution.entry,
       };
       state.incidentHistory.push(resolved);
+      // A human touched this run: its result is no longer comparable to a clean
+      // run of the same scenario.
+      state.manualIncidents += 1;
       post({
         type: "INCIDENT_RESOLVED",
         kind: command.kind,

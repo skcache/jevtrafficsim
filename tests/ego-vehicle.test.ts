@@ -24,7 +24,7 @@ function egoOnChain(backgroundFirst: ScheduledSpawn[]): ScheduledSpawn[] {
 
 describe("ego vehicle seam", () => {
   it("turns the curated trip into exactly one ego spawn on the Metro graph", () => {
-    const { trip, spawn } = materializeChallengeTrip(chicagoModel(4), "united-center-to-navy-pier", 7);
+    const { trip, spawn } = materializeChallengeTrip(chicagoModel(4), "soldier-field-to-navy-pier", 7);
     expect(spawn.role).toBe("ego");
     expect(spawn.timeMs).toBe(0);
     expect(spawn.type).toBe("car");
@@ -111,8 +111,8 @@ describe("ego vehicle seam", () => {
     const b = build();
     runEngine(a, 900);
     runEngine(b, 900);
-    const first = buildPresentationSnapshot(a, 0, "united-center-to-navy-pier");
-    const second = buildPresentationSnapshot(b, 0, "united-center-to-navy-pier");
+    const first = buildPresentationSnapshot(a, 0, "soldier-field-to-navy-pier");
+    const second = buildPresentationSnapshot(b, 0, "soldier-field-to-navy-pier");
     expect(a.egoVehicleId).toBe(b.egoVehicleId);
     expect(first.ego).toEqual(second.ego);
     expect(first.trip).toEqual(second.trip);

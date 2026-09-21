@@ -5,6 +5,11 @@ import {
   curatedTrip,
   materializeCuratedTrip,
 } from "@/cities/chicago-trips";
+import { materializeChallengeTrip } from "@/worker/ego-spawn";
+import { buildChallengeScenario, resolveScenarioWorld } from "@/worker/challenge-scenario";
+import { generateDemand } from "@/sim/demand";
+import { createEngine, runEngine, type ScheduledSpawn } from "@/sim/engine";
+import { createAdaptiveController } from "@/controllers/adaptive";
 import { chicagoModel } from "./chicago-support";
 
 describe("curated Chicago challenge trips", () => {
@@ -117,7 +122,7 @@ describe("curated Chicago challenge trips", () => {
   it("never mutates Chicago while snapping or routing", () => {
     const before = JSON.stringify(model.city);
     materializeCuratedTrip(model, {
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       seed: 42,
     });
     expect(JSON.stringify(model.city)).toBe(before);
@@ -126,16 +131,71 @@ describe("curated Chicago challenge trips", () => {
   it("requires Metro so curated anchors cannot silently snap to a smaller boundary", () => {
     expect(() =>
       materializeCuratedTrip(chicagoModel(3), {
-        tripId: "united-center-to-navy-pier",
+        tripId: "soldier-field-to-navy-pier",
         seed: 42,
       }),
     ).toThrow(/require Metro Chicago/);
   });
 
   it("looks up trip metadata without exposing controller policy", () => {
-    const trip = curatedTrip("streeterville-to-united-center");
-    expect(trip.label).toBe("Streeterville → United Center");
+    const trip = curatedTrip("streeterville-to-south-loop");
+    expect(trip.label).toBe("Streeterville → South Loop");
     expect(Object.keys(trip)).not.toContain("controller");
     expect(Object.keys(trip)).not.toContain("priority");
   });
+
+  it("completes every curated trip comfortably inside the live horizon", () => {
+    // The product contract: a run is watched in 30-60 s of wall clock
+    // (PLAYBACK_STEPS_PER_TICK = 8x), so every trip must ARRIVE well inside the
+    // 600 s simulated horizon. A trip that needs the whole horizon leaves the
+    // user with an unfinished run — which is what the six were re-curated for.
+    //
+    // Worst case on purpose: rush-hour demand, the app's default driver and
+    // controller (tourist + adaptive), the app's default seed. Measured
+    // arrival times (seed 42, rush-hour) are 227-400 s; the 540 s bound is the
+    // "comfortably inside" line, not the measured values.
+    const arrival = (tripId: (typeof CURATED_TRIP_IDS)[number]): number => {
+      const seed = 42;
+      const durationMs = 540_000;
+      const trafficLevel = "rush-hour" as const;
+      const challenge = materializeChallengeTrip(model, tripId, seed);
+      const scenario = buildChallengeScenario({
+        tripId,
+        trafficLevel,
+        driver: "tourist",
+        seed,
+        durationMs,
+      });
+      const world = resolveScenarioWorld(model, challenge.trip, scenario);
+      const spawns: ScheduledSpawn[] = [
+        challenge.spawn,
+        ...generateDemand({ city: model.city, level: trafficLevel, seed: world.demandSeed, durationMs }),
+      ];
+      const engine = createEngine({
+        city: model.city,
+        controller: createAdaptiveController(),
+        spawns,
+        driver: "tourist",
+        incidents: { seed: world.incidentPlan.incidentSeed, script: [...world.incidentPlan.entries] },
+      });
+      const egoAt = () =>
+        engine.egoVehicleId === null
+          ? undefined
+          : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId);
+      for (let t = 1_000; t <= durationMs; t += 1_000) {
+        runEngine(engine, t);
+        const ego = egoAt();
+        if (ego && ego.state === "arrived") {
+          return engine.traffic.timeMs;
+        }
+      }
+      return -1;
+    };
+
+    for (const tripId of CURATED_TRIP_IDS) {
+      const arrivalMs = arrival(tripId);
+      expect(arrivalMs, `${tripId} arrived`).toBeGreaterThan(0);
+      expect(arrivalMs, `${tripId} inside the horizon`).toBeLessThan(540_000);
+    }
+  }, 900_000);
 });

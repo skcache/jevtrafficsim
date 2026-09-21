@@ -102,73 +102,80 @@ describe("capacity semantics", () => {
 
 describe("queueing", () => {
   it("waits while the downstream road is full and holds upstream capacity", () => {
+    // Approaches scale up past the braking distance (v^2/2a = 13.89 m at
+    // 10 m/s): the 30 m approach lets the waiter cruise, brake and stop AT the
+    // line (tick 40 = 30 + 10, see tools/model-timing.py) while the 80 m
+    // downstream road keeps its lone occupant aboard long enough to hold the
+    // waiter there.
     const { city } = makeStreet([
-      { length: 2, speedLimit: 10, capacity: 4 },
+      { length: 30, speedLimit: 10, capacity: 4 },
       // Capacity 2 with one car aboard: the spillback headroom (1.8) admits
       // no second car, so this road blocks downstream exactly as before.
-      { length: 20, speedLimit: 10, capacity: 2 },
+      { length: 80, speedLimit: 10, capacity: 2 },
     ]);
     const state = createTrafficState();
     spawn(city, state, 0, "car", [1], 1, 2); // occupies road 1
     spawn(city, state, 1, "car", [0, 1], 0, 2); // queued at road 0 end
-    stepChecked(city, state, 2);
+    stepChecked(city, state, 40);
     const waiting = state.vehicles[1];
     expect(waiting.state).toBe("queued");
-    expect(waiting.progress).toBeCloseTo(2, 10);
-    expect(waiting.queuedSinceMs).toBe(2 * DT);
+    expect(waiting.progress).toBeCloseTo(30, 10);
+    expect(waiting.queuedSinceMs).toBe(40 * DT);
     expect(roadOccupancy(state, 0)).toBe(1);
 
-    stepChecked(city, state, 18); // road-1 car arrives on tick 20
+    stepChecked(city, state, 44); // road-1 car arrives on tick 84
     expect(waiting.state).toBe("queued");
-    expect(waiting.waitTimeMs).toBe(19 * DT);
-    expect(waiting.tripTimeMs).toBe(20 * DT);
+    expect(waiting.waitTimeMs).toBe(45 * DT);
+    expect(waiting.tripTimeMs).toBe(84 * DT);
 
-    stepChecked(city, state, 1); // capacity visible from tick 21
+    stepChecked(city, state, 1); // capacity visible from tick 85
     expect(waiting.state).toBe("moving");
     expect(waiting.roadId).toBe(1);
     expect(roadOccupancy(state, 0)).toBe(0);
     expect(roadOccupancy(state, 1)).toBe(1);
-    expect(waiting.waitTimeMs).toBe(19 * DT); // release tick does not wait
+    expect(waiting.waitTimeMs).toBe(45 * DT); // release tick does not wait
 
-    stepChecked(city, state, 20); // arrives at tick 40 after 20 more
+    stepChecked(city, state, 100); // arrives at tick 185 after 100 more
     expect(waiting.state).toBe("arrived");
-    expect(waiting.tripTimeMs).toBe(40 * DT);
-    expect(waiting.waitTimeMs).toBe(19 * DT);
+    expect(waiting.tripTimeMs).toBe(185 * DT);
+    expect(waiting.waitTimeMs).toBe(45 * DT);
   });
 
   it("releases waiters in queue order without jumping", () => {
     const { city } = makeStreet([
-      { length: 2, speedLimit: 10, capacity: 8 },
+      { length: 30, speedLimit: 10, capacity: 8 },
       // Capacity 2 with one car aboard: no second car may be admitted.
-      { length: 10, speedLimit: 10, capacity: 2 },
+      { length: 40, speedLimit: 10, capacity: 2 },
     ]);
     const state = createTrafficState();
-    spawn(city, state, 0, "car", [1], 1, 2); // blocks road 1 until tick 10
+    spawn(city, state, 0, "car", [1], 1, 2); // blocks road 1 until tick 42
     spawn(city, state, 1, "car", [0, 1], 0, 2); // first waiter
     spawn(city, state, 2, "car", [0, 1], 0, 2); // second waiter
-    stepChecked(city, state, 10);
+    stepChecked(city, state, 42);
     const [blocker, first, second] = state.vehicles;
     expect(blocker.state).toBe("arrived");
     expect(first.state).toBe("queued");
     expect(second.state).toBe("queued");
 
-    stepChecked(city, state, 1); // tick 11: release
+    stepChecked(city, state, 1); // tick 43: release
     expect(first.state).toBe("moving");
     expect(first.roadId).toBe(1);
     expect(second.state).toBe("queued");
-    expect(first.waitTimeMs).toBe(9 * DT);
-    expect(second.waitTimeMs).toBe(10 * DT);
+    expect(first.waitTimeMs).toBe(3 * DT);
+    expect(second.waitTimeMs).toBe(4 * DT);
 
     // A vehicle spawning later must not overtake the waiters.
     spawn(city, state, 3, "car", [0, 1], 0, 2);
-    stepChecked(city, state, 9); // tick 20: first arrives on road 1
+    stepChecked(city, state, 56); // tick 99: first arrives on road 1
     expect(first.state).toBe("arrived");
-    stepChecked(city, state, 1); // tick 21: second released, newcomer still behind
+    stepChecked(city, state, 1); // tick 100: second released, newcomer still behind
     expect(second.state).toBe("moving");
     expect(state.vehicles[3].state).toBe("queued");
-    stepChecked(city, state, 9); // second arrives at tick 30
-    stepChecked(city, state, 1); // tick 31: newcomer finally released
+    stepChecked(city, state, 56); // second arrives at tick 156
+    expect(second.state).toBe("arrived");
+    stepChecked(city, state, 1); // tick 157: newcomer finally released
     expect(state.vehicles[3].state).toBe("moving");
+    expect(state.vehicles[3].waitTimeMs).toBe(73 * DT);
   });
 
   it("does not accumulate wait time after arrival", () => {
@@ -209,8 +216,8 @@ describe("closed roads", () => {
 
   it("never transfers onto a closed next road", () => {
     const { city } = makeStreet([
-      { length: 2, speedLimit: 10 },
-      { length: 10, speedLimit: 10 },
+      { length: 30, speedLimit: 10 },
+      { length: 30, speedLimit: 10 },
     ]);
     const state = createTrafficState();
     const vehicle = spawnVehicle(city, state, {
@@ -221,7 +228,7 @@ describe("closed roads", () => {
       route: [0, 1],
     });
     const closed = withClosedRoads(city, [1]);
-    stepChecked(closed, state, 2);
+    stepChecked(closed, state, 40); // brakes and stops AT the line (30 + 10 ticks)
     expect(vehicle.state).toBe("queued");
     expect(vehicle.roadId).toBe(0);
     expect(roadOccupancy(state, 0)).toBe(1);

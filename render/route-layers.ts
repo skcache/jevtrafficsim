@@ -5,14 +5,16 @@
  * Both are world-bound: widths and sizes are in MAP METRES so they grow as the
  * camera descends, with pixel values only as legibility floors and safety caps
  * (see render/scale.ts). The route is painted per road from the centralized
- * current-route payload, so reroutes repaint immediately. Traffic state is
- * rendered by the separate citywide traffic layer; the route stays one colour.
+ * current-route payload, so reroutes repaint immediately — including traffic
+ * pressure ON the route: contiguous same-state roads merge into one run, so the
+ * band stays a single smooth stroke while congested stretches show amber/red.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Projection } from "@/cities/map-model";
 import type { RouteSegment } from "./route-path";
 import { DESTINATION_SCALE, ROUTE_SCALE } from "./scale";
+import { ROUTE_TRAFFIC_COLORS } from "./route-traffic";
 import type { LngLat } from "./deck-layers";
 import { toLngLat } from "./deck-layers";
 import { DESTINATION_SPRITE_ID, type DestinationSpriteSet } from "./destination-sprite";
@@ -22,18 +24,19 @@ function color(hex: readonly [number, number, number], alpha = 255): [number, nu
 }
 
 /**
- * One visually continuous route band.
- *
- * The route is deliberately ONE colour now. Traffic pressure belongs to the
- * citywide traffic layer underneath the trip experience; changing the route
- * stroke itself at every road boundary created visual seams and bulbous
- * intersection artefacts. We still keep per-road traffic classes in
- * RouteSegment for ETA/debugging, but the navigation path itself reads as one
- * coherent object.
+ * One visually continuous route band, in as few strokes as the traffic state
+ * allows: consecutive roads of the SAME state merge into a single run, so a
+ * free route is one stroke and a partly-congested route is two or three, never
+ * one-per-road. Runs meet at shared junction points with equal width, so the
+ * band reads as one object rather than stacked slop.
  */
 interface RouteRun {
   readonly path: readonly LngLat[];
+  readonly traffic: RouteSegment["traffic"];
 }
+
+/** Draw order: the more severe state paints last, so it owns the junction. */
+const RUN_DRAW_ORDER: readonly RouteSegment["traffic"][] = ["free", "slowed", "congested"];
 
 const ROUTE_JOIN_EPSILON_DEG = 2e-6;
 
@@ -55,12 +58,16 @@ function cleanRoutePath(path: readonly LngLat[]): LngLat[] {
 }
 
 export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
-  const runs: Array<{ path: LngLat[] }> = [];
+  const runs: Array<{ path: LngLat[]; traffic: RouteSegment["traffic"] }> = [];
   for (const segment of segments) {
     const path = cleanRoutePath(segment.path as readonly LngLat[]);
     if (path.length < 2) continue;
     const previous = runs[runs.length - 1];
-    if (previous && sameRoutePoint(previous.path[previous.path.length - 1], path[0])) {
+    if (
+      previous &&
+      previous.traffic === segment.traffic &&
+      sameRoutePoint(previous.path[previous.path.length - 1], path[0])
+    ) {
       // The junction point exists exactly once. Removing near-duplicate
       // consecutive points also prevents zero-length vertices from turning
       // into round/dot artifacts in deck.gl.
@@ -71,7 +78,7 @@ export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
       }
       continue;
     }
-    runs.push({ path });
+    runs.push({ path, traffic: segment.traffic });
   }
   return runs;
 }
@@ -79,28 +86,28 @@ export function buildRouteRuns(segments: readonly RouteSegment[]): RouteRun[] {
 export function buildRouteLayers(segments: readonly RouteSegment[]): Layer[] {
   const runs = buildRouteRuns(segments);
   if (runs.length === 0) return [];
-  return [
-    new PathLayer<RouteRun>({
-      id: "route-band",
-      data: runs,
-      getPath: (run) => run.path as LngLat[],
-      getColor: () =>
-        color(
-          ROUTE_SCALE.color,
-          Math.round(ROUTE_SCALE.opacity * 255),
-        ),
-      getWidth: ROUTE_SCALE.widthM,
-      widthUnits: "meters",
-      widthMinPixels: ROUTE_SCALE.minPixels,
-      widthMaxPixels: ROUTE_SCALE.maxPixels,
-      // One run spans contiguous intersections, so there are no stacked
-      // per-road end caps. Square/mitered joins also avoid the round vertex
-      // bulbs that previously looked like mystery circles at intersections.
-      capRounded: false,
-      jointRounded: false,
-      pickable: false,
-    }),
-  ];
+  return RUN_DRAW_ORDER.flatMap((traffic) => {
+    const ofState = runs.filter((run) => run.traffic === traffic);
+    if (ofState.length === 0) return [];
+    return [
+      new PathLayer<RouteRun>({
+        id: `route-band-${traffic}`,
+        data: ofState,
+        getPath: (run) => run.path as LngLat[],
+        getColor: () =>
+          color(ROUTE_TRAFFIC_COLORS[traffic], Math.round(ROUTE_SCALE.opacity * 255)),
+        getWidth: ROUTE_SCALE.widthM,
+        widthUnits: "meters",
+        widthMinPixels: ROUTE_SCALE.minPixels,
+        widthMaxPixels: ROUTE_SCALE.maxPixels,
+        // Runs already merge every contiguous same-state stretch, so rounded
+        // joins smooth the stroke without stacking caps per road.
+        capRounded: true,
+        jointRounded: true,
+        pickable: false,
+      }),
+    ];
+  });
 }
 
 export interface DestinationAnchor {

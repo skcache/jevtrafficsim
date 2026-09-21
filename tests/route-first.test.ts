@@ -13,7 +13,6 @@ import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { metricToLngLat } from "@/cities/map-model";
 import {
   ROUTE_TRAFFIC_COLORS,
-  ROUTE_TRAFFIC_RULES,
   classifyRoadTraffic,
   classifySnapshotRoads,
 } from "@/render/route-traffic";
@@ -32,27 +31,26 @@ function road(partial: Partial<PresentationRoadTraffic>): PresentationRoadTraffi
     vehicleCount: 0,
     queuedCount: 0,
     maxBlockedWaitMs: 0,
+    // Free flow by default; tests that want pressure set the SIMULATION's
+    // severity, which is the only thing the classifier reads now.
+    speedFactor: 1,
+    severity: "free",
     ...partial,
   };
 }
 
 describe("route traffic classification", () => {
-  it("classifies by the stable quantities, never by controller or clock", () => {
+  it("reads the simulation's own flow state, never a second threshold table", () => {
+    // Absent from the sparse frame = free flow, same contract as the sim.
     expect(classifyRoadTraffic(undefined)).toBe("free");
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: 0 }))).toBe("free");
-    // Occupancy ratio crosses into slowdown, then congestion.
-    expect(classifyRoadTraffic(road({ occupancy: 6, capacity: 10 }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10 }))).toBe("congested");
-    // Queue depth alone is enough.
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: ROUTE_TRAFFIC_RULES.slowedQueued }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: ROUTE_TRAFFIC_RULES.congestedQueued }))).toBe("congested");
-    // Longest blocked wait alone is enough.
-    expect(classifyRoadTraffic(road({ occupancy: 0, maxBlockedWaitMs: ROUTE_TRAFFIC_RULES.slowedWaitMs }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 0, maxBlockedWaitMs: ROUTE_TRAFFIC_RULES.congestedWaitMs }))).toBe("congested");
-    // A closed road can never be free.
-    expect(classifyRoadTraffic(road({ occupancy: 0 }), true)).toBe("congested");
-    expect(classifyRoadTraffic(undefined, true)).toBe("congested");
+    // Severity is authoritative: occupancy numbers alone do not decide colour.
+    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10, severity: "free" }))).toBe("free");
+    expect(classifyRoadTraffic(road({ severity: "slower" }))).toBe("slowed");
+    expect(classifyRoadTraffic(road({ severity: "severe" }))).toBe("congested");
+    // A closed road can never read as free, whatever the flow state says.
+    expect(classifyRoadTraffic(road({ severity: "free" }), true)).toBe("congested");
   });
+
 
   it("gives absent sparse roads the free baseline", () => {
     const classes = classifySnapshotRoads({
@@ -60,7 +58,7 @@ describe("route traffic classification", () => {
       timeMs: 0,
       controller: "fixed",
       ego: null,
-      roadTraffic: [road({ roadId: 7, occupancy: 9, capacity: 10 })],
+      roadTraffic: [road({ roadId: 7, occupancy: 9, capacity: 10, severity: "severe" })],
       routeControls: [],
       trip: null,
       roadConditions: [],
@@ -72,7 +70,10 @@ describe("route traffic classification", () => {
   });
 
   it("is deterministic and keeps one colour per class", () => {
-    const entries = [road({ roadId: 1, occupancy: 5 }), road({ roadId: 2, queuedCount: 6 })];
+    const entries = [
+      road({ roadId: 1, occupancy: 5 }),
+      road({ roadId: 2, queuedCount: 6, severity: "severe" }),
+    ];
     const first = entries.map((entry) => classifyRoadTraffic(entry));
     const second = entries.map((entry) => classifyRoadTraffic(entry));
     expect(first).toEqual(second);
@@ -110,7 +111,7 @@ describe("route geometry", () => {
   });
 
   function tripFrame(seed = 42) {
-    const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", seed);
+    const { trip, spawn } = materializeChallengeTrip(model, "soldier-field-to-navy-pier", seed);
     const engine = createEngine({
       city: model.city,
       controller: createFixedController(),
@@ -190,16 +191,19 @@ describe("route-first layers", () => {
       },
     ];
     const routeLayers = buildRouteLayers(segments);
-    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-band"]);
+    // Free route: one blue run. A congested stretch would add its own run(s).
+    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-band-free"]);
     const route = (routeLayers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(route.widthUnits).toBe("meters");
     expect(route.widthMinPixels).toBeGreaterThan(0);
     expect(route.widthMaxPixels).toBeGreaterThan(route.widthMinPixels as number);
     expect(route.getWidth).toBe(ROUTE_SCALE.widthM);
-    expect(route.capRounded).toBe(false);
-    expect(route.jointRounded).toBe(false);
+    expect(route.capRounded).toBe(true);
+    expect(route.jointRounded).toBe(true);
+    // The band paints the road's OWN traffic state (blue / amber / red), so a
+    // congested stretch of the route is visible instead of staying solid blue.
     expect((route.getColor as () => number[])()).toEqual([
-      ...ROUTE_SCALE.color,
+      ...ROUTE_TRAFFIC_COLORS.free,
       Math.round(ROUTE_SCALE.opacity * 255),
     ]);
 
@@ -212,14 +216,19 @@ describe("route-first layers", () => {
     expect(pin.sizeMinPixels).toBeGreaterThan(0);
   });
 
-  it("coalesces the whole contiguous trip into one band even when traffic state changes", () => {
+  it("merges same-state roads into runs, and splits where the state changes", () => {
     const runs = buildRouteRuns([
       { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
       { roadId: 2, path: [[1, 1], [2, 1]], traffic: "slowed" },
-      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "congested" },
+      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "slowed" },
+      { roadId: 4, path: [[3, 1], [4, 1]], traffic: "congested" },
     ]);
-    expect(runs).toHaveLength(1);
-    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1], [3, 1]]);
+    // Contiguous same-state roads are ONE stroke (no per-road seams); a state
+    // change starts a new run so the congested stretch can paint amber/red.
+    expect(runs.map((run) => run.traffic)).toEqual(["free", "slowed", "congested"]);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1]]);
+    expect(runs[1].path).toEqual([[1, 1], [2, 1], [3, 1]]);
+    expect(runs[2].path).toEqual([[3, 1], [4, 1]]);
   });
 
   it("removes duplicate junction points that can render as circles", () => {
@@ -243,7 +252,7 @@ describe("route-first layers", () => {
 
   it("places the destination pin on the destination intersection", () => {
     const { trip, snapshot } = (() => {
-      const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", 7);
+      const { trip, spawn } = materializeChallengeTrip(model, "soldier-field-to-navy-pier", 7);
       const engine = createEngine({ city: model.city, controller: createFixedController(), spawns: [spawn] });
       runEngine(engine, 300);
       return { trip, snapshot: buildPresentationSnapshot(engine, 0, trip.trip.id) };
@@ -270,7 +279,7 @@ describe("trip HUD", () => {
   it("reports exactly the payload's numbers", () => {
     const view = tripHudView({
       trip: {
-        tripId: "united-center-to-navy-pier",
+        tripId: "soldier-field-to-navy-pier",
         originIntersectionId: 1,
         destinationIntersectionId: 2,
         routeRoadIds: [1, 2, 3, 4],
@@ -291,7 +300,7 @@ describe("trip HUD", () => {
     expect(view?.tripName.length).toBeGreaterThan(0);
     const byLabel = new Map(view?.rows.map((row) => [row.label, row.value]));
     expect(byLabel.get("Elapsed")).toBe("2m 14s");
-    expect(byLabel.get("Remaining")).toBe("3.3 km");
+    expect(byLabel.get("Remaining")).toBe("2.0 mi"); // 3.3 km in US customary
     expect(byLabel.get("Stopped")).toBe("21.0s");
     expect(byLabel.get("Cleared")).toBe("1 / 4");
     expect(byLabel.get("Est. remaining")).toBe("8m 00s");
@@ -305,9 +314,11 @@ describe("trip HUD", () => {
     expect(tripStateLabel("arrived", true)).toBe("Arrived");
     // Completion wins even if a stale ego state arrives.
     expect(tripStateLabel("moving", true)).toBe("Arrived");
-    expect(formatDistance(740)).toBe("740 m");
-    expect(formatDistance(0)).toBe("0 m");
-    expect(formatSpeed(8.4)).toBe("30 km/h");
+    // US customary: feet below a quarter mile, miles above it.
+    expect(formatDistance(120)).toBe("394 ft");
+    expect(formatDistance(740)).toBe("0.5 mi");
+    expect(formatDistance(0)).toBe("0 ft");
+    expect(formatSpeed(8.4)).toBe("19 mph"); // 8.4 m/s in US customary
   });
 
   it("reports completion when the trip finishes", () => {
@@ -331,7 +342,7 @@ describe("trip HUD", () => {
     });
     expect(view?.completed).toBe(true);
     expect(view?.state).toBe("Arrived");
-    expect(view?.rows.find((row) => row.label === "Remaining")?.value).toBe("0 m");
+    expect(view?.rows.find((row) => row.label === "Remaining")?.value).toBe("0 ft");
     // A finished trip has nothing left to estimate.
     expect(view?.rows.find((row) => row.label === "Est. remaining")?.value).toBe("—");
   });

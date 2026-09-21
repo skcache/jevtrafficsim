@@ -72,6 +72,9 @@ describe("citywide traffic-system presentation", () => {
           vehicleCount: 8,
           queuedCount: 0,
           maxBlockedWaitMs: 0,
+          // The simulation's own flow state is what the overlay paints from.
+          speedFactor: 0.5,
+          severity: "slower",
         },
       ],
     } as unknown as PresentationSnapshot;
@@ -79,10 +82,12 @@ describe("citywide traffic-system presentation", () => {
     expect(pressure).toHaveLength(1);
     expect(pressure[0].roadId).toBe(12);
     expect(pressure[0].occupancyRatio).toBeCloseTo(0.8, 6);
-    expect(["bad", "severe"]).toContain(pressure[0].level);
+    expect(pressure[0].level).toBe("warm");
   });
 
-  it("shows moving background traffic quietly, not only jams", () => {
+  it("leaves lightly-loaded traffic NEUTRAL instead of painting it green", () => {
+    // Traffic pressure is amber/red only: a road that is merely carrying a
+    // moving car is not a problem, so it is not painted at all.
     const snapshot = {
       roadTraffic: [
         {
@@ -95,9 +100,7 @@ describe("citywide traffic-system presentation", () => {
         },
       ],
     } as unknown as PresentationSnapshot;
-    expect(roadPressure(snapshot)).toEqual([
-      expect.objectContaining({ roadId: 4, level: "flowing" }),
-    ]);
+    expect(roadPressure(snapshot)).toEqual([]);
   });
 
   it("leaves a truly empty road out of the sparse traffic overlay", () => {

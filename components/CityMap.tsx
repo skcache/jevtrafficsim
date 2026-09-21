@@ -28,8 +28,14 @@ import { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
-import { metricToLngLat, type MapModel } from "@/cities/map-model";
-import { frameAlpha, interpolateEgoRoadProgress, interpolateVehicles } from "@/render/interpolate";
+import { lngLatToMetric, metricToLngLat, type MapModel } from "@/cities/map-model";
+import {
+  clamp01,
+  frameAlpha,
+  interpolateEgoRoadProgress,
+  interpolateVehicles,
+  smoothRenderClock,
+} from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
   carriagewayPairs,
@@ -39,7 +45,9 @@ import {
 import { roadPressure } from "@/render/congestion";
 import {
   boundsLngLat as cameraBoundsLngLat,
+  clampToBounds,
   FIT_PADDING,
+  maxPanBounds,
   networkBounds,
   presetPose,
 } from "@/render/camera-presets";
@@ -71,10 +79,16 @@ import {
 } from "@/render/contextual-controls";
 import { buildControlLayers } from "@/render/control-layers";
 import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
-import { SIM_TICK_MS, SNAPSHOT_EVERY_TICKS } from "@/worker/protocol";
+import { SIM_TICK_MS } from "@/worker/protocol";
 import type { FrameBuffer } from "./frame-buffer";
 
-const EXPECTED_FRAME_INTERVAL_MS = SIM_TICK_MS * SNAPSHOT_EVERY_TICKS;
+/**
+ * The worker posts exactly one frame per real tick (see the worker's runTick),
+ * so this must be SIM_TICK_MS alone. Scaling it by SNAPSHOT_EVERY_TICKS made
+ * alpha crawl to a fraction of its range before the next frame arrived, and
+ * every arrival snapped the world forward — the stutter.
+ */
+const EXPECTED_FRAME_INTERVAL_MS = SIM_TICK_MS;
 
 /**
  * MapLibre's module worker, self-hosted (public/maplibre/). The bundled
@@ -136,6 +150,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     { id: number; roadId: number | null; x: number; y: number; headingRadians: number; blockedWaitMs: number }[]
   >([]);
   const destSpritesRef = useRef<DestinationSpriteSet | null>(null);
+  /** Smoothed render clock (simulated ms) and the wall time it last advanced. */
+  const renderClockRef = useRef<number>(Number.NaN);
+  const renderClockNowRef = useRef<number>(Number.NaN);
   /** Follow camera state; north-up, driven by the interpolated car. */
   const followRef = useRef<FollowState>(createFollowState());
   /** While a camera ease owns the frame (enter-city flight, recenter). */
@@ -232,6 +249,24 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     });
     map.touchZoomRotate.disableRotation();
     map.dragRotate.disable();
+    // Soft pan boundary: the camera centre is confined to the network box grown
+    // by MAX_PAN_PADDING_FRACTION, so a drag can look past the city edge for
+    // context but cannot leave the map behind. Deliberately NOT MapLibre's
+    // maxBounds: that also constrains zoom-out (measured: a 25%-padded box
+    // pinned the map at zoom 13.09 and put the app's own minZoom 12 out of
+    // reach). Read through the refs so a scale change re-boxes the same map.
+    map.on("move", () => {
+      const active = modelRef.current;
+      if (!active) {
+        return;
+      }
+      const center = map.getCenter();
+      const [x, y] = lngLatToMetric(active.projection, center.lng, center.lat);
+      const [clampedX, clampedY] = clampToBounds(maxPanBounds(active), x, y);
+      if (clampedX !== x || clampedY !== y) {
+        map.setCenter(metricToLngLat(active.projection, clampedX, clampedY));
+      }
+    });
     const overlay = new MapLibreOverlay({ interleaved: false, layers: [] });
     map.addControl(overlay as unknown as IControl);
     mapRef.current = map;
@@ -445,7 +480,35 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       const buffer = frames.current;
       const activeMap = mapRef.current;
       if (buffer && activeMap && buffer.model && buffer.paths) {
-        const alpha = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
+        // Draw time is a SMOOTHED position between the two frames, not the raw
+        // arrival-based alpha. Frame arrivals jitter with the worker's tick
+        // (measured p95 ~205 ms against a 100 ms nominal), and a raw alpha
+        // saturates at 1 on every late frame — a frozen world that snaps
+        // forward. The render clock follows the frame clock through a short
+        // low-pass in simulated time, so every downstream consumer (ego, route
+        // trim, contextual controls, queue packing) smooths together and stays
+        // on its road.
+        const currentFrame = buffer.current;
+        if (!currentFrame) {
+          raf = requestAnimationFrame(render);
+          return;
+        }
+        const frameAlphaValue = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
+        const previousTime = buffer.previous?.timeMs ?? currentFrame.timeMs;
+        const currentTime = currentFrame.timeMs;
+        const targetClock = previousTime + frameAlphaValue * (currentTime - previousTime);
+        const lastNow = renderClockNowRef.current;
+        renderClockNowRef.current = now;
+        const renderDtMs = Number.isFinite(lastNow) ? now - lastNow : 0;
+        const clock = smoothRenderClock(
+          renderClockRef.current,
+          targetClock,
+          renderDtMs,
+          Math.max(1, currentTime - previousTime),
+        );
+        renderClockRef.current = clock;
+        const alpha =
+          currentTime > previousTime ? clamp01((clock - previousTime) / (currentTime - previousTime)) : frameAlphaValue;
         // One vehicle in the frame now: the ego. Background traffic reaches the
         // map only as sparse road aggregates. Route/control presentation uses
         // the SAME display-time progress as the visible car, otherwise a smooth

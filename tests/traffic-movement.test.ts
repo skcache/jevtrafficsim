@@ -20,7 +20,11 @@ function spawnCarOnStreet(
 describe("movement at the fixed timestep", () => {
   it("advances vehicles by speedLimit * multiplier * dt", () => {
     for (const type of ["car", "truck", "bicycle"] as VehicleType[]) {
-      const { city } = makeStreet([{ length: 50, speedLimit: 10 }]);
+      // Capacity 8 is the local-kind default: a lone vehicle (footprint 1-2)
+      // stays at a quarter of the road at most, below the free-flow occupancy
+      // threshold (0.45), so this fixture isolates the pure speed law from the
+      // road-traffic factor that couples density to speed.
+      const { city } = makeStreet([{ length: 50, speedLimit: 10, capacity: 8 }]);
       const state = createTrafficState();
       spawnCarOnStreet(city, state, 0, type, [0]);
       stepTraffic(city, state);

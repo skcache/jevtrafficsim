@@ -22,6 +22,7 @@ import {
   CONTROLLER_OPTIONS,
   TRAFFIC_OPTIONS,
   diceSeed,
+  driverLabel,
   normalizeSeed,
   trafficLabel,
 } from "./ui-model";
@@ -160,7 +161,14 @@ function ScenarioPanel({
               onChange={(index) => onTrafficLevel(TRAFFIC_OPTIONS[index].value)}
               ariaLabel="Traffic level"
             />
-            <TickRow labels={TRAFFIC_OPTIONS.map((option) => option.label)} value={trafficIndex} />
+            <TickRow
+              labels={TRAFFIC_OPTIONS.map((option) => option.label)}
+              value={trafficIndex}
+              // Live mid-trip: this goes through the same handler as the
+              // slider, which applies the new level to the RUNNING world
+              // instead of rebuilding it.
+              onSelect={(index) => onTrafficLevel(TRAFFIC_OPTIONS[index].value)}
+            />
           </div>
         </div>
         <SeedField
@@ -191,7 +199,8 @@ export function SimChrome(props: SimChromeProps) {
   const phase = useUiStore((state) => state.phase);
   const running = useUiStore((state) => state.running);
   const controller = useUiStore((state) => state.controller);
-  const seed = useUiStore((state) => state.seed);
+  const driver = useUiStore((state) => state.driver);
+  const scenarioFingerprint = useUiStore((state) => state.scenarioFingerprint);
   const tripId = useUiStore((state) => state.tripId);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
   const scenarioOpen = useUiStore((state) => state.scenarioOpen);
@@ -217,19 +226,26 @@ export function SimChrome(props: SimChromeProps) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.34, ease: EASE }}
           >
-            <div className="surface pointer-events-auto flex flex-col items-start gap-1 px-3 py-2.5">
-              <span className="label-micro">Jev Traffic</span>
-              <span className="text-ui font-semibold leading-none tracking-tight text-ink">
-                Chicago
-              </span>
-              <span className="text-meta leading-none text-ink-52">
-                {activeTrip.label} · {trafficLabel(trafficLevel)}
-              </span>
-              <span className="value-num text-micro leading-none text-ink-38">Seed {seed}</span>
+            <div className="surface pointer-events-auto flex flex-col items-start gap-2.5 px-3.5 py-3">
+              <div className="flex flex-col items-start gap-1">
+                <span className="label-micro">Jev Traffic · Chicago</span>
+                <span className="text-ui font-semibold leading-tight tracking-tight text-ink">
+                  {activeTrip.label}
+                </span>
+                <span className="text-meta leading-tight text-ink-52">
+                  {trafficLabel(trafficLevel)} · {driverLabel(driver)} driver
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="label-micro text-ink-38">Scenario</span>
+                <span className="value-num text-micro leading-none text-ink-70">
+                  {scenarioFingerprint ?? "—"}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={props.onChangeSetup}
-                className="mt-1.5 text-micro font-medium text-ink-38 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
+                className="text-micro font-medium text-ink-38 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
               >
                 Change setup…
               </button>
@@ -249,7 +265,7 @@ export function SimChrome(props: SimChromeProps) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.34, delay: 0.06, ease: EASE }}
           >
-            <div className="surface flex items-center gap-1 p-1">
+            <div className="surface flex items-center gap-[3px] p-[3px]">
               <Segmented
                 options={CONTROLLER_OPTIONS}
                 value={controller}
@@ -297,7 +313,7 @@ export function SimChrome(props: SimChromeProps) {
                 aria-expanded={scenarioOpen}
                 className={`flex h-[30px] items-center gap-[6px] rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
                   scenarioOpen ? "bg-ink/[0.06] text-ink" : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
-                }`}
+                } focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/25`}
               >
                 <svg {...glyph}>
                   <path d="M2 4h9M2 6.5h9M2 9h9" />

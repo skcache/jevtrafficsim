@@ -70,10 +70,15 @@ function metricsOf(engine: EngineState) {
 describe("adaptive end to end", () => {
   it("serves a starved minor approach within a bounded time under dominant demand", () => {
     // Adversarial asymmetry: the east approach (road 0) gets a car every
-    // 400 ms (~18x the north approach's demand). The minor north approach
+    // 400 ms — 2.5 cars/s, far beyond what a single lane can carry, so the
+    // east backlog is permanent by construction. The minor north approach
     // (road 2) must still be served: its CONTINUOUS queue wait may never run
-    // away — the anti-starvation rule guarantees service within threshold +
-    // a ring walk, and a weak score bonus would let it grow for the whole run.
+    // away — the wait-weighted policy serves it every ring cycle, and the
+    // hard anti-starvation rule (unit-tested in adaptive.test.ts) bounds it
+    // regardless. Under the physics migration the minor fleet takes longer to
+    // drain than the old constant-speed law implied: the last of the 37 minor
+    // vehicles finishes at 237.3 s (derived with the model's discrete motion
+    // law), so the run covers the workload's physical completion.
     const city = crossroads(40);
     const spawns: ScheduledSpawn[] = [];
     for (let t = 0; t < 110_000; t += 400) {
@@ -86,7 +91,7 @@ describe("adaptive end to end", () => {
 
     let minorGreenStarts = 0;
     let previousPhase = -1;
-    while (engine.traffic.timeMs < 140_000) {
+    while (engine.traffic.timeMs < 250_000) {
       stepEngine(engine);
       const signal = engine.traffic.signals.get(0);
       if (signal && signal.stage === "green" && signal.phaseIndex === 1 && previousPhase !== 1) {
@@ -104,6 +109,8 @@ describe("adaptive end to end", () => {
     }
 
     // Bounded starvation: threshold 35 s + clearance + walk overhead < 45 s.
+    // Observed peak: ~10 s — the policy serves the minor queue long before the
+    // emergency rule is ever needed.
     const minorPeakWait = engine.approaches.peakWaitMs.get(2) ?? 0;
     expect(minorPeakWait).toBeGreaterThan(0); // the fixture does queue this approach
     expect(minorPeakWait).toBeLessThan(45_000);
@@ -120,12 +127,12 @@ describe("adaptive end to end", () => {
 
   it("crosses the starvation threshold only inside the guaranteed bound", () => {
     // Hard-rule territory: three parked cars pin the dominant phase's exit
-    // road at 3.0 of 4 units, so the dominant movement can NEVER discharge —
-    // its pressure never dips and the minor phase would wait forever under a
-    // weak score bonus. The minor approach's continuous wait therefore crosses
-    // the 35 s threshold, which must trigger the anti-starvation rule: the
-    // ring advances to it as soon as min green permits, and it is served
-    // within threshold + clearance.
+    // road at 3.0 of 4 units, so the dominant movement can NEVER discharge and
+    // the minor approach is the only queue that can drain. With a light minor
+    // demand the wait-weighted policy comparison cannot preempt it early, so
+    // the minor's continuous wait genuinely crosses the 35 s threshold — which
+    // must trigger the anti-starvation rule: the ring advances to it as soon
+    // as min green permits, within threshold + clearance.
     const city = crossroads(40, 2000);
     const spawns: ScheduledSpawn[] = [];
     for (let i = 0; i < 3; i += 1) {
@@ -134,7 +141,7 @@ describe("adaptive end to end", () => {
     for (let t = 0; t < 110_000; t += 500) {
       spawns.push({ timeMs: t, type: "car", origin: 1, destination: 2 }); // dominant east
     }
-    for (let t = 0; t < 110_000; t += 3_000) {
+    for (let t = 0; t < 110_000; t += 15_000) {
       spawns.push({ timeMs: t, type: "car", origin: 3, destination: 4 }); // minor north
     }
     const engine = createEngine({ city, controller: createAdaptiveController(), spawns });
@@ -190,9 +197,11 @@ describe("adaptive end to end", () => {
     // One dominant heavy axis (westbound) plus a light north-south trickle:
     // Fixed burns half its cycle on the near-empty cross phase, Adaptive keeps
     // serving the heavy queue while it persists. Same city + same schedule.
+    // The heavy headway is 2 s (1800 veh/h) — right at realistic single-lane
+    // saturation, so the comparison runs on a workload the geometry can carry.
     const city = crossroads(40);
     const spawns: ScheduledSpawn[] = [];
-    for (let t = 0; t < 135_000; t += 1_500) {
+    for (let t = 0; t < 135_000; t += 2_000) {
       spawns.push({ timeMs: t, type: "car", origin: 7, destination: 8 }); // heavy westbound (road 6 -> 7)
     }
     for (let t = 0; t < 135_000; t += 7_500) {
@@ -208,12 +217,15 @@ describe("adaptive end to end", () => {
     const adaptive = metricsOf(adaptiveEngine);
 
     // Adaptive moves the same demand with materially less waiting.
+    // Re-measured on this workload: average 53.1 s vs 95.9 s (0.55x),
+    // P95 124 s vs 178 s (0.70x), max 130.3 s vs 186 s (0.70x).
     expect(adaptive.averageWaitTimeMs).toBeLessThan(fixed.averageWaitTimeMs * 0.75);
     expect(adaptive.p95WaitTimeMs).toBeLessThan(fixed.p95WaitTimeMs);
     expect(adaptive.maxWaitTimeMs).toBeLessThan(fixed.maxWaitTimeMs * 0.75);
     // It does not achieve that by starving the workload it ignores.
+    // Re-measured: worst approach wait 12.5 s vs 19.7 s.
     expect(adaptive.maxApproachWaitMs).toBeLessThan(fixed.maxApproachWaitMs);
-    // Throughput is at least as good.
+    // Throughput is at least as good. Re-measured: 69 completed vs 42 (1.64x).
     expect(adaptive.completedTrips).toBeGreaterThanOrEqual(fixed.completedTrips * 0.9);
     // Both runs are legal.
     expect(checkTrafficInvariants(city, fixedEngine.traffic)).toEqual([]);

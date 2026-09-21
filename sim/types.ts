@@ -46,6 +46,9 @@ export type CitySize =
 /** Selectable traffic levels (PRD §4.1). */
 export type TrafficLevel = "light" | "everyday" | "rush-hour";
 
+/** Canonical order, lightest to busiest. */
+export const TRAFFIC_LEVELS = ["light", "everyday", "rush-hour"] as const satisfies readonly TrafficLevel[];
+
 /** Node = intersection (PRD §7.1). */
 export interface Intersection {
   id: IntersectionId;
@@ -91,6 +94,8 @@ export interface Vehicle {
   spawnTimeMs: number;
   /** Simulation time when the vehicle began waiting at a road end; null otherwise. */
   queuedSinceMs: number | null;
+  /** Successful route changes for this vehicle (invalidity or driver switch). */
+  rerouteCount: number;
 }
 
 /** Corridor classification for structural policy metadata (PRD §12.5). */

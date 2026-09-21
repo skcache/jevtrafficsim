@@ -121,6 +121,12 @@ export const ROAD_KIND_DEFAULTS: Record<RoadKind, RoadKindDefaults> = {
 /** Occupancy ratios saturate here when costing roads (PRD §11.3). */
 export const MAX_OCCUPANCY_RATIO = 1;
 
+/**
+ * Floor for a road's traffic speed factor. Also the router's clamp, so a road
+ * can never be priced as slower than it can physically become.
+ */
+export const MIN_TRAFFIC_SPEED_FACTOR = 0.12;
+
 /** Default congestion multiplier for route costing (PRD §9 bounded penalty). */
 export const DEFAULT_CONGESTION_WEIGHT = 1;
 

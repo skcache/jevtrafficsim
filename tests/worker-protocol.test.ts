@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   LIVE_RUN_HORIZON_MS,
-  METRICS_EVERY_TICKS,
   nextSeed,
   parseWorkerCommand,
+  PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
-  SNAPSHOT_EVERY_TICKS,
 } from "@/worker/protocol";
 
 describe("worker protocol validation", () => {
@@ -14,16 +13,18 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       controller: "adaptive",
       seed: 42,
     });
+    // Driver is part of the scenario; it defaults to the tourist profile.
     expect(command).toEqual({
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       controller: "adaptive",
+      driver: "tourist",
       seed: 42,
       durationMs: undefined,
     });
@@ -31,12 +32,14 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "large",
       trafficLevel: "rush-hour",
-      tripId: "soldier-field-to-river-north",
+      tripId: "united-center-to-willis-tower",
       controller: "fixed",
+      driver: "local",
       seed: 0xffffffff,
       durationMs: 120_000,
     });
     expect(withDuration.type === "INIT" && withDuration.durationMs).toBe(120_000);
+    expect(withDuration.type === "INIT" && withDuration.driver).toBe("local");
   });
 
   it("rejects malformed INIT payloads", () => {
@@ -44,7 +47,7 @@ describe("worker protocol validation", () => {
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       controller: "fixed",
       seed: 42,
     };
@@ -115,8 +118,10 @@ describe("worker protocol validation", () => {
 
   it("keeps the centralized cadence constants consistent", () => {
     expect(SIM_TICK_MS).toBe(100);
-    expect(SNAPSHOT_EVERY_TICKS).toBe(2); // 5 Hz
-    expect(METRICS_EVERY_TICKS).toBe(5); // 2 Hz
+    // Playback compression must stay well under the tick, and the frame
+    // cadence IS the tick: the renderer interpolates over SIM_TICK_MS.
+    expect(PLAYBACK_STEPS_PER_TICK).toBeGreaterThan(1);
+    expect(PLAYBACK_STEPS_PER_TICK * SIM_TICK_MS).toBeLessThanOrEqual(1_000);
     expect(LIVE_RUN_HORIZON_MS).toBe(600_000);
   });
 

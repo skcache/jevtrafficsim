@@ -69,6 +69,13 @@ export interface ContextualSignalState {
   readonly phaseIndex: number;
   /** True only when the ego's own approach group is green. */
   readonly egoApproachPermitted: boolean;
+  /**
+   * True when the signal is clearing and it is the EGO'S OWN group being
+   * cleared — i.e. the driver just had green and it is now turning yellow.
+   * Without this the ego would see the OTHER approach's yellow and read the
+   * cycle as red -> yellow -> green, which is not a real signal sequence.
+   */
+  readonly egoApproachClearing: boolean;
 }
 
 /**
@@ -182,15 +189,22 @@ export function deriveContextualControls(input: ContextualControlInput): Context
         // inventing a stage.
         continue;
       }
+      const groups = deriveApproachGroups(city, intersection.id);
       signal = {
         stage: state.stage,
         phaseIndex: state.phaseIndex,
         egoApproachPermitted: canApproachProceedForPhase(
-          deriveApproachGroups(city, intersection.id),
+          groups,
           state.stage,
           state.phaseIndex,
           roadId,
         ),
+        // Asking the same predicate with "green" answers a different question:
+        // is the ego's group the ACTIVE one? Combined with a yellow stage that
+        // means the ego's own green is ending.
+        egoApproachClearing:
+          state.stage === "yellow" &&
+          canApproachProceedForPhase(groups, "green", state.phaseIndex, roadId),
       };
     }
     controls.push({
