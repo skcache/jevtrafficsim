@@ -17,6 +17,9 @@ import { createFixedController } from "@/controllers/fixed";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
+import { buildChallengeScenario, type ChallengeScenario } from "@/worker/challenge-scenario";
+import { buildChallengeResult } from "@/worker/challenge-result";
+import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
@@ -80,6 +83,10 @@ interface WorkerState {
   incidentHistory: ResolvedChallengeIncident[];
   /** Stable sequence for manual resolution streams. */
   manualIncidentSequence: number;
+  /** The controller-neutral scenario this run realises (issue #28). */
+  scenario: ChallengeScenario | null;
+  /** Human-fired incidents during this run; > 0 makes the result non-comparable. */
+  manualIncidents: number;
   /** Guards against overlapping async builds (fast scale switching). */
   buildToken: number;
 }
@@ -98,6 +105,8 @@ const state: WorkerState = {
   incidentPlan: null,
   incidentHistory: [],
   manualIncidentSequence: 0,
+  scenario: null,
+  manualIncidents: 0,
   buildToken: 0,
 };
 
@@ -200,15 +209,27 @@ async function buildRun(config: RunConfig): Promise<void> {
     config.trafficLevel,
     config.seed,
   );
+  // The scenario is everything about the WORLD: trip, traffic, driver, seed,
+  // duration. Controller identity is deliberately absent from it.
+  const scenario = buildChallengeScenario({
+    tripId: config.tripId,
+    trafficLevel: config.trafficLevel,
+    driver: config.driver,
+    seed: config.seed,
+    durationMs: config.durationMs,
+  });
   const engine = createEngine({
     city,
     controller: makeController(config.controller),
     spawns,
+    driver: config.driver,
     incidents: {
       seed: incidentPlan.incidentSeed,
       script: [...incidentPlan.entries],
     },
   });
+  state.scenario = scenario;
+  state.manualIncidents = 0;
   state.config = config;
   state.engine = engine;
   state.trip = trip;
@@ -297,7 +318,23 @@ function runTick(): void {
     state.complete = true;
     postSnapshot();
     postMetrics();
-    post({ type: "RUN_COMPLETE", timeMs: engine.traffic.timeMs });
+    post({
+      type: "RUN_COMPLETE",
+      timeMs: engine.traffic.timeMs,
+      result: buildChallengeResult(
+        engine,
+        state.scenario ??
+          buildChallengeScenario({
+            tripId: config.tripId,
+            trafficLevel: config.trafficLevel,
+            driver: config.driver,
+            seed: config.seed,
+            durationMs: config.durationMs,
+          }),
+        config.controller,
+        state.manualIncidents,
+      ),
+    });
     return;
   }
   scheduleNextTick();
@@ -311,6 +348,7 @@ function handleCommand(command: WorkerCommand): void {
         trafficLevel: command.trafficLevel,
         tripId: command.tripId,
         controller: command.controller,
+        driver: command.driver,
         seed: command.seed,
         durationMs: command.durationMs ?? LIVE_RUN_HORIZON_MS,
       });
@@ -347,6 +385,38 @@ function handleCommand(command: WorkerCommand): void {
       setEngineController(state.engine, makeController(command.controller));
       state.config = { ...state.config, controller: command.controller };
       postSnapshot(); // controller id visible immediately
+      return;
+    }
+    case "COMPARE": {
+      // Headless: one scenario, two controllers, both results. Never touches
+      // the live run's state — a comparison cannot disturb the city on screen.
+      const model = state.model;
+      if (!model) {
+        post({ type: "ERROR", message: "cannot COMPARE before the city is loaded" });
+        return;
+      }
+      try {
+        const outcome = runComparison(model, {
+          tripId: command.tripId,
+          trafficLevel: command.trafficLevel,
+          driver: command.driver,
+          seed: command.seed,
+          durationMs: command.durationMs ?? LIVE_RUN_HORIZON_MS,
+        });
+        post({
+          type: "COMPARE_RESULT",
+          fingerprint: outcome.fingerprint,
+          driver: outcome.driver,
+          tripId: outcome.tripId,
+          trafficLevel: outcome.trafficLevel,
+          fixed: outcome.fixed,
+          adaptive: outcome.adaptive,
+          verdict: outcome.verdict,
+          incidentEntries: outcome.incidentEntries,
+        });
+      } catch (error) {
+        post({ type: "ERROR", message: `comparison failed: ${String((error as Error)?.message ?? error)}` });
+      }
       return;
     }
     case "INCIDENT": {
@@ -419,6 +489,9 @@ function handleCommand(command: WorkerCommand): void {
         entry: resolution.entry,
       };
       state.incidentHistory.push(resolved);
+      // A human touched this run: its result is no longer comparable to a clean
+      // run of the same scenario.
+      state.manualIncidents += 1;
       post({
         type: "INCIDENT_RESOLVED",
         kind: command.kind,

@@ -5,6 +5,7 @@
  * React, no simulation execution — the worker owns all of that.
  */
 import type { IncidentKind } from "@/sim/incidents";
+import { DRIVER_CHOICES, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type {
@@ -15,6 +16,7 @@ import type {
   ChallengeIncidentPlan,
   ResolvedChallengeIncident,
 } from "./challenge-incidents";
+import type { ChallengeResult, ComparisonVerdict } from "./challenge-result";
 
 /** Fixed simulation pacing: one 100 ms tick per scheduled worker iteration. */
 export const SIM_TICK_MS = 100;
@@ -58,6 +60,7 @@ export type WorkerCommand =
       readonly trafficLevel: TrafficLevel;
       readonly tripId: CuratedTripId;
       readonly controller: ControllerChoice;
+      readonly driver: DriverStrategy;
       readonly seed: number;
       readonly durationMs?: number;
     }
@@ -65,7 +68,21 @@ export type WorkerCommand =
   | { readonly type: "PAUSE" }
   | { readonly type: "RESET"; readonly mode: "same-seed" | "new-seed" }
   | { readonly type: "SET_CONTROLLER"; readonly controller: ControllerChoice }
-  | { readonly type: "INCIDENT"; readonly kind: IncidentKind };
+  | { readonly type: "INCIDENT"; readonly kind: IncidentKind }
+  /**
+   * Issue #28: run ONE scenario headlessly under both controllers and return
+   * both results. Same world, same driver, same seed, same incident script —
+   * only the signals differ. This is the fair comparison, and it is fast
+   * because it never posts frames.
+   */
+  | {
+      readonly type: "COMPARE";
+      readonly tripId: CuratedTripId;
+      readonly trafficLevel: TrafficLevel;
+      readonly driver: DriverStrategy;
+      readonly seed: number;
+      readonly durationMs?: number;
+    };
 
 /* ------------------------------ worker -> main ------------------------------ */
 
@@ -74,6 +91,8 @@ export interface RunConfig {
   readonly trafficLevel: TrafficLevel;
   readonly tripId: CuratedTripId;
   readonly controller: ControllerChoice;
+  /** Who is driving the ego car. Never part of the scenario or the controller. */
+  readonly driver: DriverStrategy;
   readonly seed: number;
   readonly durationMs: number;
 }
@@ -105,7 +124,24 @@ export type WorkerEvent =
     }
   | { readonly type: "SNAPSHOT"; readonly snapshot: PresentationSnapshot }
   | { readonly type: "METRICS"; readonly metrics: PresentationMetrics }
-  | { readonly type: "RUN_COMPLETE"; readonly timeMs: number }
+  | {
+      readonly type: "RUN_COMPLETE";
+      readonly timeMs: number;
+      /** The run's outcome under its controller, tagged for fair comparison. */
+      readonly result: ChallengeResult;
+    }
+  | {
+      readonly type: "COMPARE_RESULT";
+      readonly fingerprint: string;
+      readonly driver: DriverStrategy;
+      readonly tripId: CuratedTripId;
+      readonly trafficLevel: TrafficLevel;
+      readonly fixed: ChallengeResult;
+      readonly adaptive: ChallengeResult;
+      readonly verdict: ComparisonVerdict;
+      /** Same resolved incident script both runs played. */
+      readonly incidentEntries: number;
+    }
   | { readonly type: "ERROR"; readonly message: string };
 
 /* -------------------------------- validation -------------------------------- */
@@ -162,6 +198,7 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
         record.controller,
         CONTROLLER_CHOICES,
       );
+      const driver = readChoice("INIT.driver", record.driver ?? "tourist", DRIVER_CHOICES);
       const seed = readSeed("INIT.seed", record.seed);
       let durationMs: number | undefined;
       if (record.durationMs !== undefined) {
@@ -175,11 +212,30 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
         }
         durationMs = record.durationMs;
       }
-      return { type, citySize, trafficLevel, tripId, controller, seed, durationMs };
+      return { type, citySize, trafficLevel, tripId, controller, driver, seed, durationMs };
     }
     case "START":
     case "PAUSE":
       return { type };
+    case "COMPARE": {
+      const tripId = readChoice("COMPARE.tripId", record.tripId, CURATED_TRIP_IDS);
+      const trafficLevel = readChoice("COMPARE.trafficLevel", record.trafficLevel, TRAFFIC_LEVEL_CHOICES);
+      const driver = readChoice("COMPARE.driver", record.driver, DRIVER_CHOICES);
+      const seed = readSeed("COMPARE.seed", record.seed);
+      let durationMs: number | undefined;
+      if (record.durationMs !== undefined) {
+        if (
+          typeof record.durationMs !== "number" ||
+          !Number.isFinite(record.durationMs) ||
+          record.durationMs <= 0 ||
+          record.durationMs > 24 * 60 * 60 * 1000
+        ) {
+          fail("COMPARE.durationMs", `expected a positive finite duration, received ${String(record.durationMs)}`);
+        }
+        durationMs = record.durationMs;
+      }
+      return { type, tripId, trafficLevel, driver, seed, durationMs };
+    }
     case "RESET": {
       const mode = readChoice("RESET.mode", record.mode, ["same-seed", "new-seed"] as const);
       return { type, mode };
