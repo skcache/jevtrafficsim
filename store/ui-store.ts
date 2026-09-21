@@ -17,6 +17,8 @@ import type {
 import type { ControllerChoice, RunConfig } from "@/worker/protocol";
 import type { DriverStrategy } from "@/sim/driver";
 import type { ChallengeResult } from "@/worker/challenge-result";
+import type { IncidentCapability } from "@/worker/challenge-incidents";
+import type { DiscardAction } from "@/components/ui-model";
 
 /**
  * The two deterministic baselines for one scenario (Issue #15), computed off
@@ -71,6 +73,24 @@ export interface UiState {
   config: RunConfig | null;
   scaleLabel: string;
   scenarioOpen: boolean;
+  /**
+   * The worker's own account of whether this run still describes the scenario it
+   * started as (Issue #39), mirrored from presentation frames. `manualIncidents`
+   * counts the chaos a human queued; `modified` also covers live setting changes.
+   */
+  modified: boolean;
+  manualIncidents: number;
+  /**
+   * Which incidents this world can actually run, straight from the worker's own
+   * resolver. Null until the first probe lands, or before a run exists.
+   */
+  incidentCapabilities: readonly IncidentCapability[] | null;
+  /** Set once the first comparability-destroying action has been explained. */
+  cleanRunWarningShown: boolean;
+  /** Why the baselines failed, if they did — the panel owes the user a retry. */
+  baselinesFailed: string | null;
+  /** A destructive action waiting for the user's explicit acknowledgement. */
+  pendingDiscard: DiscardAction | null;
   /** Increments on each demand-surge action so the chip can react. */
   surgeFlash: number;
   surgeVisible: boolean;
@@ -85,6 +105,12 @@ export interface UiState {
   setScenarioFingerprint: (fingerprint: string | null) => void;
   setBaselines: (baselines: BaselineState | null) => void;
   setBaselinesRunning: (running: boolean) => void;
+  setBaselinesFailed: (message: string | null) => void;
+  setGovernance: (governance: { modified: boolean; manualIncidents: number }) => void;
+  setIncidentCapabilities: (capabilities: readonly IncidentCapability[] | null) => void;
+  noteCleanRunWarning: () => void;
+  requestDiscard: (action: DiscardAction) => void;
+  cancelDiscard: () => void;
   setLiveResult: (result: ChallengeResult | null) => void;
   setPolicy: (policy: PresentationPolicy | null) => void;
   setDebug: (debug: boolean) => void;
@@ -119,6 +145,12 @@ export const useUiStore = create<UiState>()((set) => ({
   scenarioFingerprint: null,
   baselines: null,
   baselinesRunning: false,
+  baselinesFailed: null,
+  modified: false,
+  manualIncidents: 0,
+  incidentCapabilities: null,
+  cleanRunWarningShown: false,
+  pendingDiscard: null,
   liveResult: null,
   policy: null,
   debug: false,
@@ -148,6 +180,12 @@ export const useUiStore = create<UiState>()((set) => ({
   setScenarioFingerprint: (scenarioFingerprint) => set({ scenarioFingerprint }),
   setBaselines: (baselines) => set({ baselines }),
   setBaselinesRunning: (baselinesRunning) => set({ baselinesRunning }),
+  setBaselinesFailed: (baselinesFailed) => set({ baselinesFailed }),
+  setGovernance: ({ modified, manualIncidents }) => set({ modified, manualIncidents }),
+  setIncidentCapabilities: (incidentCapabilities) => set({ incidentCapabilities }),
+  noteCleanRunWarning: () => set({ cleanRunWarningShown: true }),
+  requestDiscard: (pendingDiscard) => set({ pendingDiscard }),
+  cancelDiscard: () => set({ pendingDiscard: null }),
   setLiveResult: (liveResult) => set({ liveResult }),
   setPolicy: (policy) => set({ policy }),
   setDebug: (debug) => set({ debug }),
@@ -175,6 +213,13 @@ export const useUiStore = create<UiState>()((set) => ({
       // baselines are dispatched separately and are matched by fingerprint.
       liveResult: null,
       policy: null,
+      // A fresh run starts clean: nothing has been modified yet, and the first
+      // comparability-destroying action gets its warning back.
+      modified: false,
+      manualIncidents: 0,
+      cleanRunWarningShown: false,
+      baselinesFailed: null,
+      pendingDiscard: null,
     }),
   setRunning: (running) => set({ running }),
   setRunComplete: (runComplete) => set({ runComplete }),
@@ -200,5 +245,6 @@ export const useUiStore = create<UiState>()((set) => ({
       egoState: null,
       egoSpeedMps: 0,
       liveResult: null,
+      baselinesFailed: null,
     }),
 }));

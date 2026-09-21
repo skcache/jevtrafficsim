@@ -2,6 +2,7 @@
  * UI model (Task 11 visual correction): pure option lists and seed handling
  * for the onboarding/config surfaces. Testable without a DOM.
  */
+import type { IncidentKind } from "@/sim/incidents";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { ControllerChoice } from "@/worker/protocol";
 import { DRIVER_DESCRIPTIONS, type DriverStrategy } from "@/sim/driver";
@@ -392,6 +393,163 @@ export function shouldReaskBaselines(wait: BaselineWait): boolean {
     return false;
   }
   return wait.msSinceAsk >= BASELINES_REGRACE_MS;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lifecycle (Issue #39)                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Chaos a human queued, and whether the scenario itself has moved under the run.
+ * Both are read from the worker's own account of the run (a presentation frame),
+ * never inferred from the UI's idea of what the user clicked.
+ */
+export interface RunGovernanceLike {
+  readonly modified: boolean;
+  readonly manualIncidents: number;
+}
+
+/**
+ * Whether an instrument may fire without a word first.
+ *
+ * The first manual incident silently destroyed the clean comparison: the user
+ * only learned at the end, from a refusal panel. So the FIRST qualifying action
+ * is confirmed, and nothing is asked again once the run is already modified —
+ * repeating the warning after the fact would be nagging, not warning.
+ */
+export function firstCleanRunWarning(governance: RunGovernanceLike): boolean {
+  return governance.manualIncidents === 0 && !governance.modified;
+}
+
+export const INCIDENT_WARNING_TITLE = "Incidents make this run non-comparable";
+export const INCIDENT_WARNING_BODY =
+  "Your trip keeps running and its own numbers stay honest, but the clean " +
+  "same-scenario comparison with Fixed and Adaptive is no longer available: " +
+  "this run is marked modified.";
+export const INCIDENT_WARNING_CONFIRM = "Add incident";
+export const INCIDENT_WARNING_CANCEL = "Keep it clean";
+
+/** Shown once when a live setting change (not an incident) breaks comparability. */
+export const CLEAN_RUN_LOST_NOTICE =
+  "This run is now modified — the clean same-scenario comparison is off.";
+
+/**
+ * What the payoff panel should be showing after arrival. `waiting` is the only
+ * state that may still say something vague, and it exists only before the run
+ * has finished.
+ */
+export type BaselinePanelState = "comparison" | "computing" | "failed" | "waiting";
+
+export function baselinePanelState(input: {
+  readonly runComplete: boolean;
+  readonly hasBaselines: boolean;
+  readonly running: boolean;
+  readonly failed: boolean;
+}): BaselinePanelState {
+  if (!input.runComplete) {
+    return "waiting";
+  }
+  if (input.hasBaselines) {
+    return "comparison";
+  }
+  if (input.failed) {
+    return "failed";
+  }
+  if (input.running) {
+    return "computing";
+  }
+  return "failed";
+}
+
+export const BASELINE_COMPUTING_TEXT = "Computing same-scenario baselines…";
+export const BASELINE_COMPUTING_DETAIL =
+  "Fixed and Adaptive are being run headlessly on the scenario you just watched. " +
+  "They take about as long as the trip did; there is no fake progress bar.";
+export const BASELINE_FAILED_TEXT = "The same-scenario baselines could not be computed.";
+export const BASELINE_FAILED_DETAIL =
+  "The comparison needs both baselines. Retry runs them again for this exact scenario.";
+export const BASELINE_RETRY_LABEL = "Retry baselines";
+
+/** Actions that throw the current run away. */
+export type DiscardAction = "trip" | "driver" | "seed" | "restart" | "new-scenario";
+
+export interface DiscardCopy {
+  readonly title: string;
+  readonly body: string;
+  readonly confirm: string;
+}
+
+export function discardCopy(action: DiscardAction): DiscardCopy {
+  switch (action) {
+    case "trip":
+      return {
+        title: "Start a run of another trip?",
+        body: "The run in progress — and its place in the comparison — will be discarded and a fresh one will start.",
+        confirm: "Start new run",
+      };
+    case "driver":
+      return {
+        title: "Put a different driver in the car?",
+        body: "A driver defines what the run IS, so this discards the current run and starts a fresh one of the same scenario.",
+        confirm: "Start new run",
+      };
+    case "seed":
+      return {
+        title: "Reseed the scenario?",
+        body: "A new seed rebuilds the world: demand, automatic incidents and the trip all change, and the current run is discarded.",
+        confirm: "Reseed and restart",
+      };
+    case "new-scenario":
+      return {
+        title: "Start a new scenario?",
+        body: "This discards the run in progress and its result, and draws a new scenario of the same trip.",
+        confirm: "New scenario",
+      };
+    case "restart":
+      return {
+        title: "Restart this run?",
+        body: "The current run — and its comparison — will be discarded and played again from the start.",
+        confirm: "Restart",
+      };
+  }
+}
+
+/**
+ * Whether an action still has something to destroy. A change made before the
+ * first run is frictionless; only meaningful progress is worth a question. A
+ * finished run counts: its result is the thing the user came for.
+ */
+export function discardNeedsConfirm(input: {
+  readonly started: boolean;
+  readonly runComplete: boolean;
+  readonly hasResult: boolean;
+}): boolean {
+  return input.runComplete || input.hasResult || input.started;
+}
+
+/** Incidents the dock may offer, with the reason each unavailable one is out. */
+export interface IncidentAvailability {
+  readonly kind: IncidentKind;
+  readonly applicable: boolean;
+  readonly reason: string | null;
+}
+
+/** The dock's availability view: unknown capability stays offered, and honest. */
+export function incidentAvailability(
+  kind: IncidentKind,
+  capabilities: readonly IncidentAvailability[] | null,
+): IncidentAvailability {
+  const known = capabilities?.find((capability) => capability.kind === kind) ?? null;
+  return known ?? { kind, applicable: true, reason: null };
+}
+
+/**
+ * Why an instrument is unavailable, in the dock's words. The reason comes from
+ * the resolver that would have run on click, so it says what actually happened
+ * to this world rather than a generic apology.
+ */
+export function unavailableIncidentHint(availability: IncidentAvailability): string {
+  return availability.reason ?? "Not available in this run";
 }
 
 /* ------------------------------------------------------------------ */
