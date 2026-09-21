@@ -456,7 +456,7 @@ describe("benchmark runs Jev through the same seam", () => {
       controllersSeen,
       controllers: {
         jev: () => {
-          const controller = createJevController({ client: createMockJevClient() });
+          const controller = createJevController({ client: createMockJevClient(), scenarioFingerprint: "bench-mock" });
           controllersSeen.push(controller);
           return controller;
         },
@@ -545,7 +545,7 @@ describe("benchmark runs Jev through the same seam", () => {
     const record = await runLiveScenario(model, scenario, "jev", {
       controllers: {
         jev: () => {
-          const controller = createJevController({ client: live, refreshMs: 5_000 });
+          const controller = createJevController({ client: live, refreshMs: 5_000, scenarioFingerprint: "bench-live" });
           controllersSeen.push(controller);
           return controller;
         },
@@ -580,7 +580,7 @@ describe("benchmark runs Jev through the same seam", () => {
     const record = await runLiveScenario(model, scenario, "jev", {
       controllers: {
         jev: () => {
-          const controller = createJevController({ client: failing, refreshMs: 5_000 });
+          const controller = createJevController({ client: failing, refreshMs: 5_000, scenarioFingerprint: "bench-failing" });
           controllersSeen.push(controller);
           return controller;
         },

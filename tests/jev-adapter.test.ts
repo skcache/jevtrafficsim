@@ -430,7 +430,7 @@ describe("no ego privilege", () => {
     // The visible trip is measured after the run (ChallengeResult), never fed
     // into the policy: the controller's only inputs are city, traffic and the
     // engine-owned context, and it reads just the frame's aggregates.
-    const controller = createJevController({ client: createMockJevClient() });
+    const controller = createJevController({ client: createMockJevClient(), scenarioFingerprint: "adapter-1" });
     expect(controller.id).toBe("jev");
     const { engine, partition } = crossroadsCity();
     const directives = controller.directives(engine.city, engine.traffic, {
@@ -502,7 +502,7 @@ describe("client boundary", () => {
       },
     };
     const { engine, partition } = crossroadsCity();
-    const controller = createJevController({ client, refreshMs: 500, minHoldMs: 100 });
+    const controller = createJevController({ client, refreshMs: 500, minHoldMs: 100, scenarioFingerprint: "adapter-2" });
     for (let tick = 0; tick < 60; tick += 1) {
       // A fresh frame per tick, exactly as the engine supplies one.
       controller.directives(engine.city, engine.traffic, {
@@ -588,7 +588,7 @@ describe("policy translation", () => {
   it("produces identical directive streams for identical runs", () => {
     const run = (): string[] => {
       const { engine, partition } = crossroadsCity();
-      const controller = createJevController({ client: createMockJevClient() });
+      const controller = createJevController({ client: createMockJevClient(), scenarioFingerprint: "adapter-1" });
       const trace: string[] = [];
       for (let tick = 0; tick < 80; tick += 1) {
         const directives = controller.directives(engine.city, engine.traffic, {
@@ -639,6 +639,7 @@ describe("signal safety", () => {
   it("never emits anything but hold or advance", () => {
     const { engine, partition } = crossroadsCity();
     const hostile = createJevController({
+      scenarioFingerprint: "adapter-hostile",
       client: createMockJevClient({
         respond: () => ({
           schemaVersion: JEV_SCHEMA_VERSION,
@@ -690,6 +691,7 @@ describe("signal safety", () => {
     // Every weight at the top of its bounds, and a hint that relinquishes greens
     // as fast as the bounds allow: the most aggressive policy the schema admits.
     const controller = createJevController({
+      scenarioFingerprint: "adapter-engine",
       client: createMockJevClient({
         respond: (request) => ({
           schemaVersion: JEV_SCHEMA_VERSION,
@@ -753,7 +755,7 @@ describe("refresh cadence", () => {
       },
     };
     const { engine, partition } = crossroadsCity();
-    const controller = createJevController({ client, refreshMs: 1_000 });
+    const controller = createJevController({ client, refreshMs: 1_000, scenarioFingerprint: "adapter-4" });
     const horizonTicks = 500; // 50 s of simulated time at 100 ms per tick
     let lastObservedMs = 0;
     for (let tick = 0; tick < horizonTicks; tick += 1) {
@@ -774,6 +776,7 @@ describe("refresh cadence", () => {
     const { engine: empty, partition: emptyPartition } = crossroadsCity({ vehicles: false });
     const quietRequests: JevPolicyRequest[] = [];
     const quiet = createJevController({
+      scenarioFingerprint: "adapter-quiet",
       client: {
         id: "mock",
         requestPolicy: (request) => {
@@ -813,7 +816,7 @@ describe("refresh cadence", () => {
       },
     };
     const { engine, partition } = crossroadsCity();
-    const controller = createJevController({ client, refreshMs: 100 });
+    const controller = createJevController({ client, refreshMs: 100, scenarioFingerprint: "adapter-5" });
     for (let tick = 0; tick < 40; tick += 1) {
       const context = { observations: frameOf(engine), partition };
       controller.directives(engine.city, engine.traffic, context);
@@ -829,6 +832,7 @@ describe("refresh cadence", () => {
   it("runs on the neutral policy until an answer arrives", () => {
     const { engine, partition } = crossroadsCity();
     const controller: JevController = createJevController({
+      scenarioFingerprint: "adapter-6",
       client: { id: "mock", requestPolicy: () => new Promise(() => undefined) },
     });
     // Two ticks: the first only establishes the clock, the second accounts for

@@ -177,9 +177,9 @@ describe("gateway answer translation", () => {
     const body = buildEvaluationsBody(request(), { corridorQuestions: 1 });
     const policy = policyFromEvaluations(body, {
       answers: {
-        "corridor:1": { choice: "top" },
-        "corridor:999": { choice: "top" },
-        "region:42": { choice: "top" },
+        "corridor:1": { choice: "top", confidence: 0.9 },
+        "corridor:999": { choice: "top", confidence: 0.9 },
+        "region:42": { choice: "top", confidence: 0.9 },
       },
     });
     expect(policy.corridorWeights).toEqual([{ id: 1, weight: JEV_WEIGHT_BUCKETS.top }]);
@@ -264,7 +264,7 @@ describe("gateway client", () => {
         );
       }) as unknown as typeof fetch,
     });
-    const controller = createJevController({ client });
+    const controller = createJevController({ client, scenarioFingerprint: "gateway-1" });
     // Sanity: the neutral starting point is the mock's, not the gateway's.
     // Before any tick the runtime holds nothing: the fallback is in force.
     expect(controller.policy()).toBeNull();
