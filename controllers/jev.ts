@@ -1,53 +1,56 @@
 /**
- * Jev controller (Issue #13): a citywide policy controller behind the same
+ * Jev controller (Issues #13, #14): a citywide policy controller behind the same
  * `TrafficController` contract as Fixed and Adaptive.
  *
  * ## Division of labour
  *
- * Jev's opinion arrives as a bounded policy (see jev/schema.ts) and is
- * translated DETERMINISTICALLY into the only two things a controller may say:
- * "hold" and "advance". Everything legal stays local: min green, max green,
- * yellow, all-red, ring order and every safety constraint are enforced by
- * sim/signals.ts whatever this controller asks for, and Jev can never name a
- * phase, a green time or a lamp state.
+ * Jev's opinion arrives as a bounded policy and is translated DETERMINISTICALLY
+ * into the only two things a controller may say: "hold" and "advance".
+ * Everything legal stays local: min green, max green, yellow, all-red, ring
+ * order and every safety constraint are enforced by sim/signals.ts whatever this
+ * controller asks for, and Jev can never name a phase, a green time or a lamp
+ * state.
  *
- * The starvation rule is shared with Adaptive and evaluated FIRST, on UNWEIGHTED
- * waits. A policy — however hostile, however extreme — therefore cannot starve
- * a movement: weights only scale pressure, never the service guarantee.
+ * The starvation rule is Adaptive's own, evaluated FIRST, on UNWEIGHTED waits. A
+ * policy — however hostile, however extreme — therefore cannot starve a
+ * movement: corridor and region weights scale pressure, never service
+ * guarantees.
  *
- * ## Cadence
+ * ## Lifecycle (Issue #14)
  *
- * One compact citywide request every `JEV_CONSTANTS.REFRESH_MS` of SIMULATED
- * time (5 s by default), triggered by a pure function of the frame's clock
- * (`timeMs % refreshMs === 0`), never per tick, never per vehicle and never one
- * call per intersection. Requests are asynchronous: a tick never blocks on the
- * network, and a refresh that is still in flight simply defers the next one.
- * A synchronous client (the mock) answers inside the tick, which is what makes
- * a mocked benchmark run reproducible.
+ * Everything about when a policy is requested, accepted, held, superseded or
+ * expired lives in `jev/runtime.ts`. This file is the thin seam between that
+ * runtime and the engine: it feeds the runtime one observation per tick and, in
+ * exchange, gets back either a policy in force or the instruction to run the
+ * FALLBACK.
  *
- * ## State
- *
- * The controller holds exactly one piece of private state — the most recent
- * VALIDATED policy — because a policy arrives from outside the simulation. Its
- * directives remain a pure function of (city, frame, policy), so identical
- * inputs with the same policy always produce identical directives. A malformed
- * or failed response is rejected and the previous policy stays in force: the
- * controller never invents one.
+ * The fallback is a real `createAdaptiveController()`, not a re-implementation
+ * and not a "neutral policy": when Jev is unconfigured, timed out, unavailable,
+ * malformed or expired, the city is driven by exactly the controller the
+ * benchmark and the app already know. The runtime records how much simulated
+ * time each source governed, so a result can never present fallback as live Jev.
  */
-import { starvedPhaseIndex } from "./adaptive";
-import { ADAPTIVE_CONSTANTS, phasePressure } from "./adaptive";
+import { createAdaptiveController, phasePressure, starvedPhaseIndex } from "./adaptive";
+import { ADAPTIVE_CONSTANTS } from "./adaptive";
 import type { TrafficController, TrafficControllerContext } from "./contract";
 import type { JevClient } from "@/jev/client";
-import { buildJevPolicyRequest, jevPolicyContext, type JevRequestOptions } from "@/jev/request";
+import type { JevRequestOptions } from "@/jev/request";
+import {
+  createJevPolicyRuntime,
+  JEV_RUNTIME_DEFAULTS,
+  type JevEffectivePolicy,
+  type JevRejection,
+  type JevRuntime,
+  type JevRuntimeStatus,
+} from "@/jev/runtime";
 import {
   JEV_HINT_MARGIN_SCALE,
   JEV_LIMITS,
   clampWeight,
   neutralJevPolicy,
-  parseJevPolicy,
   type JevPolicy,
-  type JevPolicyRequest,
 } from "@/jev/schema";
+import type { JevPolicySource, JevTrace, JevTraceEvent } from "@/jev/trace";
 import type { IntersectionObservation, PhaseObservation } from "@/sim/observations";
 import type { CityPartition } from "@/sim/regions";
 import type { SignalDirective, SignalState } from "@/sim/signals";
@@ -56,7 +59,7 @@ import type { City, IntersectionId, RoadId } from "@/sim/types";
 
 export const JEV_CONSTANTS = {
   /** Simulated ms between citywide policy requests. */
-  REFRESH_MS: 5_000,
+  REFRESH_MS: JEV_RUNTIME_DEFAULTS.REFRESH_MS,
   /** Pressure below this is "no meaningful demand" (shared with Adaptive). */
   DEMAND_EPSILON: ADAPTIVE_CONSTANTS.DEMAND_EPSILON,
   SWITCH_MARGIN: ADAPTIVE_CONSTANTS.SWITCH_MARGIN,
@@ -81,6 +84,8 @@ export function resolveJevWeights(policy: JevPolicy): JevWeights {
     regionWeight: new Map(policy.regionWeights.map((entry) => [entry.id, entry.weight])),
   };
 }
+
+const NEUTRAL_WEIGHTS = resolveJevWeights(neutralJevPolicy());
 
 /**
  * Effective bounded weight for one phase: the global scale times the phase's
@@ -159,41 +164,48 @@ export function jevDirective(
   return nextPressure > currentPressure + margin ? "advance" : "hold";
 }
 
-export interface JevRefreshEvent {
-  /** Simulated time the request was built at. */
-  readonly timeMs: number;
-  readonly applied: boolean;
-  readonly error: string | null;
-  readonly clamped: readonly string[];
-}
-
-export interface JevControllerStatus {
-  /** "neutral" until the first valid policy arrives, then "client". */
-  readonly policySource: "neutral" | "client";
-  /** Simulated time the policy in force was received for, if any. */
-  readonly policyTimeMs: number | null;
+/** Result metadata: which source governed which part of the run. */
+export interface JevControllerMeta {
+  readonly kind: "jev";
+  readonly mode: "live" | "replay";
+  /** The source in force at the end of the run. */
+  readonly source: JevPolicySource;
+  readonly liveMs: number;
+  readonly replayMs: number;
+  readonly fallbackMs: number;
   readonly refreshes: number;
-  readonly applied: number;
+  readonly accepted: number;
   readonly rejected: number;
-  readonly lastError: string | null;
-  readonly lastClamped: readonly string[];
-  /** Whether a request is in flight right now. */
-  readonly inFlight: boolean;
-}
-
-export interface JevControllerOptions {
-  readonly client: JevClient;
-  /** Simulated ms between requests; defaults to JEV_CONSTANTS.REFRESH_MS. */
-  readonly refreshMs?: number;
-  readonly request?: JevRequestOptions;
-  /** Called after every refresh completes, for tests and diagnostics. */
-  readonly onRefresh?: (event: JevRefreshEvent) => void;
+  readonly expiries: number;
+  readonly traceEvents: number;
+  readonly lastRejection: { readonly kind: string; readonly detail: string } | null;
 }
 
 export interface JevController extends TrafficController {
-  /** Current policy in force (the neutral policy before the first answer). */
-  policy(): JevPolicy;
-  status(): JevControllerStatus;
+  /** Current policy in force, or null when the fallback is running. */
+  policy(): JevPolicy | null;
+  status(): JevRuntimeStatus;
+  meta(): JevControllerMeta;
+  /** Accepted policies in replay order — the input to an offline replay. */
+  trace(): JevTrace;
+  /** New scenario: discards the policy, in-flight answers and the trace. */
+  reset(next: { scenarioFingerprint: string; trace?: JevTrace | null }): void;
+}
+
+export interface JevControllerOptions {
+  /** null = unconfigured: the controller runs the Adaptive fallback forever. */
+  readonly client: JevClient | null;
+  /** Identifies the scenario this controller serves; guards stale responses. */
+  readonly scenarioFingerprint?: string;
+  readonly refreshMs?: number;
+  readonly ttlMs?: number;
+  readonly minHoldMs?: number;
+  readonly request?: JevRequestOptions;
+  /** "replay" consumes `trace` offline and never touches a client. */
+  readonly mode?: "live" | "replay";
+  readonly trace?: JevTrace | null;
+  readonly onAccepted?: (event: JevTraceEvent) => void;
+  readonly onRejected?: (rejection: JevRejection) => void;
 }
 
 function countActiveVehicles(traffic: TrafficState): number {
@@ -206,117 +218,75 @@ function countActiveVehicles(traffic: TrafficState): number {
   return active;
 }
 
-function isThenable(value: unknown): value is Promise<unknown> {
-  return typeof (value as { then?: unknown } | null)?.then === "function";
-}
-
 export function createJevController(options: JevControllerOptions): JevController {
-  const client = options.client;
-  const refreshMs = options.refreshMs ?? JEV_CONSTANTS.REFRESH_MS;
-  if (!Number.isFinite(refreshMs) || refreshMs <= 0) {
-    throw new RangeError(`refreshMs must be finite and positive, received ${refreshMs}`);
-  }
-
-  let policy = neutralJevPolicy();
-  let weights = resolveJevWeights(policy);
-  let policyTimeMs: number | null = null;
-  let policySource: "neutral" | "client" = "neutral";
-  let inFlight = false;
-  let refreshes = 0;
-  let applied = 0;
-  let rejected = 0;
-  let lastError: string | null = null;
-  let lastClamped: readonly string[] = [];
-
-  const apply = (raw: unknown, request: JevPolicyRequest, timeMs: number): void => {
-    const parsed = parseJevPolicy(raw, jevPolicyContext(request));
-    if (!parsed.ok) {
-      rejected += 1;
-      lastError = parsed.error;
-      lastClamped = [];
-      options.onRefresh?.({ timeMs, applied: false, error: parsed.error, clamped: [] });
-      return;
-    }
-    policy = parsed.value.policy;
-    weights = resolveJevWeights(policy);
-    policyTimeMs = timeMs;
-    policySource = "client";
-    applied += 1;
-    lastError = null;
-    lastClamped = parsed.value.clamped;
-    options.onRefresh?.({
-      timeMs,
-      applied: true,
-      error: null,
-      clamped: parsed.value.clamped,
-    });
-  };
-
-  const fail = (message: string, timeMs: number): void => {
-    rejected += 1;
-    lastError = message;
-    options.onRefresh?.({ timeMs, applied: false, error: message, clamped: [] });
+  const runtime: JevRuntime = createJevPolicyRuntime({
+    client: options.mode === "replay" ? null : options.client,
+    scenarioFingerprint: options.scenarioFingerprint ?? "live",
+    refreshMs: options.refreshMs,
+    ttlMs: options.ttlMs,
+    minHoldMs: options.minHoldMs,
+    request: options.request,
+    mode: options.mode,
+    trace: options.trace,
+    onAccepted: options.onAccepted,
+    onRejected: options.onRejected,
+  });
+  // The fallback is the real Adaptive controller, reused rather than re-derived.
+  const adaptive = createAdaptiveController();
+  let effective: JevEffectivePolicy = {
+    source: "fallback",
+    policy: null,
+    acceptedAtSimMs: null,
+    expiresAtSimMs: null,
+    generation: null,
   };
 
   return {
     id: "jev",
-    policy: () => policy,
-    status: () => ({
-      policySource,
-      policyTimeMs,
-      refreshes,
-      applied,
-      rejected,
-      lastError,
-      lastClamped,
-      inFlight,
-    }),
-    directives(
-      city: City,
-      traffic: TrafficState,
-      context?: TrafficControllerContext,
-    ): ReadonlyMap<IntersectionId, SignalDirective> {
-      const directives = new Map<IntersectionId, SignalDirective>();
+    policy: () => effective.policy,
+    status: () => runtime.status(),
+    trace: () => runtime.trace(),
+    reset: (next) => runtime.reset(next),
+    meta: () => {
+      const status = runtime.status();
+      return {
+        kind: "jev",
+        mode: status.mode,
+        source: status.source,
+        liveMs: status.liveMs,
+        replayMs: status.replayMs,
+        fallbackMs: status.fallbackMs,
+        refreshes: status.refreshes,
+        accepted: status.accepted,
+        rejected: status.rejected,
+        expiries: status.expiries,
+        traceEvents: runtime.trace().events.length,
+        lastRejection:
+          status.lastRejection === null
+            ? null
+            : { kind: status.lastRejection.kind, detail: status.lastRejection.detail },
+      };
+    },
+    directives(city: City, traffic: TrafficState, context?: TrafficControllerContext) {
       if (!context) {
-        return directives; // no observations: no opinion (defensive)
+        return new Map<IntersectionId, SignalDirective>(); // no observations: no opinion
       }
       const frame = context.observations;
+      effective = runtime.observe({
+        frame,
+        partition: context.partition,
+        intersections: city.intersections.length,
+        activeVehicles: countActiveVehicles(traffic),
+      });
 
-      // Refresh trigger: a pure function of the simulated clock. A request that
-      // is still in flight defers the next one rather than stacking them.
-      if (frame.timeMs % refreshMs === 0 && !inFlight) {
-        const request = buildJevPolicyRequest(
-          {
-            frame,
-            partition: context.partition,
-            intersections: city.intersections.length,
-            activeVehicles: countActiveVehicles(traffic),
-          },
-          options.request,
-        );
-        refreshes += 1;
-        inFlight = true;
-        try {
-          const answer = client.requestPolicy(request);
-          if (isThenable(answer)) {
-            answer
-              .then((raw) => apply(raw, request, frame.timeMs))
-              .catch((error: unknown) => {
-                fail(error instanceof Error ? error.message : "jev client failed", frame.timeMs);
-              })
-              .finally(() => {
-                inFlight = false;
-              });
-          } else {
-            apply(answer, request, frame.timeMs);
-            inFlight = false;
-          }
-        } catch (error: unknown) {
-          fail(error instanceof Error ? error.message : "jev client failed", frame.timeMs);
-          inFlight = false;
-        }
+      // No policy in force: the Adaptive controller decides, exactly as it would
+      // if Jev had never been configured.
+      if (effective.policy === null) {
+        return adaptive.directives(city, traffic, context);
       }
 
+      const weights = resolveJevWeights(effective.policy);
+      const directives = new Map<IntersectionId, SignalDirective>();
       for (const [intersectionId, signal] of traffic.signals) {
         const observation = frame.intersections.get(intersectionId);
         if (!observation) {
@@ -325,7 +295,13 @@ export function createJevController(options: JevControllerOptions): JevControlle
         const directive = jevDirective(
           signal,
           observation,
-          (phaseIndex) => jevPhaseWeight(observation.phases[phaseIndex], intersectionId, context.partition, weights),
+          (phaseIndex) =>
+            jevPhaseWeight(
+              observation.phases[phaseIndex],
+              intersectionId,
+              context.partition,
+              weights,
+            ),
           weights.marginScale,
         );
         if (directive !== undefined) {
@@ -336,3 +312,6 @@ export function createJevController(options: JevControllerOptions): JevControlle
     },
   };
 }
+
+/** Exported for the runtime's tests and for callers that want the neutral base. */
+export { NEUTRAL_WEIGHTS };

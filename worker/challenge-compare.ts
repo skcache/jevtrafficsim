@@ -64,13 +64,30 @@ const DEFAULT_CONTROLLER_FACTORIES: Partial<Record<ControllerChoice, () => Traff
   adaptive: createAdaptiveController,
 };
 
+/**
+ * What a supplied factory is told about the scenario it is building for. The
+ * fingerprint matters to a policy controller (Jev): it is the identity a
+ * response must match to stay valid, and the identity a recorded trace is
+ * replayed against.
+ */
+export interface ControllerFactoryContext {
+  readonly fingerprint: string;
+  readonly tripId: CuratedTripId;
+  readonly trafficLevel: TrafficLevel;
+  readonly driver: DriverStrategy;
+  readonly seed: number;
+  readonly durationMs: number;
+}
+
+export type ControllerFactory = (context: ControllerFactoryContext) => TrafficController;
+
 export interface ScenarioRunOptions {
   /**
    * Controller factories the caller supplies, keyed by controller. The fairness
    * seam is unchanged by this: whichever controllers run, they run the same
    * world, and this only decides how each one is built.
    */
-  readonly controllers?: Partial<Record<ControllerChoice, () => TrafficController>>;
+  readonly controllers?: Partial<Record<ControllerChoice, ControllerFactory>>;
 }
 
 /**
@@ -93,8 +110,9 @@ export interface ScenarioRun {
   /**
    * The same world and the same engine, driven with a yield between ticks so an
    * asynchronous policy adapter can answer mid-run (live Jev smoke only).
+   * `paceRatio` optionally paces simulated time against the wall clock.
    */
-  runUnderAsync(controller: ControllerChoice): Promise<ChallengeResult>;
+  runUnderAsync(controller: ControllerChoice, options?: AsyncRunOptions): Promise<ChallengeResult>;
 }
 
 export function buildScenarioRun(
@@ -121,6 +139,15 @@ export function buildScenarioRun(
     script: [...world.incidentPlan.entries],
   };
 
+  const fingerprint = scenarioFingerprint(scenario);
+  const factoryContext: ControllerFactoryContext = {
+    fingerprint,
+    tripId: request.tripId,
+    trafficLevel: request.trafficLevel,
+    driver: request.driver,
+    seed: request.seed,
+    durationMs: request.durationMs,
+  };
   const buildEngine = (controller: ControllerChoice) => {
     const factory = options.controllers?.[controller] ?? DEFAULT_CONTROLLER_FACTORIES[controller];
     if (!factory) {
@@ -130,7 +157,7 @@ export function buildScenarioRun(
     }
     return createEngine({
       city: model.city,
-      controller: factory(),
+      controller: factory(factoryContext),
       spawns,
       driver: request.driver,
       incidents,
@@ -139,7 +166,7 @@ export function buildScenarioRun(
 
   return {
     scenario,
-    fingerprint: scenarioFingerprint(scenario),
+    fingerprint,
     trip: challenge.trip,
     spawns,
     incidents,
@@ -150,12 +177,36 @@ export function buildScenarioRun(
       runEngine(engine, request.durationMs);
       return buildChallengeResult(engine, scenario, controller, 0);
     },
-    runUnderAsync: async (controller) => {
+    runUnderAsync: async (controller, runOptions = {}) => {
       const engine = buildEngine(controller);
-      await runEngineAsync(engine, request.durationMs);
+      await runEngineAsync(engine, request.durationMs, runOptions);
       return buildChallengeResult(engine, scenario, controller, 0);
     },
   };
+}
+
+export interface AsyncRunOptions {
+  /**
+   * Simulated ms per wall ms. Unset (or 0) runs as fast as the event loop
+   * allows; 8 matches the app's playback, where 1 s of wall time is 8 s of
+   * simulated time. Pacing NEVER changes what is simulated — only how long the
+   * drive waits between ticks — so a paced and an unpaced run of the same
+   * scenario produce the same result. It exists so a live external policy (a
+   * remote model) can answer at something like the cadence it sees in the app.
+   */
+  readonly paceRatio?: number;
+}
+
+/**
+ * How long to wait before the next tick, given how much simulated time has
+ * passed. Pure, so pacing is testable without sleeping.
+ */
+export function paceDelayMs(simMs: number, paceRatio: number, wallElapsedMs: number): number {
+  if (!Number.isFinite(paceRatio) || paceRatio <= 0) {
+    return 0;
+  }
+  const targetWallMs = simMs / paceRatio;
+  return Math.max(0, targetWallMs - wallElapsedMs);
 }
 
 /**
@@ -165,14 +216,21 @@ export function buildScenarioRun(
  * by the benchmark's live Jev smoke run; the matrix and every test use the
  * synchronous loop, which is what keeps them reproducible.
  */
-export async function runEngineAsync(engine: EngineState, untilMs: number): Promise<void> {
+export async function runEngineAsync(
+  engine: EngineState,
+  untilMs: number,
+  options: AsyncRunOptions = {},
+): Promise<void> {
   if (!Number.isFinite(untilMs) || untilMs < 0) {
     throw new RangeError(`untilMs must be finite and >= 0, received ${untilMs}`);
   }
+  const startedWallMs = Date.now();
+  const paceRatio = options.paceRatio ?? 0;
   while (engine.traffic.timeMs < untilMs) {
     stepEngine(engine);
+    const delay = paceDelayMs(engine.traffic.timeMs, paceRatio, Date.now() - startedWallMs);
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+      setTimeout(resolve, delay > 100 ? 100 : delay);
     });
   }
 }
