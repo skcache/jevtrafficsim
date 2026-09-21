@@ -3,14 +3,31 @@
 /**
  * IncidentBar (Task 11 polish pass): the chaos dock.
  *
- * Five instruments in one hairline surface. Each button arms briefly on
- * click (ink fill), the reserved line above the dock reports what was queued
- * or, on hover, what the instrument does — so the dock never shifts height.
+ * Five instruments in one hairline surface. Each button arms briefly on click
+ * (ink fill), the reserved line above the dock reports what was queued or, on
+ * hover, what the instrument does — so the dock never shifts height.
+ *
+ * Issue #39 additions, all of them about not surprising the user later:
+ *
+ *   - the FIRST manual incident is confirmed in place, because it makes the run
+ *     non-comparable to the untouched baselines. Never repeated afterwards.
+ *   - instruments the world cannot support are disabled and SAY SO, using the
+ *     worker's own resolution as the reason — no click that ends in "not
+ *     available" when the answer was knowable beforehand.
  */
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import type { IncidentKind } from "@/sim/incidents";
 import { useUiStore } from "@/store/ui-store";
+import {
+  INCIDENT_WARNING_CANCEL,
+  INCIDENT_WARNING_CONFIRM,
+  INCIDENT_WARNING_TITLE,
+  CLEAN_RUN_LOST_NOTICE,
+  firstCleanRunWarning,
+  incidentAvailability,
+  unavailableIncidentHint,
+} from "./ui-model";
 
 interface IncidentOption {
   readonly kind: IncidentKind;
@@ -101,8 +118,15 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
   const showSurge = useUiStore((state) => state.showSurge);
   const hideSurge = useUiStore((state) => state.hideSurge);
   const runComplete = useUiStore((state) => state.runComplete);
+  const modified = useUiStore((state) => state.modified);
+  const manualIncidents = useUiStore((state) => state.manualIncidents);
+  const cleanRunWarningShown = useUiStore((state) => state.cleanRunWarningShown);
+  const capabilities = useUiStore((state) => state.incidentCapabilities);
+  const noteCleanRunWarning = useUiStore((state) => state.noteCleanRunWarning);
   const [armed, setArmed] = useState<IncidentKind | null>(null);
   const [hint, setHint] = useState<string | null>(null);
+  /** The instrument waiting for the user to accept that the run stops comparing. */
+  const [pending, setPending] = useState<IncidentOption | null>(null);
   const timers = useRef<number[]>([]);
 
   useEffect(
@@ -142,10 +166,31 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     );
   };
 
+  /**
+   * The gate: the first incident that would end this run's comparability asks
+   * first. Once the run is modified — by an incident or a live setting change —
+   * nothing is asked again, because the warning has already been given.
+   */
+  const request = (option: IncidentOption) => {
+    if (!cleanRunWarningShown && firstCleanRunWarning({ modified, manualIncidents })) {
+      setPending(option);
+      setHint(null);
+      return;
+    }
+    fire(option);
+  };
+
+  const acceptPending = () => {
+    const option = pending;
+    setPending(null);
+    noteCleanRunWarning();
+    if (option !== null) fire(option);
+  };
+
   const live = phase === "city";
   // Queued feedback outranks the hover hint: after a click the cursor is
   // still on the button, and the confirmation is what matters.
-  const line = feedback ?? hint;
+  const line = pending === null ? (feedback ?? hint) : null;
 
   return (
     <motion.div
@@ -174,32 +219,78 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
             )}
           </AnimatePresence>
         </div>
-        <div className="flex items-center gap-[2px]">
-          {INCIDENTS.map((option) => {
-            const isArmed = armed === option.kind;
-            const Icon = option.icon;
-            return (
-              <button
-                key={option.kind}
-                type="button"
-                disabled={!live}
-                onClick={() => fire(option)}
-                onMouseEnter={() => setHint(option.hint)}
-                onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
-                onFocus={() => setHint(option.hint)}
-                onBlur={() => setHint((current) => (current === option.hint ? null : current))}
-                className={`flex h-8 items-center gap-[6px] whitespace-nowrap rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
-                  isArmed
-                    ? "bg-ink text-surface"
-                    : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
-                }`}
-              >
-                <Icon />
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
+        {pending === null ? (
+          <div className="flex items-center gap-[2px]">
+            {INCIDENTS.map((option) => {
+              const availability = incidentAvailability(option.kind, capabilities);
+              const Icon = option.icon;
+              const isArmed = armed === option.kind;
+              const unavailableHint = availability.applicable
+                ? null
+                : unavailableIncidentHint(availability);
+              return (
+                <span
+                  key={option.kind}
+                  // A disabled control still needs to explain itself, so the
+                  // reason lives on the wrapper that can receive the hover.
+                  title={unavailableHint ?? option.hint}
+                  onMouseEnter={() => setHint(unavailableHint ?? option.hint)}
+                  onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
+                >
+                  <button
+                    type="button"
+                    disabled={!live || !availability.applicable}
+                    aria-disabled={!availability.applicable}
+                    aria-label={
+                      availability.applicable
+                        ? option.label
+                        : `${option.label} — unavailable: ${unavailableHint}`
+                    }
+                    onClick={() => request(option)}
+                    onMouseEnter={() => setHint(unavailableHint ?? option.hint)}
+                    onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
+                    onFocus={() => setHint(unavailableHint ?? option.hint)}
+                    onBlur={() => setHint((current) => (current === option.hint ? null : current))}
+                    className={`flex h-8 items-center gap-[6px] whitespace-nowrap rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
+                      isArmed
+                        ? "bg-ink text-surface"
+                        : availability.applicable
+                          ? "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
+                          : "cursor-not-allowed text-ink-38"
+                    }`}
+                  >
+                    <Icon />
+                    {option.label}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <div
+            role="group"
+            aria-label={INCIDENT_WARNING_TITLE}
+            className="flex items-center gap-2 px-2 py-[5px]"
+          >
+            <span className="max-w-[320px] text-micro leading-snug text-ink-70">
+              {INCIDENT_WARNING_TITLE} — {CLEAN_RUN_LOST_NOTICE}
+            </span>
+            <button
+              type="button"
+              onClick={acceptPending}
+              className="h-6 whitespace-nowrap rounded-[5px] bg-ink px-2 text-micro font-medium text-surface transition-opacity duration-150 hover:opacity-90"
+            >
+              {INCIDENT_WARNING_CONFIRM}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPending(null)}
+              className="h-6 whitespace-nowrap rounded-[5px] px-2 text-micro font-medium text-ink-52 transition-colors duration-150 hover:bg-ink/[0.05] hover:text-ink"
+            >
+              {INCIDENT_WARNING_CANCEL}
+            </button>
+          </div>
+        )}
       </div>
     </motion.div>
   );

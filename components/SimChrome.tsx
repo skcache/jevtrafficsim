@@ -20,6 +20,15 @@ import type { ControllerChoice } from "@/worker/protocol";
 import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
 import { ComparisonPanel } from "./ComparisonPanel";
 import {
+  BASELINE_COMPUTING_DETAIL,
+  BASELINE_COMPUTING_TEXT,
+  BASELINE_FAILED_DETAIL,
+  BASELINE_FAILED_TEXT,
+  BASELINE_RETRY_LABEL,
+  baselinePanelState,
+  discardCopy,
+} from "./ui-model";
+import {
   CONTROLLER_OPTIONS,
   DRIVER_OPTIONS,
   TRAFFIC_OPTIONS,
@@ -47,6 +56,10 @@ interface SimChromeProps {
   onSeed: (seed: number) => void;
   onRestart: () => void;
   onNewScenario: () => void;
+  /** Re-ask the baseline worker for this scenario (Issue #39 failure state). */
+  onRetryBaselines: () => void;
+  onConfirmDiscard: () => void;
+  onCancelDiscard: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onHome: () => void;
@@ -240,10 +253,21 @@ export function SimChrome(props: SimChromeProps) {
   const policy = useUiStore((state) => state.policy);
   const liveResult = useUiStore((state) => state.liveResult);
   const baselines = useUiStore((state) => state.baselines);
+  const baselinesRunning = useUiStore((state) => state.baselinesRunning);
+  const baselinesFailed = useUiStore((state) => state.baselinesFailed);
+  const modified = useUiStore((state) => state.modified);
+  const pendingDiscard = useUiStore((state) => state.pendingDiscard);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
   const live = phase === "city";
   const activeTrip = curatedTrip(tripId);
+  const panel = baselinePanelState({
+    runComplete,
+    hasBaselines: baselines !== null,
+    running: baselinesRunning,
+    failed: baselinesFailed !== null,
+  });
+  const discard = pendingDiscard === null ? null : discardCopy(pendingDiscard);
 
   return (
     <>
@@ -280,6 +304,14 @@ export function SimChrome(props: SimChromeProps) {
                   {scenarioFingerprint ?? "—"}
                 </span>
               </div>
+              {modified && (
+                <div className="flex items-center gap-2" role="status">
+                  <span className="label-micro text-ink-38">Run</span>
+                  <span className="text-micro leading-none text-ink-70">
+                    modified · not comparable
+                  </span>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={props.onChangeSetup}
@@ -421,11 +453,37 @@ export function SimChrome(props: SimChromeProps) {
               </span>
             </div>
             <div className="mt-3">
-              {liveResult !== null && baselines !== null ? (
+              {panel === "comparison" && liveResult !== null && baselines !== null ? (
                 <ComparisonPanel baselines={baselines} live={liveResult} policy={policy} />
-              ) : (
+              ) : null}
+              {panel === "computing" && (
+                <div role="status" aria-live="polite">
+                  <p className="text-meta font-medium text-ink">{BASELINE_COMPUTING_TEXT}</p>
+                  <p className="mt-1 text-micro leading-relaxed text-ink-52">
+                    {BASELINE_COMPUTING_DETAIL}
+                  </p>
+                </div>
+              )}
+              {panel === "failed" && (
+                <div role="alert" className="flex flex-col items-start gap-2">
+                  <div>
+                    <p className="text-meta font-medium text-ink">{BASELINE_FAILED_TEXT}</p>
+                    <p className="mt-1 text-micro leading-relaxed text-ink-52">
+                      {baselinesFailed ?? BASELINE_FAILED_DETAIL}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={props.onRetryBaselines}
+                    className="h-8 rounded-control border border-hair-strong px-3 text-meta font-medium text-ink transition-colors duration-150 hover:bg-ink/[0.04] active:scale-[0.99]"
+                  >
+                    {BASELINE_RETRY_LABEL}
+                  </button>
+                </div>
+              )}
+              {panel === "waiting" && (
                 <p className="text-meta leading-relaxed text-ink-52">
-                  Running Fixed and Adaptive on the same scenario…
+                  The run is still playing…
                 </p>
               )}
             </div>
@@ -458,6 +516,42 @@ export function SimChrome(props: SimChromeProps) {
           >
             <span className="h-1.5 w-1.5 rounded-full bg-[#b0392b]" aria-hidden="true" />
             <span className="text-meta text-ink-70">{error}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Above the dock: the one action that throws the run away asks first. */}
+      <AnimatePresence>
+        {live && discard !== null && (
+          <motion.div
+            key="discard"
+            role="alertdialog"
+            aria-label={discard.title}
+            className="surface-overlay absolute bottom-16 left-1/2 z-30 flex w-[380px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col gap-2 p-3.5"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.22, ease: EASE }}
+          >
+            <span className="text-meta font-medium text-ink">{discard.title}</span>
+            <p className="text-micro leading-relaxed text-ink-52">{discard.body}</p>
+            <div className="mt-1 flex gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={props.onConfirmDiscard}
+                className="h-8 flex-1 rounded-control bg-ink text-meta font-medium text-surface transition-opacity duration-150 hover:opacity-90 active:scale-[0.99]"
+              >
+                {discard.confirm}
+              </button>
+              <button
+                type="button"
+                onClick={props.onCancelDiscard}
+                className="h-8 flex-1 rounded-control border border-hair-strong text-meta font-medium text-ink transition-colors duration-150 hover:bg-ink/[0.04] active:scale-[0.99]"
+              >
+                Cancel
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

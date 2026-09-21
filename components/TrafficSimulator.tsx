@@ -32,7 +32,14 @@ import { IncidentBar } from "./IncidentBar";
 import { TripHUD } from "./TripHUD";
 import { Onboarding } from "./Onboarding";
 import { SimChrome } from "./SimChrome";
-import { debugMode, scaleIndexForSize, shouldReaskBaselines } from "./ui-model";
+import {
+  CLEAN_RUN_LOST_NOTICE,
+  debugMode,
+  discardNeedsConfirm,
+  scaleIndexForSize,
+  shouldReaskBaselines,
+  type DiscardAction,
+} from "./ui-model";
 
 interface JevDebugHook {
   config: unknown;
@@ -155,6 +162,8 @@ export function TrafficSimulator() {
   const baselinesRef = useRef<Worker | null>(null);
   /** The scenario the baselines were last asked for, and when. */
   const baselinesAskedRef = useRef<{ fingerprint: string; request: BaselinesCommand; at: number } | null>(null);
+  /** The destructive action awaiting the user's acknowledgement (Issue #39). */
+  const pendingRunRef = useRef<(() => void) | null>(null);
   const baselinesReaskedRef = useRef<string | null>(null);
   const mapHandleRef = useRef<MapHandle | null>(null);
   const lastScaleRef = useRef<number | null>(null);
@@ -189,12 +198,14 @@ export function TrafficSimulator() {
       }
       if (data.type === "BASELINES_ERROR") {
         store.setBaselinesRunning(false);
-        store.setError(data.message);
+        // The comparison owes the user either the numbers or a way back.
+        store.setBaselinesFailed(data.message);
       }
     };
     baselines.onerror = (event) => {
-      useUiStore.getState().setBaselinesRunning(false);
-      useUiStore.getState().setError(event.message || "baseline worker crashed");
+      const store = useUiStore.getState();
+      store.setBaselinesRunning(false);
+      store.setBaselinesFailed(event.message || "baseline worker crashed");
     };
 
     const worker = new Worker(new URL("../worker/simulation.worker.ts", import.meta.url), {
@@ -206,6 +217,11 @@ export function TrafficSimulator() {
       updateDebugHook(data);
       const store = useUiStore.getState();
       switch (data.type) {
+        case "INCIDENT_CAPABILITIES": {
+          // Straight from the worker's own resolver: what this world can run.
+          store.setIncidentCapabilities(data.capabilities);
+          break;
+        }
         case "READY": {
           store.setScenarioFingerprint(data.scenarioFingerprint);
           // The frozen Chicago geography loads asynchronously (same committed
@@ -244,6 +260,7 @@ export function TrafficSimulator() {
             at: Date.now(),
           };
           store.setBaselines(null);
+          store.setBaselinesFailed(null);
           store.setBaselinesRunning(true);
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
@@ -265,6 +282,9 @@ export function TrafficSimulator() {
           pushFrame(framesRef.current, data.snapshot, performance.now());
           // Provenance at frame rate: the badge must never lag the run.
           store.setPolicy(data.snapshot.policy);
+          // The worker's account of whether this run still matches the scenario
+          // it started as (Issue #39) — read, never inferred from clicks.
+          store.setGovernance(data.snapshot.governance);
           // Trip HUD source: the ego's own progress, at frame rate (5 Hz).
           store.setTripFrame({
             trip: data.snapshot.trip,
@@ -382,13 +402,53 @@ export function TrafficSimulator() {
     [send],
   );
 
+  /**
+   * Run an action that would destroy the current run, or ask first.
+   *
+   * Setup changes before a run stay frictionless; the question is only ever
+   * asked when there is something real to lose (a run under way, or a result
+   * the user just earned). The pending action is kept in a ref and executed
+   * only on the user's explicit acknowledgement.
+   */
+  const guardDiscard = useCallback((action: DiscardAction, run: () => void) => {
+    const store = useUiStore.getState();
+    const needsConfirm = discardNeedsConfirm({
+      started:
+        (store.phase === "city" || store.phase === "entering") &&
+        (store.trip !== null || store.running),
+      runComplete: store.runComplete,
+      hasResult: store.liveResult !== null,
+    });
+    if (!needsConfirm) {
+      run();
+      return;
+    }
+    pendingRunRef.current = run;
+    store.requestDiscard(action);
+  }, []);
+
+  const onConfirmDiscard = useCallback(() => {
+    const store = useUiStore.getState();
+    const run = pendingRunRef.current;
+    pendingRunRef.current = null;
+    store.cancelDiscard();
+    if (run !== null) run();
+  }, []);
+
+  const onCancelDiscard = useCallback(() => {
+    pendingRunRef.current = null;
+    useUiStore.getState().cancelDiscard();
+  }, []);
+
   const onTripId = useCallback(
     (tripId: CuratedTripId) => {
-      const store = useUiStore.getState();
-      store.setTripId(tripId);
-      startRun({ citySize: "large", tripId });
+      guardDiscard("trip", () => {
+        const store = useUiStore.getState();
+        store.setTripId(tripId);
+        startRun({ citySize: "large", tripId });
+      });
     },
-    [startRun],
+    [guardDiscard, startRun],
   );
 
   const onTrafficLevel = useCallback(
@@ -400,6 +460,12 @@ export function TrafficSimulator() {
       // change made before the run starts (or an explicit trip change) rebuilds.
       if (store.phase === "city" || store.phase === "entering") {
         send({ type: "SET_TRAFFIC", trafficLevel });
+        // A live demand change marks the run modified just as surely as an
+        // incident does, so the user hears it once, in the same place.
+        if (!store.cleanRunWarningShown) {
+          store.noteCleanRunWarning();
+          store.setFeedback(CLEAN_RUN_LOST_NOTICE);
+        }
         return;
       }
       startRun({ trafficLevel });
@@ -409,40 +475,66 @@ export function TrafficSimulator() {
 
   const onDriver = useCallback(
     (driver: DriverStrategy) => {
-      const store = useUiStore.getState();
-      store.setDriver(driver);
-      // The driver defines what the run IS, so this is a fresh run of the same
-      // scenario with a different human at the wheel — never a live mutation.
-      startRun({ citySize: "large" });
+      guardDiscard("driver", () => {
+        const store = useUiStore.getState();
+        store.setDriver(driver);
+        // The driver defines what the run IS, so this is a fresh run of the same
+        // scenario with a different human at the wheel — never a live mutation.
+        startRun({ citySize: "large" });
+      });
     },
-    [startRun],
+    [guardDiscard, startRun],
   );
 
   const onSeed = useCallback(
     (seed: number) => {
-      useUiStore.getState().setSeed(seed);
-      startRun({ seed });
+      guardDiscard("seed", () => {
+        useUiStore.getState().setSeed(seed);
+        startRun({ seed });
+      });
     },
-    [startRun],
+    [guardDiscard, startRun],
   );
 
   const onRestart = useCallback(() => {
-    const store = useUiStore.getState();
-    store.setError(null);
-    store.setRunComplete(false);
-    store.resetMetrics();
-    send({ type: "RESET", mode: "same-seed" });
-    store.setRunning(true);
-  }, [send]);
+    guardDiscard("restart", () => {
+      const store = useUiStore.getState();
+      store.setError(null);
+      store.setRunComplete(false);
+      store.resetMetrics();
+      send({ type: "RESET", mode: "same-seed" });
+      store.setRunning(true);
+    });
+  }, [guardDiscard, send]);
 
   const onNewScenario = useCallback(() => {
+    guardDiscard("new-scenario", () => {
+      const store = useUiStore.getState();
+      store.setError(null);
+      store.setRunComplete(false);
+      store.resetMetrics();
+      send({ type: "RESET", mode: "new-seed" });
+      store.setRunning(true);
+    });
+  }, [guardDiscard, send]);
+
+  /**
+   * Ask the baseline worker again for the scenario on screen. Deliberately the
+   * SAME request that was dispatched at INIT: the baselines are a pure function
+   * of the scenario, so a retry cannot invent a comparison that never applied.
+   */
+  const onRetryBaselines = useCallback(() => {
     const store = useUiStore.getState();
-    store.setError(null);
-    store.setRunComplete(false);
-    store.resetMetrics();
-    send({ type: "RESET", mode: "new-seed" });
-    store.setRunning(true);
-  }, [send]);
+    const asked = baselinesAskedRef.current;
+    if (asked === null) {
+      return;
+    }
+    store.setBaselinesFailed(null);
+    store.setBaselines(null);
+    store.setBaselinesRunning(true);
+    baselinesRef.current?.postMessage(asked.request);
+    baselinesAskedRef.current = { ...asked, at: Date.now() };
+  }, []);
 
   const onIncident = useCallback(
     (kind: IncidentKind) => {
@@ -536,6 +628,9 @@ export function TrafficSimulator() {
           onSeed={onSeed}
           onRestart={onRestart}
           onNewScenario={onNewScenario}
+          onRetryBaselines={onRetryBaselines}
+          onConfirmDiscard={onConfirmDiscard}
+          onCancelDiscard={onCancelDiscard}
           onZoomIn={onZoomIn}
           onZoomOut={onZoomOut}
           onHome={onHome}
