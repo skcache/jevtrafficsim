@@ -531,14 +531,14 @@ describe("contextual controls on the curated challenge", () => {
   const model = chicagoModel(4);
 
   function liveFrame(controller: "fixed" | "adaptive", runMs: number) {
-    const { spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", 11);
+    const { spawn } = materializeChallengeTrip(model, "soldier-field-to-navy-pier", 11);
     const engine = createEngine({
       city: model.city,
       controller: controller === "fixed" ? createFixedController() : createAdaptiveController(),
       spawns: [spawn],
     });
     runEngine(engine, runMs);
-    return { engine, snapshot: buildPresentationSnapshot(engine, 0, "united-center-to-navy-pier") };
+    return { engine, snapshot: buildPresentationSnapshot(engine, 0, "soldier-field-to-navy-pier") };
   }
 
   it("derives at most a couple of controls from a real frame", () => {
@@ -569,7 +569,7 @@ describe("contextual controls on the curated challenge", () => {
     setEngineController(engine, createAdaptiveController());
     // runEngine takes an absolute horizon.
     runEngine(engine, 6_000);
-    const after = buildPresentationSnapshot(engine, 1, "united-center-to-navy-pier");
+    const after = buildPresentationSnapshot(engine, 1, "soldier-field-to-navy-pier");
     expect(engine.egoVehicleId).toBe(egoBefore);
     expect(after.trip?.routeRoadIds).toEqual(routeBefore);
     expect(after.trip?.tripTimeMs).toBeGreaterThan(snapshot.trip?.tripTimeMs ?? 0);

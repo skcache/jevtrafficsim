@@ -78,7 +78,7 @@ describe("UI store phases", () => {
       phase: "landing",
       citySize: "large",
       trafficLevel: "everyday",
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       controller: "adaptive",
       seed: 42,
       ready: false,
@@ -95,8 +95,8 @@ describe("UI store phases", () => {
   it("selecting a curated trip pins public setup to Metro", () => {
     const store = useUiStore.getState();
     store.setCitySize("medium");
-    store.setTripId("streeterville-to-united-center");
-    expect(useUiStore.getState().tripId).toBe("streeterville-to-united-center");
+    store.setTripId("streeterville-to-south-loop");
+    expect(useUiStore.getState().tripId).toBe("streeterville-to-south-loop");
     expect(useUiStore.getState().citySize).toBe("large");
   });
 
@@ -132,7 +132,7 @@ describe("UI store phases", () => {
   it("switching controller is a live change, not a reset", () => {
     const store = useUiStore.getState();
     store.applyReady(
-      { citySize: "large", trafficLevel: "everyday", tripId: "united-center-to-navy-pier", controller: "adaptive", driver: "tourist", seed: 42, durationMs: 600_000 },
+      { citySize: "large", trafficLevel: "everyday", tripId: "soldier-field-to-navy-pier", controller: "adaptive", driver: "tourist", seed: 42, durationMs: 600_000 },
       "Medium",
     );
     store.setRunComplete(true);

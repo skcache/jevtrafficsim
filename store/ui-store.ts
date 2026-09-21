@@ -97,7 +97,7 @@ export const useUiStore = create<UiState>()((set) => ({
   phase: "landing",
   citySize: "large",
   trafficLevel: "everyday",
-  tripId: "united-center-to-navy-pier",
+  tripId: "soldier-field-to-navy-pier",
   controller: "adaptive",
   driver: "tourist",
   scenarioFingerprint: null,

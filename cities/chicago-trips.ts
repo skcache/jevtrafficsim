@@ -15,11 +15,11 @@ import { findRoute, type RouteFound, type RouteOptions } from "@/sim/astar";
 import type { CorridorKind, RoadKind } from "@/sim/types";
 
 export const CURATED_TRIP_IDS = [
-  "united-center-to-navy-pier",
-  "soldier-field-to-river-north",
-  "west-loop-to-south-loop",
+  "soldier-field-to-navy-pier",
+  "united-center-to-willis-tower",
+  "river-north-to-navy-pier",
   "millennium-park-to-west-loop",
-  "streeterville-to-united-center",
+  "streeterville-to-south-loop",
   "willis-tower-to-near-west-side",
 ] as const;
 
@@ -96,39 +96,43 @@ export const METRO_SCALE_INDEX = 4;
  */
 export const CURATED_TRIPS: readonly CuratedTrip[] = [
   {
-    id: "united-center-to-navy-pier",
-    label: "United Center → Navy Pier",
-    summary: "West Side streets, Eisenhower, downtown bridges, and the lakefront.",
-    origin: { name: "United Center", lon: -87.6742, lat: 41.8806 },
+    id: "soldier-field-to-navy-pier",
+    label: "Soldier Field → Navy Pier",
+    summary: "Lakefront trunk roads, downtown signals, the river and the pier.",
+    origin: { name: "Soldier Field", lon: -87.6167, lat: 41.8623 },
     destination: { name: "Navy Pier", lon: -87.6055, lat: 41.8916 },
-    camera: { mode: "fit-route", paddingPx: 88, maxZoom: 15.8 },
+    camera: { mode: "fit-route", paddingPx: 88, maxZoom: 15.9 },
     expected: {
       minRoadKinds: 4,
-      features: ["local-streets", "major-arterial", "expressway", "river-crossing", "lakefront"],
+      features: ["local-streets", "major-arterial", "river-crossing", "lakefront", "downtown-grid"],
     },
   },
   {
-    id: "soldier-field-to-river-north",
-    label: "Soldier Field → River North",
-    summary: "Lakefront trunk roads into a dense signalized downtown finish.",
-    origin: { name: "Soldier Field", lon: -87.6167, lat: 41.8623 },
-    destination: { name: "River North", lon: -87.634, lat: 41.893 },
+    id: "united-center-to-willis-tower",
+    label: "United Center → Willis Tower",
+    summary: "West Side streets, the Eisenhower, and a downtown finish.",
+    origin: { name: "United Center", lon: -87.6742, lat: 41.8806 },
+    destination: { name: "Willis Tower", lon: -87.6359, lat: 41.8789 },
+    camera: { mode: "fit-route", paddingPx: 88, maxZoom: 15.9 },
+    expected: {
+      minRoadKinds: 4,
+      // Only 7 signals on this route — the Eisenhower does the heavy lifting —
+      // so it does NOT claim downtown-grid (the ≥10-signal contract).
+      features: ["local-streets", "major-arterial", "expressway", "river-crossing"],
+    },
+  },
+  {
+    id: "river-north-to-navy-pier",
+    label: "River North → Navy Pier",
+    summary: "Dense downtown streets out to the lakefront and the pier.",
+    origin: { name: "River North", lon: -87.634, lat: 41.893 },
+    destination: { name: "Navy Pier", lon: -87.6055, lat: 41.8916 },
     camera: { mode: "fit-route", paddingPx: 88, maxZoom: 16.0 },
     expected: {
-      minRoadKinds: 3,
-      features: ["major-arterial", "river-crossing", "downtown-grid"],
-    },
-  },
-  {
-    id: "west-loop-to-south-loop",
-    label: "West Loop → South Loop",
-    summary: "A grid-heavy cross-downtown run with local streets and bridge traffic.",
-    origin: { name: "West Loop", lon: -87.652, lat: 41.883 },
-    destination: { name: "South Loop", lon: -87.629, lat: 41.868 },
-    camera: { mode: "fit-route", paddingPx: 84, maxZoom: 16.1 },
-    expected: {
-      minRoadKinds: 3,
-      features: ["local-streets", "major-arterial", "river-crossing", "downtown-grid"],
+      minRoadKinds: 2,
+      // Downtown streets the whole way: no river crossing and no Lake Shore
+      // Drive on this route, so neither is claimed.
+      features: ["local-streets", "major-arterial", "downtown-grid"],
     },
   },
   {
@@ -144,15 +148,15 @@ export const CURATED_TRIPS: readonly CuratedTrip[] = [
     },
   },
   {
-    id: "streeterville-to-united-center",
-    label: "Streeterville → United Center",
-    summary: "Dense downtown streets into Grand/Ogden diagonals and the Near West Side.",
+    id: "streeterville-to-south-loop",
+    label: "Streeterville → South Loop",
+    summary: "Dense downtown streets, the river, and a South Loop finish.",
     origin: { name: "Streeterville", lon: -87.617, lat: 41.893 },
-    destination: { name: "United Center", lon: -87.6742, lat: 41.8806 },
+    destination: { name: "South Loop", lon: -87.629, lat: 41.868 },
     camera: { mode: "fit-route", paddingPx: 88, maxZoom: 15.9 },
     expected: {
       minRoadKinds: 3,
-      features: ["local-streets", "major-arterial", "river-crossing", "diagonal-corridor"],
+      features: ["local-streets", "major-arterial", "river-crossing", "downtown-grid", "diagonal-corridor"],
     },
   },
   {

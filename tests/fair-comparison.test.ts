@@ -231,7 +231,7 @@ describe("challenge scenario", () => {
 
   it("carries no controller identity and fingerprints deterministically", () => {
     const scenario = buildChallengeScenario({
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       trafficLevel: "everyday",
       driver: "local",
       seed: 42,
@@ -250,7 +250,7 @@ describe("challenge scenario", () => {
 
   it("resolves the same world inputs for both controllers", () => {
     const scenario = buildChallengeScenario({
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       trafficLevel: "rush-hour",
       driver: "tourist",
       seed: 7,
@@ -278,7 +278,7 @@ describe("challenge scenario", () => {
 
   it("runs one scenario under both controllers and only then compares", () => {
     const outcome = runComparison(model, {
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       trafficLevel: "everyday",
       driver: "tourist",
       seed: 11,
@@ -380,7 +380,7 @@ describe("results and comparison guard", () => {
 
   function resultFor(driver: "tourist" | "local", seed: number, controller: "fixed" | "adaptive") {
     const scenario = buildChallengeScenario({
-      tripId: "united-center-to-navy-pier",
+      tripId: "soldier-field-to-navy-pier",
       trafficLevel: "light",
       driver,
       seed,

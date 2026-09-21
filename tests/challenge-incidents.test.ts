@@ -19,7 +19,7 @@ import { createAdaptiveController } from "@/controllers/adaptive";
 describe("Issue #27 challenge incident planning", () => {
   const model = chicagoModel(4);
   const trip = materializeCuratedTrip(model, {
-    tripId: "united-center-to-navy-pier",
+    tripId: "soldier-field-to-navy-pier",
     seed: 42,
   });
 
@@ -187,7 +187,7 @@ describe("Issue #27 challenge incident planning", () => {
     const plan = buildChallengeIncidentPlan(model, trip, "rush-hour", 91);
     const { spawn } = materializeChallengeTrip(
       model,
-      "united-center-to-navy-pier",
+      "soldier-field-to-navy-pier",
       91,
     );
     const make = (adaptive: boolean) =>
@@ -221,7 +221,7 @@ describe("Issue #27 challenge incident planning", () => {
     const plan = buildChallengeIncidentPlan(model, trip, "everyday", 17);
     const { spawn } = materializeChallengeTrip(
       model,
-      "united-center-to-navy-pier",
+      "soldier-field-to-navy-pier",
       17,
     );
     const engine = createEngine({
@@ -239,7 +239,7 @@ describe("Issue #27 challenge incident planning", () => {
 describe("Issue #27 manual route-relevant chaos", () => {
   const model = chicagoModel(4);
   const trip = materializeCuratedTrip(model, {
-    tripId: "united-center-to-navy-pier",
+    tripId: "soldier-field-to-navy-pier",
     seed: 42,
   });
 
@@ -328,7 +328,7 @@ describe("Issue #27 manual route-relevant chaos", () => {
 
     const { spawn } = materializeChallengeTrip(
       model,
-      "united-center-to-navy-pier",
+      "soldier-field-to-navy-pier",
       42,
     );
     const engine = createEngine({

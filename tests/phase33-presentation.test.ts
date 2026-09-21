@@ -170,14 +170,14 @@ describe("signal presentation stays simulation-first", () => {
     // Issue #26 replacement for the old plan-arm guard: whatever the ego is
     // about to meet, the road carrying it must be one the presentation draws.
     const metro = chicagoModel(4);
-    const { spawn } = materializeChallengeTrip(metro, "united-center-to-navy-pier", 5);
+    const { spawn } = materializeChallengeTrip(metro, "soldier-field-to-navy-pier", 5);
     const engine = createEngine({
       city: metro.city,
       controller: createFixedController(),
       spawns: [spawn],
     });
     runEngine(engine, 5_000);
-    const snapshot = buildPresentationSnapshot(engine, 0, "united-center-to-navy-pier");
+    const snapshot = buildPresentationSnapshot(engine, 0, "soldier-field-to-navy-pier");
     const controls = deriveContextualControls({
       model: metro,
       indexes: metro.directedPaths.map((points) => (points ? buildPathIndex(points) : null)),

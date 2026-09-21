@@ -111,7 +111,7 @@ describe("route geometry", () => {
   });
 
   function tripFrame(seed = 42) {
-    const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", seed);
+    const { trip, spawn } = materializeChallengeTrip(model, "soldier-field-to-navy-pier", seed);
     const engine = createEngine({
       city: model.city,
       controller: createFixedController(),
@@ -252,7 +252,7 @@ describe("route-first layers", () => {
 
   it("places the destination pin on the destination intersection", () => {
     const { trip, snapshot } = (() => {
-      const { trip, spawn } = materializeChallengeTrip(model, "united-center-to-navy-pier", 7);
+      const { trip, spawn } = materializeChallengeTrip(model, "soldier-field-to-navy-pier", 7);
       const engine = createEngine({ city: model.city, controller: createFixedController(), spawns: [spawn] });
       runEngine(engine, 300);
       return { trip, snapshot: buildPresentationSnapshot(engine, 0, trip.trip.id) };
@@ -279,7 +279,7 @@ describe("trip HUD", () => {
   it("reports exactly the payload's numbers", () => {
     const view = tripHudView({
       trip: {
-        tripId: "united-center-to-navy-pier",
+        tripId: "soldier-field-to-navy-pier",
         originIntersectionId: 1,
         destinationIntersectionId: 2,
         routeRoadIds: [1, 2, 3, 4],
