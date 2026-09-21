@@ -18,16 +18,23 @@ import { CURATED_TRIPS, curatedTrip, type CuratedTripId } from "@/cities/chicago
 import { useUiStore } from "@/store/ui-store";
 import type { ControllerChoice } from "@/worker/protocol";
 import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
+import { ComparisonPanel } from "./ComparisonPanel";
 import {
   CONTROLLER_OPTIONS,
+  DRIVER_OPTIONS,
   TRAFFIC_OPTIONS,
   diceSeed,
   driverLabel,
   normalizeSeed,
+  policyLabel,
   trafficLabel,
 } from "./ui-model";
 
+import type { DriverStrategy } from "@/sim/driver";
+
 interface SimChromeProps {
+  /** Developer controls (?debug): controller choice and the raw seed. */
+  debug: boolean;
   /** Follow camera state, mirrored from the map. */
   following: boolean;
   onFollow: () => void;
@@ -36,6 +43,7 @@ interface SimChromeProps {
   onController: (controller: ControllerChoice) => void;
   onTripId: (tripId: CuratedTripId) => void;
   onTrafficLevel: (trafficLevel: TrafficLevel) => void;
+  onDriver: (driver: DriverStrategy) => void;
   onSeed: (seed: number) => void;
   onRestart: () => void;
   onNewScenario: () => void;
@@ -81,14 +89,21 @@ const glyph = {
   "aria-hidden": true,
 };
 
-/** Scenario popover: the same three decisions as onboarding, editable live. */
+/**
+ * Scenario popover: the same decisions as onboarding, editable live. Trip and
+ * driver rebuild the run (they define who and where the challenge is); traffic
+ * is applied to the world in progress. The raw seed is a developer control.
+ */
 function ScenarioPanel({
   onTripId,
   onTrafficLevel,
+  onDriver,
   onSeed,
-}: Pick<SimChromeProps, "onTripId" | "onTrafficLevel" | "onSeed">) {
+  debug,
+}: Pick<SimChromeProps, "onTripId" | "onTrafficLevel" | "onDriver" | "onSeed" | "debug">) {
   const tripId = useUiStore((state) => state.tripId);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
+  const driver = useUiStore((state) => state.driver);
   const seed = useUiStore((state) => state.seed);
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
   const [seedText, setSeedText] = useState(String(seed));
@@ -171,25 +186,40 @@ function ScenarioPanel({
             />
           </div>
         </div>
-        <SeedField
-          text={seedText}
-          onText={setSeedText}
-          onCommit={() => {
-            const next = normalizeSeed(seedText, seed);
-            setSeedText(String(next));
-            if (next !== seed) {
+        <div>
+          <span className="label-micro">Driver</span>
+          <div className="mt-2">
+            <Segmented
+              options={DRIVER_OPTIONS}
+              value={driver}
+              onChange={onDriver}
+              layoutId="driver-pill-live"
+              height={30}
+              ariaLabel="Driver"
+            />
+          </div>
+        </div>
+        {debug && (
+          <SeedField
+            text={seedText}
+            onText={setSeedText}
+            onCommit={() => {
+              const next = normalizeSeed(seedText, seed);
+              setSeedText(String(next));
+              if (next !== seed) {
+                onSeed(next);
+              }
+            }}
+            onRoll={() => {
+              const next = diceSeed();
+              setSeedText(String(next));
+              setRotation((degrees) => degrees + 540);
               onSeed(next);
-            }
-          }}
-          onRoll={() => {
-            const next = diceSeed();
-            setSeedText(String(next));
-            setRotation((degrees) => degrees + 540);
-            onSeed(next);
-          }}
-          rotation={rotation}
-          label={<span className="label-micro">Seed</span>}
-        />
+            }}
+            rotation={rotation}
+            label={<span className="label-micro">Seed</span>}
+          />
+        )}
       </div>
     </motion.div>
   );
@@ -207,7 +237,9 @@ export function SimChrome(props: SimChromeProps) {
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
   const runComplete = useUiStore((state) => state.runComplete);
   const error = useUiStore((state) => state.error);
-  const metrics = useUiStore((state) => state.metrics);
+  const policy = useUiStore((state) => state.policy);
+  const liveResult = useUiStore((state) => state.liveResult);
+  const baselines = useUiStore((state) => state.baselines);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
   const live = phase === "city";
@@ -234,6 +266,12 @@ export function SimChrome(props: SimChromeProps) {
                 </span>
                 <span className="text-meta leading-tight text-ink-52">
                   {trafficLabel(trafficLevel)} · {driverLabel(driver)} driver
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="label-micro text-ink-38">Signals</span>
+                <span className="text-meta leading-none text-ink-70">
+                  {(policyLabel(controller, policy) ?? { text: controller }).text}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -266,15 +304,24 @@ export function SimChrome(props: SimChromeProps) {
             transition={{ duration: 0.34, delay: 0.06, ease: EASE }}
           >
             <div className="surface flex items-center gap-[3px] p-[3px]">
-              <Segmented
-                options={CONTROLLER_OPTIONS}
-                value={controller}
-                onChange={props.onController}
-                layoutId="controller-pill-live"
-                height={30}
-                ariaLabel="Controller"
-              />
-              <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
+              {/*
+                The visible run is Jev. Choosing another controller by hand is a
+                developer control, so the picker only exists behind ?debug — a
+                public visitor cannot turn the experiment into a different one.
+              */}
+              {props.debug && (
+                <>
+                  <Segmented
+                    options={CONTROLLER_OPTIONS}
+                    value={controller}
+                    onChange={props.onController}
+                    layoutId="controller-pill-live"
+                    height={30}
+                    ariaLabel="Controller"
+                  />
+                  <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
+                </>
+              )}
               <IconButton
                 label={running ? "Pause" : "Play"}
                 onClick={running ? props.onPause : props.onResume}
@@ -329,7 +376,9 @@ export function SimChrome(props: SimChromeProps) {
                 <ScenarioPanel
                   onTripId={props.onTripId}
                   onTrafficLevel={props.onTrafficLevel}
+                  onDriver={props.onDriver}
                   onSeed={props.onSeed}
+                  debug={props.debug}
                 />
               )}
             </AnimatePresence>
@@ -354,12 +403,12 @@ export function SimChrome(props: SimChromeProps) {
         )}
       </AnimatePresence>
 
-      {/* Bottom-centre: run-complete payoff, then the error state. */}
+      {/* Bottom-centre: the payoff IS the comparison, then the error state. */}
       <AnimatePresence>
         {live && runComplete && (
           <motion.div
             key="complete"
-            className="surface-overlay absolute bottom-20 left-1/2 z-20 w-[320px] -translate-x-1/2 p-4"
+            className="surface-overlay absolute bottom-20 left-1/2 z-20 max-h-[calc(100vh-160px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto p-4"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
@@ -368,22 +417,17 @@ export function SimChrome(props: SimChromeProps) {
             <div className="flex items-baseline justify-between">
               <span className="label-micro">Run complete</span>
               <span className="value-num text-meta text-ink-52">
-                {Math.round((metrics?.simulatedTimeMs ?? 0) / 1000)}s
+                {Math.round((liveResult?.simulatedMs ?? 0) / 1000)}s simulated
               </span>
             </div>
-            <div className="value-num mt-3 flex flex-col gap-[6px] text-meta text-ink-70">
-              <div className="flex items-baseline justify-between">
-                <span className="label-micro">Trips</span>
-                <span>{(metrics?.completedTrips ?? 0).toLocaleString("en-US")}</span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="label-micro">Avg wait</span>
-                <span>{((metrics?.averageWaitTimeMs ?? 0) / 1000).toFixed(1)}s</span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="label-micro">Gridlock</span>
-                <span>{Math.round((metrics?.gridlockRatio ?? 0) * 100)}%</span>
-              </div>
+            <div className="mt-3">
+              {liveResult !== null && baselines !== null ? (
+                <ComparisonPanel baselines={baselines} live={liveResult} policy={policy} />
+              ) : (
+                <p className="text-meta leading-relaxed text-ink-52">
+                  Running Fixed and Adaptive on the same scenario…
+                </p>
+              )}
             </div>
             <div className="mt-4 flex gap-2">
               <button
@@ -398,7 +442,7 @@ export function SimChrome(props: SimChromeProps) {
                 onClick={props.onNewScenario}
                 className="h-8 flex-1 rounded-control border border-hair-strong text-meta font-medium text-ink transition-colors duration-150 hover:bg-ink/[0.04] active:scale-[0.99]"
               >
-                New city
+                New scenario
               </button>
             </div>
           </motion.div>

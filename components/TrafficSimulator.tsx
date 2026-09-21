@@ -14,18 +14,25 @@ import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { CuratedTripId } from "@/cities/chicago-trips";
+import type { DriverStrategy } from "@/sim/driver";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { useUiStore } from "@/store/ui-store";
-import type { ControllerChoice, WorkerCommand, WorkerEvent } from "@/worker/protocol";
+import type {
+  BaselinesCommand,
+  BaselinesEvent,
+  ControllerChoice,
+  WorkerCommand,
+  WorkerEvent,
+} from "@/worker/protocol";
 import { CityMap, type MapHandle } from "./CityMap";
 import { createFrameBuffer, pushFrame, setFrameModel, type FrameBuffer } from "./frame-buffer";
 import { IncidentBar } from "./IncidentBar";
 import { TripHUD } from "./TripHUD";
 import { Onboarding } from "./Onboarding";
 import { SimChrome } from "./SimChrome";
-import { scaleIndexForSize } from "./ui-model";
+import { debugMode, scaleIndexForSize } from "./ui-model";
 
 interface JevDebugHook {
   config: unknown;
@@ -52,7 +59,18 @@ interface JevDebugHook {
 let lastByteMeasureAt = -Infinity;
 
 function debugEnabled(): boolean {
-  return typeof window !== "undefined" && window.location.search.includes("debug");
+  return typeof window !== "undefined" && debugMode(window.location.search);
+}
+
+/**
+ * The controller a PREVIEW run uses (landing, and the setup screen while the
+ * user is still choosing). Previews are not the challenge: they run the
+ * deterministic Adaptive controller so an idle visit never spends live model
+ * calls. "Enter City" starts the real thing.
+ */
+function previewController(): ControllerChoice {
+  const store = useUiStore.getState();
+  return debugEnabled() ? store.controller : "adaptive";
 }
 
 function updateDebugHook(event: WorkerEvent): void {
@@ -134,6 +152,7 @@ function updateDebugHook(event: WorkerEvent): void {
 export function TrafficSimulator() {
   const framesRef = useRef<FrameBuffer>(createFrameBuffer());
   const workerRef = useRef<Worker | null>(null);
+  const baselinesRef = useRef<Worker | null>(null);
   const mapHandleRef = useRef<MapHandle | null>(null);
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
@@ -142,6 +161,39 @@ export function TrafficSimulator() {
   const prewarmRef = useRef(false);
 
   useEffect(() => {
+    // Developer controls are opt-in, and the whole chrome reads one flag.
+    useUiStore.getState().setDebug(debugEnabled());
+
+    // The baselines live in their own thread: a 600 s headless run takes far
+    // longer than real time, and doing it beside the live run would starve the
+    // renderer. Same comparison code, separate worker, no second engine.
+    const baselines = new Worker(new URL("../worker/baselines.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    baselinesRef.current = baselines;
+    baselines.onmessage = (event: MessageEvent) => {
+      const data = event.data as BaselinesEvent;
+      const store = useUiStore.getState();
+      if (data.type === "BASELINES_RESULT") {
+        store.setBaselines({
+          fixed: data.fixed,
+          adaptive: data.adaptive,
+          fingerprint: data.fingerprint,
+          incidentEntries: data.incidentEntries,
+        });
+        store.setBaselinesRunning(false);
+        return;
+      }
+      if (data.type === "BASELINES_ERROR") {
+        store.setBaselinesRunning(false);
+        store.setError(data.message);
+      }
+    };
+    baselines.onerror = (event) => {
+      useUiStore.getState().setBaselinesRunning(false);
+      useUiStore.getState().setError(event.message || "baseline worker crashed");
+    };
+
     const worker = new Worker(new URL("../worker/simulation.worker.ts", import.meta.url), {
       type: "module",
     });
@@ -151,16 +203,6 @@ export function TrafficSimulator() {
       updateDebugHook(data);
       const store = useUiStore.getState();
       switch (data.type) {
-        case "COMPARE_RESULT": {
-          store.setComparison({
-            fixed: data.fixed,
-            adaptive: data.adaptive,
-            verdict: data.verdict,
-            fingerprint: data.fingerprint,
-          });
-          store.setComparing(false);
-          break;
-        }
         case "READY": {
           store.setScenarioFingerprint(data.scenarioFingerprint);
           // The frozen Chicago geography loads asynchronously (same committed
@@ -181,6 +223,19 @@ export function TrafficSimulator() {
             break;
           }
           prewarmRef.current = false;
+          // Baselines for the scenario that is ACTUALLY running: the READY
+          // config is authoritative, so a setup change made mid-build cannot
+          // make the comparison describe a different city than the live run.
+          baselinesRef.current?.postMessage({
+            type: "BASELINES",
+            tripId: data.config.tripId,
+            trafficLevel: data.config.trafficLevel,
+            driver: data.config.driver,
+            seed: data.config.seed,
+            durationMs: data.config.durationMs,
+          } satisfies BaselinesCommand);
+          store.setBaselines(null);
+          store.setBaselinesRunning(true);
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
           lastScaleRef.current = data.scaleIndex;
@@ -199,6 +254,8 @@ export function TrafficSimulator() {
         }
         case "SNAPSHOT": {
           pushFrame(framesRef.current, data.snapshot, performance.now());
+          // Provenance at frame rate: the badge must never lag the run.
+          store.setPolicy(data.snapshot.policy);
           // Trip HUD source: the ego's own progress, at frame rate (5 Hz).
           store.setTripFrame({
             trip: data.snapshot.trip,
@@ -214,6 +271,9 @@ export function TrafficSimulator() {
         case "RUN_COMPLETE": {
           store.setRunning(false);
           store.setRunComplete(true);
+          // The visible run's own outcome: it becomes the Jev column.
+          store.setLiveResult(data.result);
+          store.setPolicy(data.policy);
           break;
         }
         case "ERROR": {
@@ -237,13 +297,15 @@ export function TrafficSimulator() {
       citySize: defaults.citySize,
       trafficLevel: defaults.trafficLevel,
       tripId: defaults.tripId,
-      controller: defaults.controller,
+      controller: previewController(),
       driver: defaults.driver,
       seed: defaults.seed,
     } satisfies WorkerCommand);
     return () => {
       worker.terminate();
+      baselines.terminate();
       workerRef.current = null;
+      baselinesRef.current = null;
     };
   }, []);
 
@@ -252,7 +314,15 @@ export function TrafficSimulator() {
   }, []);
 
   const startRun = useCallback(
-    (overrides: Partial<{ citySize: CitySize; trafficLevel: TrafficLevel; tripId: CuratedTripId; seed: number }> = {}) => {
+    (
+      overrides: Partial<{
+        citySize: CitySize;
+        trafficLevel: TrafficLevel;
+        tripId: CuratedTripId;
+        controller: ControllerChoice;
+        seed: number;
+      }> = {},
+    ) => {
       const state = useUiStore.getState();
       state.setError(null);
       state.setRunComplete(false);
@@ -261,7 +331,7 @@ export function TrafficSimulator() {
         citySize: overrides.citySize ?? state.citySize,
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
         tripId: overrides.tripId ?? state.tripId,
-        controller: state.controller,
+        controller: overrides.controller ?? state.controller,
         driver: state.driver,
         seed: overrides.seed ?? state.seed,
       });
@@ -269,31 +339,12 @@ export function TrafficSimulator() {
     [send],
   );
 
-  /**
-   * Run the CURRENT scenario headlessly under both controllers (Issue #28).
-   * The worker builds one world and steps it twice, so the comparison never
-   * depends on how long the user watched the live run.
-   */
-  const compareControllers = useCallback(() => {
-    const state = useUiStore.getState();
-    state.setError(null);
-    state.setComparison(null);
-    state.setComparing(true);
-    send({
-      type: "COMPARE",
-      tripId: state.tripId,
-      trafficLevel: state.trafficLevel,
-      driver: state.driver,
-      seed: state.seed,
-    });
-  }, [send]);
-
   const previewSetup = useCallback(() => {
     // Configuration is a live traffic preview, not a static mock. Mark the
     // next READY as prewarm-only so changing trip/traffic/controller/seed
     // refreshes the city behind the setup panel without entering the challenge.
     prewarmRef.current = true;
-    startRun({ citySize: "large" });
+    startRun({ citySize: "large", controller: previewController() });
   }, [startRun]);
 
   const enterCity = useCallback(() => {
@@ -345,6 +396,17 @@ export function TrafficSimulator() {
       startRun({ trafficLevel });
     },
     [send, startRun],
+  );
+
+  const onDriver = useCallback(
+    (driver: DriverStrategy) => {
+      const store = useUiStore.getState();
+      store.setDriver(driver);
+      // The driver defines what the run IS, so this is a fresh run of the same
+      // scenario with a different human at the wheel — never a live mutation.
+      startRun({ citySize: "large" });
+    },
+    [startRun],
   );
 
   const onSeed = useCallback(
@@ -401,6 +463,7 @@ export function TrafficSimulator() {
   }, []);
 
   // Follow camera: the map owns the state; the chrome only mirrors and toggles it.
+  const debug = useUiStore((state) => state.debug);
   const following = useUiStore((state) => state.following);
   const onFollow = useCallback(() => {
     mapHandleRef.current?.followEgo();
@@ -420,15 +483,17 @@ export function TrafficSimulator() {
           }`}
           aria-hidden="true"
         />
-        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} onCompare={compareControllers} />
+        <Onboarding onEnterCity={enterCity} onPreviewSetup={previewSetup} debug={debug} />
         <SimChrome
           following={following}
           onFollow={onFollow}
           onPause={onPause}
           onResume={onResume}
+          debug={debug}
           onController={onController}
           onTripId={onTripId}
           onTrafficLevel={onTrafficLevel}
+          onDriver={onDriver}
           onSeed={onSeed}
           onRestart={onRestart}
           onNewScenario={onNewScenario}

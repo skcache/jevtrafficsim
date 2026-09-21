@@ -6,7 +6,11 @@ import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { ControllerChoice } from "@/worker/protocol";
 import { DRIVER_DESCRIPTIONS, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIPS } from "@/cities/chicago-trips";
-import type { PresentationTripProgress } from "@/worker/presentation-snapshot";
+import {
+  fallbackShare,
+  type PresentationPolicy,
+  type PresentationTripProgress,
+} from "@/worker/presentation-snapshot";
 import type { ChallengeResult } from "@/worker/challenge-result";
 
 export interface ScaleOption {
@@ -30,10 +34,34 @@ export const TRAFFIC_OPTIONS: readonly { value: TrafficLevel; label: string }[] 
   { value: "rush-hour", label: "Rush Hour" },
 ];
 
+/**
+ * Controller choices — a DEVELOPER control (Issue #15).
+ *
+ * The product's setup does not ask which controller to run: the visible run is
+ * Jev and the Fixed/Adaptive baselines are computed beside it for the same
+ * scenario. Choosing a controller by hand is only useful when working on the
+ * simulation, so this list lives behind `?debug`.
+ */
 export const CONTROLLER_OPTIONS: readonly { value: ControllerChoice; label: string }[] = [
   { value: "fixed", label: "Fixed" },
   { value: "adaptive", label: "Adaptive" },
+  { value: "jev", label: "Jev" },
 ];
+
+/**
+ * Developer controls are opt-in: `?debug` in the URL (or `?debug=1`). Parsed
+ * rather than searched so `?nodebug` cannot switch anything on.
+ */
+export function debugMode(search: string): boolean {
+  const query = search.startsWith("?") ? search.slice(1) : search;
+  for (const part of query.split("&")) {
+    const [key, value] = part.split("=");
+    if (key === "debug" && value !== "0" && value !== "false") {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Driver choices for the setup control (issue #28). */
 export const DRIVER_OPTIONS: readonly { value: DriverStrategy; label: string }[] = [
@@ -234,11 +262,20 @@ export function tripHudView(input: TripHudInput): TripHudView | null {
 /* Comparison (Issue #28)                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * One comparison row, three columns: the two deterministic baselines and the
+ * run the user actually watched. Every cell is a field of a real run, formatted
+ * — the panel never computes an outcome the runs did not produce.
+ */
 export interface ComparisonRow {
   readonly label: string;
   readonly fixed: string;
   readonly adaptive: string;
+  readonly jev: string;
 }
+
+/** Column order of the comparison, and the word used for the visible run. */
+export const COMPARISON_COLUMNS = ["Fixed", "Adaptive", "Jev"] as const;
 
 /**
  * The compact comparison table: your trip first, then Chicago. Every value is
@@ -253,20 +290,134 @@ function tripTime(result: ChallengeResult): string {
 export function comparisonRows(
   fixed: ChallengeResult,
   adaptive: ChallengeResult,
+  jev: ChallengeResult,
 ): readonly ComparisonRow[] {
+  const arrived = (result: ChallengeResult) => (result.trip.completed ? "Yes" : "No");
   return [
+    { label: "Arrived", fixed: arrived(fixed), adaptive: arrived(adaptive), jev: arrived(jev) },
+    { label: "Trip time", fixed: tripTime(fixed), adaptive: tripTime(adaptive), jev: tripTime(jev) },
     {
-      label: "Trip time",
-      fixed: tripTime(fixed),
-      adaptive: tripTime(adaptive),
+      label: "Stopped",
+      fixed: formatDuration(fixed.trip.stoppedMs),
+      adaptive: formatDuration(adaptive.trip.stoppedMs),
+      jev: formatDuration(jev.trip.stoppedMs),
     },
-    { label: "Stopped", fixed: formatDuration(fixed.trip.stoppedMs), adaptive: formatDuration(adaptive.trip.stoppedMs) },
-    { label: "Reroutes", fixed: String(fixed.trip.rerouteCount), adaptive: String(adaptive.trip.rerouteCount) },
-    { label: "Avg wait", fixed: formatDuration(fixed.city.averageWaitMs), adaptive: formatDuration(adaptive.city.averageWaitMs) },
-    { label: "P95 wait", fixed: formatDuration(fixed.city.p95WaitMs), adaptive: formatDuration(adaptive.city.p95WaitMs) },
-    { label: "Trips done", fixed: fixed.city.completedTrips.toLocaleString("en-US"), adaptive: adaptive.city.completedTrips.toLocaleString("en-US") },
-    { label: "Gridlock", fixed: formatPercent(fixed.city.gridlockRatio), adaptive: formatPercent(adaptive.city.gridlockRatio) },
+    {
+      label: "Distance",
+      fixed: formatDistance(fixed.trip.distanceM),
+      adaptive: formatDistance(adaptive.trip.distanceM),
+      jev: formatDistance(jev.trip.distanceM),
+    },
+    {
+      label: "Avg speed",
+      fixed: formatSpeed(fixed.trip.averageSpeedMps),
+      adaptive: formatSpeed(adaptive.trip.averageSpeedMps),
+      jev: formatSpeed(jev.trip.averageSpeedMps),
+    },
+    {
+      label: "Reroutes",
+      fixed: String(fixed.trip.rerouteCount),
+      adaptive: String(adaptive.trip.rerouteCount),
+      jev: String(jev.trip.rerouteCount),
+    },
+    {
+      label: "Avg wait",
+      fixed: formatDuration(fixed.city.averageWaitMs),
+      adaptive: formatDuration(adaptive.city.averageWaitMs),
+      jev: formatDuration(jev.city.averageWaitMs),
+    },
+    {
+      label: "P95 wait",
+      fixed: formatDuration(fixed.city.p95WaitMs),
+      adaptive: formatDuration(adaptive.city.p95WaitMs),
+      jev: formatDuration(jev.city.p95WaitMs),
+    },
+    {
+      label: "Trips done",
+      fixed: fixed.city.completedTrips.toLocaleString("en-US"),
+      adaptive: adaptive.city.completedTrips.toLocaleString("en-US"),
+      jev: jev.city.completedTrips.toLocaleString("en-US"),
+    },
+    {
+      label: "Throughput",
+      fixed: formatThroughput(fixed.city.throughputPerMinute),
+      adaptive: formatThroughput(adaptive.city.throughputPerMinute),
+      jev: formatThroughput(jev.city.throughputPerMinute),
+    },
+    {
+      label: "Gridlock",
+      fixed: formatPercent(fixed.city.gridlockRatio),
+      adaptive: formatPercent(adaptive.city.gridlockRatio),
+      jev: formatPercent(jev.city.gridlockRatio),
+    },
+    {
+      label: "Active cars",
+      fixed: fixed.city.activeVehicles.toLocaleString("en-US"),
+      adaptive: adaptive.city.activeVehicles.toLocaleString("en-US"),
+      jev: jev.city.activeVehicles.toLocaleString("en-US"),
+    },
   ];
+}
+
+/* ------------------------------------------------------------------ */
+/* Provenance (Issue #15)                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Past this share of the run, the adaptive fallback is not a rounding error and
+ * the result MUST stop calling itself pure live Jev. One named constant, so the
+ * threshold cannot drift between the chrome and the comparison.
+ */
+export const JEV_FALLBACK_NOTICE_SHARE = 0.05;
+
+export interface PolicyLabel {
+  /** The state word: "Jev", "Jev · fallback used", "Adaptive fallback", "Replay". */
+  readonly text: string;
+  /** One compact line of public truth, or null when there is nothing to add. */
+  readonly detail: string | null;
+}
+
+/**
+ * Who governed the signals, in the fewest words that stay true.
+ *
+ *   Jev                 the model's policy told the city what to do, start to end
+ *   Jev · fallback used part of the run was the adaptive safety net
+ *   Adaptive fallback   no live policy ever arrived: this was not a Jev run
+ *   Replay              a recorded policy run, applied offline
+ *
+ * Controllers with no external policy (Fixed, Adaptive) label themselves.
+ */
+export function policyLabel(
+  controller: string,
+  policy: PresentationPolicy | null,
+): PolicyLabel | null {
+  if (controller === "fixed") {
+    return { text: "Fixed", detail: null };
+  }
+  if (controller === "adaptive") {
+    return { text: "Adaptive", detail: null };
+  }
+  if (controller !== "jev") {
+    return null;
+  }
+  if (policy === null) {
+    return { text: "Jev", detail: null };
+  }
+  const policies = `${policy.accepted} live ${policy.accepted === 1 ? "policy" : "policies"}`;
+  if (policy.source === "replay") {
+    return { text: "Replay", detail: `${policy.replayMs > 0 ? formatDuration(policy.replayMs) : "recorded"} replayed` };
+  }
+  if (policy.accepted === 0) {
+    return { text: "Adaptive fallback", detail: "no live policy arrived" };
+  }
+  const share = fallbackShare(policy);
+  if (share > JEV_FALLBACK_NOTICE_SHARE) {
+    return {
+      text: "Jev · fallback used",
+      detail: `${Math.round(share * 100)}% of the run on the adaptive fallback · ${policies}`,
+    };
+  }
+  return { text: "Jev", detail: policies };
 }
 
 /** Short label for chrome ("Tourist", "Local"). */

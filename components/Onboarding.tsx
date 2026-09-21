@@ -1,23 +1,27 @@
 "use client";
 
 /**
- * Onboarding (Task 11 polish pass): a staged first visit.
+ * Onboarding (Task 11 polish pass; Issue #15 made it the PUBLIC flow).
  *
  * Screen 1 — the title, one line and a single Start action, left-aligned over
  * the city seen whole (the map is the hero, not a blurred backdrop).
- * Screen 2 — one designed configuration object: city scale, traffic,
- * controller and seed, with a deliberate "Enter City" moment.
+ * Screen 2 — the experiment's inputs and nothing else: which Chicago trip, how
+ * much traffic, who is driving, and a fresh scenario. The controller is not a
+ * setting: the visible run is Jev and Fixed/Adaptive play the same city beside
+ * it. The raw seed stays internal (deterministic replay, not a user control).
+ * Both remain available behind `?debug`.
  */
 import { AnimatePresence, motion } from "motion/react";
+import { useState } from "react";
 import { useUiStore } from "@/store/ui-store";
-import { DiscreteSlider, Segmented, TickRow } from "./controls";
+import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
 import { DRIVER_OPTIONS, driverDescription } from "./ui-model";
-import { ComparisonPanel } from "./ComparisonPanel";
 import { CURATED_TRIPS, curatedTrip } from "@/cities/chicago-trips";
 import {
   CONTROLLER_OPTIONS,
   TRAFFIC_OPTIONS,
   diceSeed,
+  normalizeSeed,
   trafficLabel,
 } from "./ui-model";
 
@@ -28,14 +32,56 @@ const fieldVariants = {
   shown: { opacity: 1, y: 0 },
 };
 
+/**
+ * The raw seed is a developer control: it exists so a run can be reproduced
+ * exactly, not so a visitor can half-specify a scenario. Only rendered behind
+ * `?debug`, and labelled as such.
+ */
+function DebugSeedField({
+  seed,
+  onSeed,
+  onRoll,
+}: {
+  seed: number;
+  onSeed: (seed: number) => void;
+  onRoll: () => void;
+}) {
+  const [text, setText] = useState(String(seed));
+  const [rotation, setRotation] = useState(0);
+  const [synced, setSynced] = useState(seed);
+  if (synced !== seed) {
+    setSynced(seed);
+    setText(String(seed));
+  }
+  return (
+    <SeedField
+      text={text}
+      onText={setText}
+      onCommit={() => {
+        const next = normalizeSeed(text, seed);
+        setText(String(next));
+        if (next !== seed) {
+          onSeed(next);
+        }
+      }}
+      onRoll={() => {
+        setRotation((degrees) => degrees + 540);
+        onRoll();
+      }}
+      rotation={rotation}
+      label={<span className="label-micro">Seed</span>}
+    />
+  );
+}
+
 export function Onboarding({
   onEnterCity,
   onPreviewSetup,
-  onCompare,
+  debug,
 }: {
   onEnterCity: () => void;
   onPreviewSetup: () => void;
-  onCompare: () => void;
+  debug: boolean;
 }) {
   const phase = useUiStore((state) => state.phase);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
@@ -45,11 +91,10 @@ export function Onboarding({
   const setTrafficLevel = useUiStore((state) => state.setTrafficLevel);
   const setTripId = useUiStore((state) => state.setTripId);
   const setController = useUiStore((state) => state.setController);
+  const seed = useUiStore((state) => state.seed);
   const setSeed = useUiStore((state) => state.setSeed);
   const driver = useUiStore((state) => state.driver);
   const setDriver = useUiStore((state) => state.setDriver);
-  const comparison = useUiStore((state) => state.comparison);
-  const comparing = useUiStore((state) => state.comparing);
   /** A new scenario is a new seed — deterministic, just not user-facing. */
   const newScenario = () => {
     setSeed(diceSeed());
@@ -76,7 +121,8 @@ export function Onboarding({
               Jev Traffic Simulator
             </h1>
             <p className="on-map-display mt-3.5 max-w-sm text-ui leading-relaxed text-ink-70">
-              Can your controller beat Chicago traffic?
+              One Chicago scenario, one trip, one driver — three ways to run the city&apos;s
+              signals.
             </p>
             <button
               type="button"
@@ -157,23 +203,6 @@ export function Onboarding({
               </motion.div>
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                <span className="label-micro">Controller</span>
-                <div className="mt-2.5">
-                  <Segmented
-                    options={CONTROLLER_OPTIONS}
-                    value={controller}
-                    onChange={(nextController) => {
-                      setController(nextController);
-                      onPreviewSetup();
-                    }}
-                    layoutId="controller-pill-config"
-                    height={36}
-                    ariaLabel="Controller"
-                  />
-                </div>
-              </motion.div>
-
-              <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
                 <span className="label-micro">Driver</span>
                 <div className="mt-2.5">
                   <Segmented
@@ -191,6 +220,42 @@ export function Onboarding({
                 <p className="mt-2 text-meta leading-relaxed text-ink-52">{driverDescription(driver)}</p>
               </motion.div>
 
+              {debug && (
+                <motion.div
+                  variants={fieldVariants}
+                  transition={{ duration: 0.3, ease: EASE }}
+                  className="flex flex-col gap-5 rounded-control border border-hairline bg-surface-94 px-3.5 py-3.5"
+                >
+                  <div>
+                    <div className="flex items-baseline justify-between">
+                      <span className="label-micro">Controller</span>
+                      <span className="text-micro text-ink-38">?debug</span>
+                    </div>
+                    <div className="mt-2.5">
+                      <Segmented
+                        options={CONTROLLER_OPTIONS}
+                        value={controller}
+                        onChange={(nextController) => {
+                          setController(nextController);
+                          onPreviewSetup();
+                        }}
+                        layoutId="controller-pill-config"
+                        height={36}
+                        ariaLabel="Controller"
+                      />
+                    </div>
+                  </div>
+                  <DebugSeedField
+                    seed={seed}
+                    onSeed={(next) => {
+                      setSeed(next);
+                      onPreviewSetup();
+                    }}
+                    onRoll={newScenario}
+                  />
+                </motion.div>
+              )}
+
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
                 <div className="flex items-center justify-between">
                   <button
@@ -200,22 +265,11 @@ export function Onboarding({
                   >
                     New scenario
                   </button>
-                  <button
-                    type="button"
-                    disabled={comparing}
-                    onClick={onCompare}
-                    className="text-meta text-ink-52 transition-colors duration-150 hover:text-ink disabled:opacity-60"
-                  >
-                    {comparing ? "Running both…" : "Compare Fixed vs Adaptive"}
-                  </button>
+                  {!debug && (
+                    <span className="text-meta text-ink-38">Jev vs Fixed vs Adaptive</span>
+                  )}
                 </div>
               </motion.div>
-
-              {comparison !== null && (
-                <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                  <ComparisonPanel comparison={comparison} />
-                </motion.div>
-              )}
 
               <motion.div
                 variants={fieldVariants}
