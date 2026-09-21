@@ -17,6 +17,7 @@ import type {
 } from "@/sim/incidents";
 import { physicalSegments, reachableIntersectionCount } from "@/sim/incidents";
 import { createRng } from "@/sim/rng";
+import { INCIDENT_KINDS } from "@/sim/incidents";
 import type {
   City,
   IntersectionId,
@@ -71,6 +72,36 @@ export interface ManualChallengeIncidentInput {
 export interface ManualChallengeIncidentResolution {
   readonly entry: IncidentScriptEntry | null;
   readonly label: string;
+}
+
+/**
+ * Whether an instrument can do anything in the world this run is playing
+ * (Issue #39). Derived by ASKING the same resolver a click would use, so the
+ * answer cannot drift from the behaviour: no duplicated targeting logic, no
+ * heuristic "probably fine". `reason` is the resolver's own words when the
+ * answer is no, and must be shown, not swallowed.
+ *
+ * It is a probe, not a promise: a world that offers a closure now can lose it
+ * once one has been used, which is why the worker re-probes after each incident.
+ */
+export interface IncidentCapability {
+  readonly kind: IncidentKind;
+  readonly applicable: boolean;
+  readonly reason: string | null;
+}
+
+/** One capability per kind, in the dock's own order. */
+export function incidentCapabilities(
+  input: Omit<ManualChallengeIncidentInput, "kind">,
+): readonly IncidentCapability[] {
+  return INCIDENT_KINDS.map((kind) => {
+    const resolution = resolveManualChallengeIncident({ ...input, kind });
+    return {
+      kind,
+      applicable: resolution.entry !== null,
+      reason: resolution.entry === null ? resolution.label : null,
+    };
+  });
 }
 
 function roundToTick(ms: number): number {

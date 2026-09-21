@@ -16,6 +16,7 @@ import type {
 } from "./presentation-snapshot";
 import type {
   ChallengeIncidentPlan,
+  IncidentCapability,
   ResolvedChallengeIncident,
 } from "./challenge-incidents";
 import type { ChallengeResult, ComparisonVerdict } from "./challenge-result";
@@ -195,6 +196,15 @@ export type WorkerEvent =
       readonly verdict: ComparisonVerdict;
       /** Same resolved incident script both runs played. */
       readonly incidentEntries: number;
+    }
+  | {
+      /**
+       * Which chaos instruments can actually do something in this world
+       * (Issue #39). Posted at the start of a run and whenever the world's
+       * capacity for incidents can have changed — never guessed in the UI.
+       */
+      readonly type: "INCIDENT_CAPABILITIES";
+      readonly capabilities: readonly IncidentCapability[];
     }
   | { readonly type: "ERROR"; readonly message: string };
 

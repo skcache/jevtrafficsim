@@ -141,11 +141,29 @@ export function fallbackShare(policy: PresentationPolicy): number {
   return Math.min(1, Math.max(0, policy.fallbackMs / total));
 }
 
+/**
+ * How honest this run's result is allowed to be about itself (Issue #39).
+ *
+ * `modified` is true once anything changed the scenario under the run — a live
+ * traffic change or a controller swap — and `manualIncidents` counts the chaos
+ * a human queued. Both decide whether the result may sit beside clean baselines,
+ * so the UI must be able to read them while the run is still going, not only
+ * from a finished ChallengeResult.
+ */
+export interface RunGovernance {
+  readonly modified: boolean;
+  readonly manualIncidents: number;
+}
+
+export const CLEAN_RUN: RunGovernance = { modified: false, manualIncidents: 0 };
+
 export interface PresentationSnapshot {
   /** Monotonic frame counter from the worker. */
   readonly sequence: number;
   readonly timeMs: number;
   readonly controller: string;
+  /** Whether the run still describes the scenario it started as. */
+  readonly governance: RunGovernance;
   /** Policy provenance, or null for controllers that have no external policy. */
   readonly policy: PresentationPolicy | null;
   /** The challenge's protagonist, or null before it exists. At most one. */
@@ -335,6 +353,7 @@ export function buildPresentationSnapshot(
   sequence: number,
   tripId: string | null = null,
   policy: PresentationPolicy | null = null,
+  governance: RunGovernance = CLEAN_RUN,
 ): PresentationSnapshot {
   const vehicles = engine.traffic.vehicles;
   const queueRanks = assignQueueRanks(vehicles);
@@ -398,6 +417,7 @@ export function buildPresentationSnapshot(
     sequence,
     timeMs: engine.traffic.timeMs,
     controller: engine.controller.id,
+    governance,
     policy,
     ego,
     roadTraffic: aggregateRoadTraffic(engine),

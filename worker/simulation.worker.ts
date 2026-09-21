@@ -33,6 +33,7 @@ import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
 import { generateDemand } from "@/sim/demand";
 import { TRAFFIC_LEVELS } from "@/sim/types";
+import type { IncidentKind } from "@/sim/incidents";
 import {
   createEngine,
   queueIncident,
@@ -49,8 +50,10 @@ import {
 import {
   buildChallengeIncidentPlan,
   challengeIncidentFingerprintInput,
+  incidentCapabilities,
   resolveManualChallengeIncident,
   type ChallengeIncidentPlan,
+  type ManualChallengeIncidentInput,
   type ResolvedChallengeIncident,
 } from "./challenge-incidents";
 import {
@@ -169,6 +172,98 @@ function policyProvenance(): PresentationPolicy | null {
   }
 }
 
+/**
+ * The input a manual incident click would use RIGHT NOW (Issue #39). Kept in one
+ * place so the instrument's availability probe and the click itself cannot
+ * drift apart — the probe is literally the same question.
+ */
+function manualIncidentInput(
+  kind: IncidentKind,
+  sequence: number,
+): ManualChallengeIncidentInput | null {
+  const engine = state.engine;
+  const model = state.model;
+  if (!engine || !model) {
+    return null;
+  }
+  const ego =
+    engine.egoVehicleId === null
+      ? null
+      : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId) ?? null;
+  if (!ego) {
+    return null;
+  }
+  return {
+    model,
+    city: engine.city,
+    kind,
+    atMs: engine.traffic.timeMs,
+    seed: state.incidentSeed,
+    sequence,
+    routeRoadIds: ego.route,
+    routeIndex: ego.routeIndex,
+    egoRoadId: ego.roadId,
+    destinationIntersectionId: ego.destination,
+  };
+}
+
+/**
+ * Tell the UI which instruments can do anything in THIS world (Issue #39), so an
+ * unusable button is disabled with the reason shown instead of looking live and
+ * answering "not available" after a click. Re-posted whenever the world's
+ * capacity for chaos can have changed: a new run, or a queued incident.
+ */
+function postIncidentCapabilities(): void {
+  const probe = manualIncidentInput("crash", state.manualIncidentSequence);
+  if (probe === null) {
+    return;
+  }
+  const probeContext: Omit<ManualChallengeIncidentInput, "kind"> = {
+    model: probe.model,
+    city: probe.city,
+    atMs: probe.atMs,
+    seed: probe.seed,
+    sequence: probe.sequence,
+    routeRoadIds: probe.routeRoadIds,
+    routeIndex: probe.routeIndex,
+    egoRoadId: probe.egoRoadId,
+    destinationIntersectionId: probe.destinationIntersectionId,
+  };
+  const engine = state.engine;
+  if (engine) {
+    capabilitySignature = engine.incidents.records
+      .map((record) => `${record.id}:${record.kind}:${record.status}`)
+      .join("|");
+  }
+  post({ type: "INCIDENT_CAPABILITIES", capabilities: incidentCapabilities(probeContext) });
+}
+
+/** Signature of the incident set the last capability probe was taken against. */
+let capabilitySignature: string | null = null;
+
+/**
+ * Re-probe only when the world's incident set actually changed.
+ *
+ * Cost matters here: one full probe measures ~86 ms on the Metro model (five
+ * resolver calls, and the closure kinds run a reachability check), against
+ * ~0.6 ms for a simulation tick. Running it every tick would spend the whole
+ * frame budget, so it runs when the answer can have changed and not otherwise.
+ */
+function refreshIncidentCapabilitiesIfStale(): void {
+  const engine = state.engine;
+  if (!engine) {
+    return;
+  }
+  const signature = engine.incidents.records
+    .map((record) => `${record.id}:${record.kind}:${record.status}`)
+    .join("|");
+  if (signature === capabilitySignature) {
+    return;
+  }
+  capabilitySignature = signature;
+  postIncidentCapabilities();
+}
+
 function postSnapshot(): void {
   if (!state.engine) {
     return;
@@ -180,6 +275,7 @@ function postSnapshot(): void {
       state.snapshotSequence,
       state.config?.tripId ?? null,
       policyProvenance(),
+      { modified: state.modified, manualIncidents: state.manualIncidents },
     ),
   });
   state.snapshotSequence += 1;
@@ -190,6 +286,10 @@ function postMetrics(): void {
     return;
   }
   post({ type: "METRICS", metrics: buildPresentationMetrics(state.engine) });
+  // The automatic script closes roads on its own schedule, so an instrument's
+  // availability can change without any click. The signature check is free; the
+  // probe itself only runs when the incident set actually moved.
+  refreshIncidentCapabilitiesIfStale();
 }
 
 function clearTimer(): void {
@@ -298,6 +398,8 @@ async function buildRun(config: RunConfig): Promise<void> {
   }));
   state.manualIncidentSequence = 0;
   state.snapshotSequence = 0;
+  capabilitySignature = null;
+  postIncidentCapabilities();
   post({
     type: "READY",
     config,
@@ -553,11 +655,7 @@ function handleCommand(command: WorkerCommand): void {
         return;
       }
 
-      const ego =
-        engine.egoVehicleId === null
-          ? null
-          : engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId) ?? null;
-      if (!ego) {
+      if (manualIncidentInput(command.kind, state.manualIncidentSequence) === null) {
         post({
           type: "INCIDENT_RESOLVED",
           kind: command.kind,
@@ -577,18 +675,11 @@ function handleCommand(command: WorkerCommand): void {
       // asked for adversity in this exact run. Crucially, we immediately record
       // the concrete target + simulation timestamp so Issue #28 can replay this
       // exact click under another controller.
-      const resolution = resolveManualChallengeIncident({
-        model,
-        city: engine.city,
-        kind: command.kind,
-        atMs: engine.traffic.timeMs,
-        seed: state.incidentSeed,
-        sequence: state.manualIncidentSequence,
-        routeRoadIds: ego.route,
-        routeIndex: ego.routeIndex,
-        egoRoadId: ego.roadId,
-        destinationIntersectionId: ego.destination,
-      });
+      // The exact input the applicability probe asked about: same helper, so
+      // what the dock showed is what the click does.
+      const resolution = resolveManualChallengeIncident(
+        manualIncidentInput(command.kind, state.manualIncidentSequence) as ManualChallengeIncidentInput,
+      );
       state.manualIncidentSequence += 1;
 
       if (!resolution.entry) {
@@ -617,6 +708,8 @@ function handleCommand(command: WorkerCommand): void {
       // A human touched this run: its result is no longer comparable to a clean
       // run of the same scenario.
       state.manualIncidents += 1;
+      // A closure takes options away from the next click, so ask again.
+      postIncidentCapabilities();
       post({
         type: "INCIDENT_RESOLVED",
         kind: command.kind,
