@@ -32,6 +32,7 @@ import {
   discardNeedsConfirm,
   firstCleanRunWarning,
   incidentAvailability,
+  runShowsNonComparable,
   unavailableIncidentHint,
   type DiscardAction,
 } from "@/components/ui-model";
@@ -150,6 +151,14 @@ describe("a manual incident cannot silently kill the comparison", () => {
     expect(INCIDENT_WARNING_CONFIRM.length).toBeGreaterThan(0);
     expect(INCIDENT_WARNING_CANCEL.length).toBeGreaterThan(0);
     expect(CLEAN_RUN_LOST_NOTICE.toLowerCase()).toContain("comparison");
+  });
+
+  it("marks the run non-comparable for an incident too, not only for a live change", () => {
+    // The chrome badge has to agree with the verdict, which refuses a run either
+    // way — otherwise a hand-touched run looks clean while it plays.
+    expect(runShowsNonComparable({ modified: false, manualIncidents: 0 })).toBe(false);
+    expect(runShowsNonComparable({ modified: true, manualIncidents: 0 })).toBe(true);
+    expect(runShowsNonComparable({ modified: false, manualIncidents: 1 })).toBe(true);
   });
 
   it("never asks again once the run is already modified", () => {

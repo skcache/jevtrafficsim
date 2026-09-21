@@ -429,6 +429,18 @@ export const INCIDENT_WARNING_BODY =
 export const INCIDENT_WARNING_CONFIRM = "Add incident";
 export const INCIDENT_WARNING_CANCEL = "Keep it clean";
 
+/**
+ * Whether the chrome must say this run is no longer a clean comparison.
+ *
+ * Both ways of losing comparability count: a scenario moved under the run
+ * (`modified`) and chaos a human queued (`manualIncidents`). The verdict checks
+ * both, so the badge has to as well — otherwise a run with a manual incident
+ * would look clean while it plays and only confess at the end.
+ */
+export function runShowsNonComparable(input: RunGovernanceLike): boolean {
+  return input.modified || input.manualIncidents > 0;
+}
+
 /** Shown once when a live setting change (not an incident) breaks comparability. */
 export const CLEAN_RUN_LOST_NOTICE =
   "This run is now modified — the clean same-scenario comparison is off.";

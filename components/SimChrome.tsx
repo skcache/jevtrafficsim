@@ -21,6 +21,7 @@ import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
 import { ComparisonPanel } from "./ComparisonPanel";
 import {
   BASELINE_COMPUTING_DETAIL,
+  runShowsNonComparable,
   BASELINE_COMPUTING_TEXT,
   BASELINE_FAILED_DETAIL,
   BASELINE_FAILED_TEXT,
@@ -256,6 +257,7 @@ export function SimChrome(props: SimChromeProps) {
   const baselinesRunning = useUiStore((state) => state.baselinesRunning);
   const baselinesFailed = useUiStore((state) => state.baselinesFailed);
   const modified = useUiStore((state) => state.modified);
+  const manualIncidents = useUiStore((state) => state.manualIncidents);
   const pendingDiscard = useUiStore((state) => state.pendingDiscard);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
@@ -304,7 +306,7 @@ export function SimChrome(props: SimChromeProps) {
                   {scenarioFingerprint ?? "—"}
                 </span>
               </div>
-              {modified && (
+              {runShowsNonComparable({ modified, manualIncidents }) && (
                 <div className="flex items-center gap-2" role="status">
                   <span className="label-micro text-ink-38">Run</span>
                   <span className="text-micro leading-none text-ink-70">
