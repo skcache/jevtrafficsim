@@ -19,31 +19,80 @@
  * policy. It never fabricates one, and it never falls back to a replay or a
  * cached answer — that is Issue #14's territory.
  */
-import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS } from "@/jev/client";
+import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
+import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
 import { jevPolicyContext } from "@/jev/request";
 import { parseJevPolicy, validateJevPolicyRequest } from "@/jev/schema";
 
 /** Requests are bounded by construction; refuse anything wildly larger. */
 const MAX_BODY_BYTES = 512 * 1024;
 
-interface JevEnvironment {
-  readonly endpoint: string;
+export interface JevEnvironment {
   readonly token: string;
   readonly timeoutMs: number;
+  /** Set when this deployment talks to the Vercel AI Gateway. */
+  readonly gateway: { readonly endpoint: string; readonly model: string } | null;
+  /** Set when this deployment talks to a service speaking the policy schema. */
+  readonly endpoint: string | null;
 }
 
-function readJevEnvironment(): JevEnvironment | null {
-  const endpoint = process.env.JEV_ENDPOINT?.trim();
+/**
+ * Two supported backends, chosen by configuration alone:
+ *
+ *   JEV_MODEL set    -> TypeSafe AI's evaluation model through the Vercel AI
+ *                       Gateway (its own URL; JEV_GATEWAY_URL overrides it for a
+ *                       self-hosted proxy). One model, no fallbacks.
+ *   JEV_ENDPOINT set -> a service that speaks the Jev policy schema directly
+ *
+ * The two are never mixed: JEV_MODEL selects the gateway and JEV_ENDPOINT is
+ * ignored for it, so a deployment cannot accidentally send gateway-shaped
+ * questions to a schema-speaking service. Only the configured backend is ever
+ * called, and without a token there is no client at all — the route answers 503
+ * rather than inventing a policy.
+ */
+export function readJevEnvironment(): JevEnvironment | null {
   const token = process.env.JEV_TOKEN?.trim();
-  if (!endpoint || !token) {
+  if (!token) {
     return null;
   }
   const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
-  return {
-    endpoint,
-    token,
-    timeoutMs: Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS,
-  };
+  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS;
+
+  const model = process.env.JEV_MODEL?.trim();
+  if (model) {
+    return {
+      token,
+      timeoutMs,
+      gateway: {
+        endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
+        model,
+      },
+      endpoint: null,
+    };
+  }
+
+  const endpoint = process.env.JEV_ENDPOINT?.trim();
+  if (!endpoint) {
+    return null;
+  }
+  return { token, timeoutMs, gateway: null, endpoint };
+}
+
+/** The one place a client is built from configuration. */
+export function jevClientFromEnvironment(environment: JevEnvironment): JevClient {
+  if (environment.gateway) {
+    return createGatewayJevClient({
+      token: environment.token,
+      endpoint: environment.gateway.endpoint,
+      model: environment.gateway.model,
+      timeoutMs: environment.timeoutMs,
+    });
+  }
+  return createHttpJevClient({
+    endpoint: environment.endpoint ?? "",
+    token: environment.token,
+    timeoutMs: environment.timeoutMs,
+  });
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -69,7 +118,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: validated.error }, { status: 400 });
   }
 
-  const client = createHttpJevClient(environment);
+  const client = jevClientFromEnvironment(environment);
   try {
     const raw = await client.requestPolicy(validated.value);
     const parsed = parseJevPolicy(raw, jevPolicyContext(validated.value));

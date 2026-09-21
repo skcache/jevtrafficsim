@@ -20,6 +20,11 @@ import {
   JEV_DEFAULT_TIMEOUT_MS,
   type JevClient,
 } from "@/jev/client";
+import {
+  createGatewayJevClient,
+  JEV_GATEWAY_ENDPOINT,
+  JEV_GATEWAY_MODEL,
+} from "@/jev/gateway";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import { type ControllerChoice } from "@/worker/protocol";
@@ -57,10 +62,14 @@ Options:
   --driver <name,...>       tourist | local (default: both)
   --seed <n,...>            deterministic seeds (default: 42)
   --controllers <c,...>     fixed | adaptive | jev (default: fixed,adaptive)
-  --jev <mock|live>         how jev gets its policy (default: mock)
-                              mock = deterministic stand-in, no network, no credential
-                              live = JEV_ENDPOINT + JEV_TOKEN from the environment,
-                                     called server-side; refuses to run a big matrix
+  --jev <mock|live|gateway> how jev gets its policy (default: mock)
+                              mock    = deterministic stand-in, no network, no credential
+                              gateway = TypeSafe AI's jev via the Vercel AI Gateway
+                                        (JEV_TOKEN + JEV_MODEL; JEV_GATEWAY_URL overrides
+                                        the gateway URL)
+                              live    = a service that speaks the Jev policy schema
+                                        (JEV_ENDPOINT + JEV_TOKEN), called server-side
+                              live and gateway refuse to run a big matrix
   --horizon <ms|Ns|Nm>      simulated run length (default: the live horizon)
   --out <path>              JSON output (default: benchmark/results/benchmark-<stamp>.json)
   --quiet                   only the final summary
@@ -141,11 +150,11 @@ function parseControllers(values: readonly string[]): ControllerChoice[] {
   return controllers as ControllerChoice[];
 }
 
-export type JevAdapterChoice = "mock" | "live";
+export type JevAdapterChoice = "mock" | "live" | "gateway";
 
 function parseJevAdapter(value: string): JevAdapterChoice {
-  if (value !== "mock" && value !== "live") {
-    throw new UsageError(`--jev must be mock or live (received "${value}")`);
+  if (value !== "mock" && value !== "live" && value !== "gateway") {
+    throw new UsageError(`--jev must be mock, live or gateway (received "${value}")`);
   }
   return value;
 }
@@ -297,24 +306,37 @@ export function liveRunCapError(runCount: number): string | null {
   );
 }
 
-function liveJevClientFromEnv(): { client: JevClient } | { error: string } {
-  const endpoint = process.env.JEV_ENDPOINT?.trim();
+function liveJevClientFromEnv(
+  adapter: "live" | "gateway",
+): { client: JevClient } | { error: string } {
   const token = process.env.JEV_TOKEN?.trim();
-  if (!endpoint || !token) {
+  if (!token) {
     return {
       error:
-        "live jev needs JEV_ENDPOINT and JEV_TOKEN in the environment — " +
-        "no policy is fabricated without them (use --jev mock to exercise the seam)",
+        "a live jev run needs JEV_TOKEN in the environment — no policy is " +
+        "fabricated without it (use --jev mock to exercise the seam)",
     };
   }
   const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
-  return {
-    client: createHttpJevClient({
-      endpoint,
-      token,
-      timeoutMs: Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS,
-    }),
-  };
+  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS;
+
+  if (adapter === "gateway") {
+    // Only the configured model is ever asked (TypeSafe AI's jev by default).
+    return {
+      client: createGatewayJevClient({
+        token,
+        endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
+        model: process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL,
+        timeoutMs,
+      }),
+    };
+  }
+
+  const endpoint = process.env.JEV_ENDPOINT?.trim();
+  if (!endpoint) {
+    return { error: "the live adapter needs JEV_ENDPOINT in the environment" };
+  }
+  return { client: createHttpJevClient({ endpoint, token, timeoutMs }) };
 }
 
 /** Aggregate the adapter's own account of what it did — evidence, not a claim. */
@@ -390,10 +412,10 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const wantsJev = matrix.controllers.includes("jev");
-  const live = wantsJev && options.jevAdapter === "live";
+  const live = wantsJev && options.jevAdapter !== "mock";
   let jevClient: JevClient | null = null;
   if (wantsJev && live) {
-    const configured = liveJevClientFromEnv();
+    const configured = liveJevClientFromEnv(options.jevAdapter === "gateway" ? "gateway" : "live");
     if ("error" in configured) {
       process.stderr.write(`${configured.error}\n`);
       return 2;
@@ -424,12 +446,15 @@ async function main(argv: readonly string[]): Promise<number> {
   const model = loadBenchmarkModel();
   process.stdout.write(`benchmark: ${describeMatrix(matrix)}\n`);
   if (wantsJev) {
-    process.stdout.write(
-      live
-        ? "jev: LIVE adapter — policies come from JEV_ENDPOINT server-side; " +
-            "results are not reproducible (wall-clock arrival)\n"
-        : "jev: MOCK adapter — deterministic stand-in, NOT the Jev service\n",
-    );
+    const adapterLabel =
+      options.jevAdapter === "mock"
+        ? "jev: MOCK adapter — deterministic stand-in, NOT the Jev service\n"
+        : options.jevAdapter === "gateway"
+          ? `jev: GATEWAY adapter — ${process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL} via the ` +
+            "Vercel AI Gateway; results are not reproducible (wall-clock arrival)\n"
+          : "jev: LIVE adapter — policies come from JEV_ENDPOINT server-side; " +
+            "results are not reproducible (wall-clock arrival)\n";
+    process.stdout.write(adapterLabel);
   }
   process.stdout.write(
     `city: ${model.city.roads.length} roads, ${model.city.intersections.length} intersections\n`,
