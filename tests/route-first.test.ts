@@ -300,7 +300,7 @@ describe("trip HUD", () => {
     expect(view?.tripName.length).toBeGreaterThan(0);
     const byLabel = new Map(view?.rows.map((row) => [row.label, row.value]));
     expect(byLabel.get("Elapsed")).toBe("2m 14s");
-    expect(byLabel.get("Remaining")).toBe("3.3 km");
+    expect(byLabel.get("Remaining")).toBe("2.0 mi"); // 3.3 km in US customary
     expect(byLabel.get("Stopped")).toBe("21.0s");
     expect(byLabel.get("Cleared")).toBe("1 / 4");
     expect(byLabel.get("Est. remaining")).toBe("8m 00s");
@@ -314,9 +314,11 @@ describe("trip HUD", () => {
     expect(tripStateLabel("arrived", true)).toBe("Arrived");
     // Completion wins even if a stale ego state arrives.
     expect(tripStateLabel("moving", true)).toBe("Arrived");
-    expect(formatDistance(740)).toBe("740 m");
-    expect(formatDistance(0)).toBe("0 m");
-    expect(formatSpeed(8.4)).toBe("30 km/h");
+    // US customary: feet below a quarter mile, miles above it.
+    expect(formatDistance(120)).toBe("394 ft");
+    expect(formatDistance(740)).toBe("0.5 mi");
+    expect(formatDistance(0)).toBe("0 ft");
+    expect(formatSpeed(8.4)).toBe("19 mph"); // 8.4 m/s in US customary
   });
 
   it("reports completion when the trip finishes", () => {
@@ -340,7 +342,7 @@ describe("trip HUD", () => {
     });
     expect(view?.completed).toBe(true);
     expect(view?.state).toBe("Arrived");
-    expect(view?.rows.find((row) => row.label === "Remaining")?.value).toBe("0 m");
+    expect(view?.rows.find((row) => row.label === "Remaining")?.value).toBe("0 ft");
     // A finished trip has nothing left to estimate.
     expect(view?.rows.find((row) => row.label === "Est. remaining")?.value).toBe("—");
   });

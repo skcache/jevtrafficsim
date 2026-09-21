@@ -130,22 +130,32 @@ export function formatPercent(ratio: number): string {
 /* ------------------------------------------------------------------ */
 
 /** "740 m" up to a kilometre, then "7.4 km". */
+/**
+ * US customary units: this is Chicago. Distances read in feet up to a quarter
+ * mile, then in miles; the simulation stays in metres internally, so this is
+ * presentation only.
+ */
+const METRES_PER_FOOT = 0.3048;
+const METRES_PER_MILE = 1609.344;
+/** Below this, feet are the honest unit (a quarter mile). */
+const FEET_LIMIT_M = METRES_PER_MILE / 4;
+
 export function formatDistance(metres: number): string {
   if (!Number.isFinite(metres) || metres <= 0) {
-    return "0 m";
+    return "0 ft";
   }
-  if (metres < 1_000) {
-    return `${Math.round(metres)} m`;
+  if (metres < FEET_LIMIT_M) {
+    return `${Math.round(metres / METRES_PER_FOOT)} ft`;
   }
-  return `${(metres / 1_000).toFixed(1)} km`;
+  return `${(metres / METRES_PER_MILE).toFixed(1)} mi`;
 }
 
-/** m/s -> km/h, the unit a person reads speed in. */
+/** m/s -> mph, the unit a person reads speed in. */
 export function formatSpeed(metresPerSecond: number): string {
   if (!Number.isFinite(metresPerSecond) || metresPerSecond <= 0) {
-    return "0 km/h";
+    return "0 mph";
   }
-  return `${Math.round(metresPerSecond * 3.6)} km/h`;
+  return `${Math.round((metresPerSecond / METRES_PER_MILE) * 3600)} mph`;
 }
 
 export type TripStateLabel = "Moving" | "Stopped" | "Arrived" | "Waiting";

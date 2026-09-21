@@ -205,6 +205,12 @@ export function aggregateRoadTraffic(engine: EngineState): PresentationRoadTraff
   for (const roadId of queuedCounts.keys()) {
     roadIds.add(roadId);
   }
+  // Roads still RECOVERING in the authoritative state stay in the frame even
+  // though their occupancy has already dropped to zero: the simulation has not
+  // declared them clear yet, so the map must not either.
+  for (const roadId of engine.traffic.roadTraffic.factor.keys()) {
+    roadIds.add(roadId);
+  }
   return [...roadIds]
     .sort((a, b) => a - b)
     .map((roadId) => {

@@ -31,7 +31,7 @@ interface SpritePart {
 
 /** Length/width of each class in sprite units (the cell is 128 × 64). */
 const SPRITE_UNITS: Record<VehicleType, { length: number; width: number }> = {
-  car: { length: 96, width: 34 },
+  car: { length: 96, width: 32 },
   truck: { length: 120, width: 40 },
   bicycle: { length: 46, width: 14 },
 };
@@ -41,22 +41,39 @@ export const VEHICLE_SPRITE_PATHS: Record<VehicleType, readonly SpritePart[]> = 
   // so anything finer than ~2 px of sprite becomes a smudge. One bold windshield
   // band is what makes the front obvious; the roof and rear glass only have to
   // separate it.
+  // Front at +X. Rounded bodywork, one glass band forward and one aft, wheels
+  // tucked INSIDE the silhouette: at follow zoom this has to read as a car seen
+  // from above, not as a dark blob with corners. The outline is drawn first and
+  // slightly larger, which is cheaper and crisper than a stroked path here.
   car: [
     {
-      d: "M 44,0 L 36,-9 L 16,-14 L -34,-14 L -46,-8 L -46,8 L -34,14 L 16,14 L 36,9 Z",
-      fill: "#3f4348",
+      d: "M 49,0 C 49,-6.5 45,-10.5 37,-12 L -37,-13.6 C -45,-13.6 -49,-10.5 -49,-6 L -49,6 C -49,10.5 -45,13.6 -37,13.6 L 37,12 C 45,10.5 49,6.5 49,0 Z",
+      fill: "#2c3036",
     },
-    // Windshield: wide and clearly lighter, right behind the nose.
-    { d: "M 34,-8 L 12,-12 L 12,12 L 34,8 Z", fill: "#93a0ad" },
-    // Roof between the two glass bands.
-    { d: "M 10,-12 L -14,-12 L -14,12 L 10,12 Z", fill: "#464b51" },
-    // Rear glass, narrower and darker than the windshield.
-    { d: "M -16,-12 L -34,-10 L -34,10 L -16,12 Z", fill: "#6d7883" },
-    // Wheels break the silhouette at the four corners.
-    { d: "M 24,-16 L 36,-16 L 36,-12 L 24,-12 Z", fill: "#202327" },
-    { d: "M 24,12 L 36,12 L 36,16 L 24,16 Z", fill: "#202327" },
-    { d: "M -32,-16 L -18,-16 L -18,-12 L -32,-12 Z", fill: "#202327" },
-    { d: "M -32,12 L -18,12 L -18,16 L -32,16 Z", fill: "#202327" },
+    {
+      d: "M 47,0 C 47,-5.8 43,-9.4 36,-10.8 L -36,-12.4 C -43,-12.4 -47,-9.6 -47,-5.4 L -47,5.4 C -47,9.6 -43,12.4 -36,12.4 L 36,10.8 C 43,9.4 47,5.8 47,0 Z",
+      fill: "#7c8794",
+    },
+    // Windshield: the widest, lightest band, right behind the nose.
+    {
+      d: "M 33,-8.6 C 27,-10 23,-10.6 19,-10.6 L 19,10.6 C 23,10.6 27,10 33,8.6 Z",
+      fill: "#b6c5d4",
+    },
+    // Roof: a slightly darker slab between the two glass bands.
+    { d: "M 17,-10.6 L -13,-11.1 L -13,11.1 L 17,10.6 Z", fill: "#69737f" },
+    // Rear glass, narrower and cooler than the windshield.
+    {
+      d: "M -15,-11.1 L -33,-11.6 C -35,-11.6 -36,-10.6 -36,-9.2 L -36,9.2 C -36,10.6 -35,11.6 -33,11.6 L -15,11.1 Z",
+      fill: "#9dafc0",
+    },
+    // Wheels, tucked under the body edge so they read as contact patches.
+    { d: "M 25,-14.6 L 37,-14.2 L 37,-11.2 L 25,-11.4 Z", fill: "#23262b" },
+    { d: "M 25,11.4 L 37,11.2 L 37,14.2 L 25,14.6 Z", fill: "#23262b" },
+    { d: "M -35,-14.6 L -23,-14.8 L -23,-11.9 L -35,-11.8 Z", fill: "#23262b" },
+    { d: "M -35,11.8 L -23,11.9 L -23,14.8 L -35,14.6 Z", fill: "#23262b" },
+    // Headlights: two small warm marks that say which end is the front.
+    { d: "M 45,-7.4 L 47.5,-5.6 L 47.5,-1.4 L 45,-2.2 Z", fill: "#f2e6c8" },
+    { d: "M 45,7.4 L 47.5,5.6 L 47.5,1.4 L 45,2.2 Z", fill: "#f2e6c8" },
   ],
   // A truck is a cab and a box. Ribs and small detail vanish at 19 px, so the
   // only interior marks are one bold glass band and the cab/box joint.
@@ -92,7 +109,7 @@ export const VEHICLE_SPRITE_PATHS: Record<VehicleType, readonly SpritePart[]> = 
 
 /** Body colours are restrained on purpose: no rainbow vehicles. */
 export const VEHICLE_SPRITE_TINT: Record<VehicleType, string> = {
-  car: "#3f4348",
+  car: "#7c8794",
   truck: "#55524c",
   bicycle: "#4a5b6b",
 };
