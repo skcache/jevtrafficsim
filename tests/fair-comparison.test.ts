@@ -445,7 +445,12 @@ describe("remaining travel time", () => {
     expect(full).toBeGreaterThan(0);
     const later = remainingRouteSeconds(city, engine.traffic, ego.route, ego.routeIndex, ego.progress + 100);
     expect(later).toBeLessThan(full);
-    engine.traffic.occupancy.set(ego.route[ego.routeIndex], 999);
+    // Congestion must reach the estimate through the AUTHORITATIVE traffic
+    // state — the same per-road speed factor that slows vehicles and paints
+    // the map. Occupancy is an input to that state, never a second slowdown
+    // model (that was the point of the migration).
+    const congestedRoad = ego.route[ego.routeIndex];
+    engine.traffic.roadTraffic.factor.set(congestedRoad, 0.2);
     const congested = remainingRouteSeconds(city, engine.traffic, ego.route, ego.routeIndex, ego.progress);
     expect(congested).toBeGreaterThan(full);
   });

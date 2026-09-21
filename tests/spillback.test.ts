@@ -72,11 +72,14 @@ describe("spillback admission (decided on projected occupancy)", () => {
     spawnVehicle(city, state, { id: 1, type: "car", origin: 0, destination: 1, route: [0] });
     expect(state.vehicles[1].state).toBe("pending");
     // Drain, then reopen — the rule is a pure function of state, no hysteresis.
-    for (let tick = 0; tick < 10; tick += 1) {
+    // A lone car at 100% occupancy is SEVERE traffic (factor -> 0.12), so it
+    // crawls the 10 m and arrives on tick 12 (derived with tools/model-timing.py),
+    // not the 10 ticks the old constant-speed law implied.
+    for (let tick = 0; tick < 12; tick += 1) {
       stepTraffic(city, state);
     }
     expect(state.vehicles[0].state).toBe("arrived");
-    stepTraffic(city, state); // tick 11: road empty again
+    stepTraffic(city, state); // tick 13: road empty again
     expect(state.vehicles[1].state).toBe("moving");
     // Absolute capacity stays hard: an oversized footprint is refused even on
     // an empty road (truck 2.0 > capacity 1.0).
@@ -86,8 +89,11 @@ describe("spillback admission (decided on projected occupancy)", () => {
   });
 
   it("reopens admission once occupancy falls back below the headroom", () => {
-    // Short road so the whole fleet cycles through within the test window:
-    // trucks cover 0.56 units per 100ms tick, bikes 0.64, cars 1.0.
+    // Short road so the whole fleet cycles through within a bounded horizon:
+    // trucks cover 0.7 * factor * 10 * 0.1 per tick, and while occupancy sits
+    // at 90% the road is SEVERE (factor -> 0.12), so the fleet crawls and the
+    // factor recovers only after the road drains. All twelve arrive at tick
+    // 754 (75.4 s of simulation), derived with tools/model-timing.py.
     const { city } = makeStreet([{ length: 100, capacity: 20 }]);
     const state = createTrafficState();
     for (let i = 0; i < 9; i += 1) {
@@ -100,7 +106,7 @@ describe("spillback admission (decided on projected occupancy)", () => {
     expect(state.vehicles[9].state).toBe("pending");
     expect(state.vehicles[10].state).toBe("pending");
     expect(state.vehicles[11].state).toBe("pending");
-    for (let tick = 0; tick < 600; tick += 1) {
+    for (let tick = 0; tick < 754; tick += 1) {
       stepTraffic(city, state);
     }
     for (const vehicle of state.vehicles) {

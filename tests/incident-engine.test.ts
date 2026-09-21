@@ -189,8 +189,12 @@ describe("crash semantics", () => {
       { timeMs: 0, type: CAR, origin: 0, destination: 3 },
       { timeMs: 200, type: CAR, origin: 0, destination: 3 }, // during the crash
     ];
+    // A road at 100% of its (reduced) capacity is SEVERE under the
+    // authoritative traffic model: its factor falls toward 0.12 and the three
+    // residents crawl across the 50 m road (~101 ticks, derived with
+    // tools/model-timing.py), so the crash must outlast their drain.
     const script: IncidentScriptEntry[] = [
-      { atMs: 100, kind: "crash", targetRoadId: 0, durationMs: 5_000 }, // until 5100
+      { atMs: 100, kind: "crash", targetRoadId: 0, durationMs: 20_000 }, // until 20_100
     ];
     const engine = createEngine({
       city,
@@ -202,13 +206,13 @@ describe("crash semantics", () => {
     expect(engine.traffic.occupancy.get(0)).toBe(3); // 3.0 resident
     expect(engine.city.roads[0].capacity).toBe(3); // never below resident occupancy
     expect(engine.traffic.vehicles[3].state).toBe("pending"); // 3 + 1 > reduced capacity
-    // The three residents arrive at t=5000; the crash still applies and the
-    // capacity tightens toward the desired 2.0, admitting the waiter.
-    runEngine(engine, 5_100);
+    // Residents drain off road 0 at tick 101; the crash still applies and the
+    // capacity tightens toward the desired 2.0 (tick 102), admitting the waiter.
+    runEngine(engine, 10_500);
     expect(engine.city.roads[0].capacity).toBe(2);
     expect(engine.traffic.vehicles[3].state).toBe("moving");
-    // Expiry at 5100 restores the base capacity.
-    runEngine(engine, 5_200);
+    // Expiry at 20_100 restores the base capacity.
+    runEngine(engine, 20_200);
     expect(engine.city.roads[0].capacity).toBe(4);
     expect(engine.city.roads[0].closed).toBe(false);
     expect(checkTrafficInvariants(city, engine.traffic)).toEqual([]);
@@ -240,17 +244,22 @@ describe("crash semantics", () => {
  * Extended fixture: adds path C = roads [8, 9] (cost 10 + 10 = 20) via node 4,
  * and road 4/5 capacity 3 (one truck fills the spillback headroom).
  * Route costs 0 -> 3: A [0,4] = 5 + 5 = 10 · B [2,6] = 8 + 8 = 16 · C = 20.
+ * Road 0's length is overridable so reroute tests can keep a vehicle en route
+ * (long) or queue it at the line (short) when an incident lands.
  */
-function extendedRouteCity(): City {
+function extendedRouteCity(road0Length = 50): City {
   const base = routeCity();
   const intersections: Intersection[] = [
     ...base.intersections.map((node) => ({ ...node, incoming: [...node.incoming], outgoing: [...node.outgoing] })),
     { id: 4, x: 5, y: -5, incoming: [], outgoing: [], control: "uncontrolled", regionId: 0 },
   ];
   const roads: Road[] = [
-    ...base.roads.map((road) =>
-      road.id === 4 || road.id === 5 ? { ...road, capacity: 3 } : { ...road },
-    ),
+    ...base.roads.map((road) => {
+      if (road.id === 0) {
+        return { ...road, length: road0Length };
+      }
+      return road.id === 4 || road.id === 5 ? { ...road, capacity: 3 } : { ...road };
+    }),
     { id: 8, from: 0, to: 4, length: 100, lanes: 1, speedLimit: 10, capacity: 4, kind: "local", closed: false },
     { id: 9, from: 4, to: 3, length: 100, lanes: 1, speedLimit: 10, capacity: 4, kind: "local", closed: false },
   ];
@@ -287,7 +296,10 @@ describe("closure-triggered rerouting", () => {
 
   it("uses occupancy-aware A* for the replacement route", () => {
     const make = (withParkers: boolean) => {
-      const city = extendedRouteCity();
+      // Long road 0 (100 m): the vehicle is still 70 m into it when the
+      // closure lands at 7 s, by which time road 2's three parkers have built
+      // its authoritative factor.
+      const city = extendedRouteCity(100);
       const spawns: ScheduledSpawn[] = [{ timeMs: 0, type: CAR, origin: 0, destination: 3 }];
       if (withParkers) {
         // Three cars park on road 2 (origin 0 -> destination 2), loading it.
@@ -301,17 +313,20 @@ describe("closure-triggered rerouting", () => {
         spawns,
         incidents: {
           seed: 1,
-          script: [{ atMs: 1_000, kind: "close-road", targetRoadId: 4, durationMs: 60_000 }],
+          script: [{ atMs: 7_000, kind: "close-road", targetRoadId: 4, durationMs: 60_000 }],
         },
       });
     };
     // Control: B (16) beats C (20) -> the moving vehicle reroutes through B.
     const clear = make(false);
-    runEngine(clear, 1_100);
+    runEngine(clear, 7_100);
     expect(clear.traffic.vehicles[0].route).toEqual([0, 1, 2, 6]);
-    // Loaded road 2: B costs 8 * (1 + 0.75) + 8 + 5 = 27 > C 25 -> path C wins.
+    // Loaded road 2: after 7 s of three-car load the authoritative factor has
+    // fallen to ~0.60 (3 of 4 units, build tau 5 s), so B's tail costs
+    // 5 + 8/0.60 + 8 ≈ 26.3 > C's 25 -> path C wins. Occupancy reaches the
+    // router ONLY through the same factor that slows vehicles and paints roads.
     const loaded = make(true);
-    runEngine(loaded, 1_100);
+    runEngine(loaded, 7_100);
     expect(loaded.traffic.vehicles[0].route).toEqual([0, 1, 8, 9]);
   });
 
@@ -348,7 +363,9 @@ describe("closure-triggered rerouting", () => {
   });
 
   it("reroutes a queued vehicle without moving it off its road", () => {
-    const city = extendedRouteCity();
+    // Road 0 is short (20 m) so the car has already braked and queued at the
+    // line (tick 30 = 20 + 10, derived) while the truck still holds road 4.
+    const city = extendedRouteCity(20);
     const spawns: ScheduledSpawn[] = [
       { timeMs: 0, type: "truck", origin: 1, destination: 3 }, // parks on road 4 (2.0 of 3)
       { timeMs: 0, type: CAR, origin: 0, destination: 3 }, // route A; queued at road 0's end
@@ -365,7 +382,7 @@ describe("closure-triggered rerouting", () => {
     runEngine(engine, 5_400);
     const vehicle = engine.traffic.vehicles[1];
     expect(vehicle.state).toBe("queued"); // blocked by the truck's road (2 + 1 > 2.7)
-    expect(vehicle.queuedSinceMs).toBe(5_000);
+    expect(vehicle.queuedSinceMs).toBe(3_000);
     expect(vehicle.route).toEqual([0, 4]);
     runEngine(engine, 5_600); // closure lands while queued; reroute + release
     expect(vehicle.route).toEqual([0, 1, 2, 6]); // rerouted, same physical place

@@ -16,11 +16,16 @@ import { makeStreet } from "./traffic-support";
  * - the curated trip's car runs 0 -> 2 (roads 0 and 1)
  * - a background car runs 2 -> 3 and never touches the ego's route
  * - signals at intersection 1 (on the route) and 3 (off it)
+ *
+ * Road 1's capacity defaults to 8 (the local-kind default): a lone ego car on
+ * a 10 m road then sits at 1/8 occupancy — below the free-flow threshold — so
+ * its progress is the pure speed law. The sparsity test passes 2 explicitly to
+ * pin the spillback headroom it needs for a queue.
  */
-function fixture(spawns?: ScheduledSpawn[]) {
+function fixture(options: { road1Capacity?: number } = {}) {
   const { city } = makeStreet([
     { length: 2, speedLimit: 10, capacity: 4 },
-    { length: 10, speedLimit: 10, capacity: 2 },
+    { length: 10, speedLimit: 10, capacity: options.road1Capacity ?? 8 },
     { length: 10, speedLimit: 10, capacity: 2 },
   ]);
   city.intersections[1].control = "signal";
@@ -30,7 +35,7 @@ function fixture(spawns?: ScheduledSpawn[]) {
   return {
     city,
     ego,
-    spawns: spawns ?? [ego, background],
+    spawns: [ego, background],
   };
 }
 
@@ -65,7 +70,9 @@ describe("presentation snapshots", () => {
   });
 
   it("aggregates road traffic sparsely, with queue counts that match the engine", () => {
-    const { city } = fixture();
+    // Road 1 back at capacity 2 (one car aboard blocks the next) so the tail
+    // genuinely queues at road 0's end.
+    const { city } = fixture({ road1Capacity: 2 });
     // Four cars on the same 0 -> 2 trip: the tail queues at road 0's end.
     const run = createEngine({
       city,

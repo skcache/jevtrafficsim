@@ -88,27 +88,28 @@ describe("approach-arrival events", () => {
 
   it("counts a vehicle that has to queue once, never its retries", () => {
     // North approach (road 2) is red first under the default timing: the car
-    // reaches the end, queues for ~34 s, then crosses on green. Retries inside
-    // the queue phase must not report new arrivals, and the exit road must not
-    // count either (its end is the final trip arrival).
+    // brakes to the line (30 m arm, tick 40 = 30 + 10), queues for ~30 s
+    // (group-1 green at tick 340), then crosses. Retries inside the queue
+    // phase must not report new arrivals, and the exit road must not count
+    // either (its end is the final trip arrival).
     const { city } = makeCrossroads({
       control: "signal",
       arms: [
-        { angleDeg: 0, length: 2 },
-        { angleDeg: 90, length: 2 },
+        { angleDeg: 0, length: 30 },
+        { angleDeg: 90, length: 30 },
       ],
     });
     const engine = engineFor(city, [{ timeMs: 0, type: "car", origin: 3, destination: 4 }]);
-    runEngine(engine, 2_000);
+    runEngine(engine, 4_000);
     expect(engine.traffic.vehicles[0].state).toBe("queued");
     expect(engine.arrivals.counts.get(2)).toBe(1);
-    runEngine(engine, 4_900); // ~47 more queued retries, still inside the window
+    runEngine(engine, 4_900); // ~9 more queued retries, still inside the window
     expect(engine.traffic.vehicles[0].state).toBe("queued");
     expect(engine.arrivals.counts.get(2)).toBe(1); // retries never recount
-    runEngine(engine, 41_000); // released at ~34.1 s, crosses, finishes
+    runEngine(engine, 41_000); // released at 34 s, crosses, finishes
     expect(engine.traffic.vehicles[0].state).toBe("arrived");
     // Exactly one arrival was ever reported — and the exit road never counts.
-    expect(engine.arrivals.events).toEqual([{ timeMs: 200, roadId: 2 }]);
+    expect(engine.arrivals.events).toEqual([{ timeMs: 4_000, roadId: 2 }]);
     expect(engine.arrivals.counts.size).toBe(0);
   });
 
@@ -181,19 +182,20 @@ describe("approach-arrival events", () => {
 
 describe("approach observations", () => {
   it("carries queue, continuous wait, rate, occupancy and downstream ratio", () => {
-    // Short north approach so the car queues at 2 ticks; long north exit so a
-    // parked car holds its occupancy for the whole observation.
-    const city = signalCity({ eastApproach: 4, eastExit: 4, northApproach: 2, northExit: 100 });
+    // North approach long enough to brake to the line (30 m at 10 m/s: queues
+    // at tick 40) and a long north exit so a parked car holds its occupancy
+    // for the whole observation; observed mid-wait at 5 s.
+    const city = signalCity({ eastApproach: 4, eastExit: 4, northApproach: 30, northExit: 100 });
     const engine = engineFor(city, [
       { timeMs: 0, type: "car", origin: 3, destination: 4 }, // north approach -> north exit (queues)
       { timeMs: 0, type: "car", origin: 0, destination: 4 }, // parks on exit road 3
     ]);
-    runEngine(engine, 2_000);
+    runEngine(engine, 5_000);
     const frame = buildObservationFrame(city, engine.traffic, engine.arrivals);
     const observation = frame.approaches.get(2);
     expect(observation).toBeDefined();
     expect(observation?.queuedVehicles).toBe(1);
-    expect(observation?.maxWaitMs).toBe(1_800); // continuous: queued since t=200
+    expect(observation?.maxWaitMs).toBe(1_000); // continuous: queued since t=4000
     expect(observation?.arrivalRatePerSecond).toBeCloseTo(0.2, 12);
     expect(observation?.approachOccupancyRatio).toBeCloseTo(0.25, 12);
     expect(observation?.downstreamOccupancyRatio).toBeCloseTo(0.25, 12); // exit road 3: 1 of 4
@@ -203,7 +205,7 @@ describe("approach observations", () => {
     const intersection = frame.intersections.get(0);
     expect(intersection?.phaseCount).toBe(2);
     expect(intersection?.phases[1].queuedVehicles).toBe(1);
-    expect(intersection?.phases[1].maxWaitMs).toBe(1_800);
+    expect(intersection?.phases[1].maxWaitMs).toBe(1_000);
     expect(intersection?.phases[1].downstreamOccupancyRatio).toBeCloseTo(0.25, 12);
     expect(intersection?.phases[0].queuedVehicles).toBe(0);
     expect(intersection?.phases[0].maxWaitMs).toBe(0);

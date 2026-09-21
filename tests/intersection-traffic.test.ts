@@ -20,13 +20,18 @@ const FAST_TIMING: SignalTiming = {
 };
 
 function signalCity() {
+  // Arms are 30 m — more than twice the 13.89 m braking distance at 10 m/s —
+  // so a car reaching a red light genuinely brakes to the line. With the FAST
+  // timing cycle (green 10 ticks, yellow 2, all-red 1 per group = 26 ticks),
+  // the arm-1 car queues at tick 32 (tool/model-timing.py derivation) and the
+  // next group-1 green starts at tick 39.
   return makeCrossroads({
     control: "signal",
     arms: [
-      { angleDeg: 0, length: 2 },
-      { angleDeg: 90, length: 2 },
-      { angleDeg: 180, length: 2 },
-      { angleDeg: 270, length: 2 },
+      { angleDeg: 0, length: 30 },
+      { angleDeg: 90, length: 30 },
+      { angleDeg: 180, length: 30 },
+      { angleDeg: 270, length: 30 },
     ],
   });
 }
@@ -59,27 +64,27 @@ describe("signalized intersection traffic", () => {
     const exit = exitRoadIds[1];
     spawn(city, state, 0, [approach, exit], 3, 4);
 
-    stepChecked(city, state, 2); // reaches the road end; group 1 is red
+    stepChecked(city, state, 32); // reaches the road end; group 1 is red
     const vehicle = state.vehicles[0];
     expect(vehicle.state).toBe("queued");
     expect(vehicle.roadId).toBe(approach);
     expect(roadOccupancy(state, approach)).toBe(1);
-    expect(vehicle.waitTimeMs).toBe(1 * DT); // blocked at end of tick 2
+    expect(vehicle.waitTimeMs).toBe(1 * DT); // blocked at end of tick 32
 
-    stepChecked(city, state, 10); // through tick 12 (yellow tick 10-11, all-red tick 12)
+    stepChecked(city, state, 6); // through tick 38 (cycle: green 26-35, yellow 36-37, all-red 38)
     expect(vehicle.state).toBe("queued");
-    expect(vehicle.waitTimeMs).toBe(11 * DT); // ticks 2..12 blocked
+    expect(vehicle.waitTimeMs).toBe(7 * DT); // ticks 32..38 blocked
 
-    stepChecked(city, state, 1); // tick 13: group 1 green — released with empty downstream
+    stepChecked(city, state, 1); // tick 39: group 1 green — released with empty downstream
     expect(vehicle.state).toBe("moving");
     expect(vehicle.roadId).toBe(exit);
     expect(roadOccupancy(state, approach)).toBe(0);
     expect(roadOccupancy(state, exit)).toBe(1);
-    expect(vehicle.waitTimeMs).toBe(11 * DT); // release tick never waits
+    expect(vehicle.waitTimeMs).toBe(7 * DT); // release tick never waits
 
-    stepChecked(city, state, 1); // tick 14: reaches the exit end and arrives
+    stepChecked(city, state, 32); // tick 71: reaches the exit end and arrives
     expect(vehicle.state).toBe("arrived");
-    expect(vehicle.tripTimeMs).toBe(14 * DT);
+    expect(vehicle.tripTimeMs).toBe(71 * DT);
   });
 
   it("keeps a green approach blocked while the downstream road is full", () => {
@@ -97,16 +102,18 @@ describe("signalized intersection traffic", () => {
     spawn(edited, state, 0, [approach, exit], 3, 4);
     spawn(edited, state, 1, [approach, exit], 3, 4);
 
-    stepChecked(edited, state, 12); // both queued through red
-    stepChecked(edited, state, 1); // tick 13: green, but one car aboard blocks the next (1 + 1 > 0.9 * 2)
+    stepChecked(edited, state, 34); // both braked and queued through red (cap 4 couples density: 34, not 32)
+    stepChecked(edited, state, 4); // through tick 38
+    stepChecked(edited, state, 1); // tick 39: green, but one car aboard blocks the next (1 + 1 > 0.9 * 2)
     expect(state.vehicles[0].state).toBe("moving");
     expect(state.vehicles[0].roadId).toBe(exit);
     expect(state.vehicles[1].state).toBe("queued"); // green && downstream full => blocked
 
-    stepChecked(edited, state, 2); // tick 14: A arrives; tick 15: capacity visible, B released
+    stepChecked(edited, state, 35); // tick 74: A arrives on the 30 m exit; capacity visible next tick
     expect(state.vehicles[0].state).toBe("arrived");
+    stepChecked(edited, state, 17); // ticks 75..91: green1 [65..74] is over, B goes on the next group-1 green
     expect(state.vehicles[1].state).toBe("moving");
-    expect(state.vehicles[1].waitTimeMs).toBe(13 * DT);
+    expect(state.vehicles[1].waitTimeMs).toBe(57 * DT);
   });
 
   it("is deterministic across identical runs including signal state", () => {

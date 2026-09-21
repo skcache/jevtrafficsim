@@ -39,8 +39,10 @@ describe("metric math", () => {
 
 describe("metrics accumulation", () => {
   it("samples congestion, occupancy and arrivals over ticks", () => {
-    // One car driving into a closed next road: moving for 9 ticks, then queued.
-    const { city } = makeStreet([{ length: 10 }, { length: 10 }]);
+    // One car driving into a closed next road: it cruises the 30 m approach,
+    // brakes and queues AT the line on tick 40 (30 + 10, derived), so it is
+    // moving for ticks 1..39 and blocked for ticks 40..50 (11 samples).
+    const { city } = makeStreet([{ length: 30 }, { length: 10 }]);
     const blockedCity = withClosedRoads(city, [1]);
     const state = createTrafficState();
     const metrics = createMetricsAccumulator();
@@ -51,18 +53,18 @@ describe("metrics accumulation", () => {
       destination: 2,
       route: [0, 1],
     });
-    for (let tick = 0; tick < 20; tick += 1) {
+    for (let tick = 0; tick < 50; tick += 1) {
       stepTraffic(blockedCity, state);
       recordTick(metrics, blockedCity, state, DT);
     }
     const vehicle = state.vehicles[0];
     expect(vehicle.state).toBe("queued");
     const result = computeMetrics(metrics, state);
-    // Vehicle-time weighting: active 20 ticks * 1 = 2000ms; blocked 11 ticks
-    // * 1 = 1100ms -> 1100/2000 (same value as the old mean here because the
+    // Vehicle-time weighting: active 50 ticks * 1 = 5000ms; blocked 11 ticks
+    // * 1 = 1100ms -> 1100/5000 (same value as the old mean here because the
     // active count is constant; the weighting test below shows the difference).
-    expect(result.gridlockRatio).toBeCloseTo(11 / 20, 12);
-    expect(result.averageRoadOccupancy).toBeCloseTo(20 / 20 / 2, 12); // 1 unit on road 0, 2 roads
+    expect(result.gridlockRatio).toBeCloseTo(11 / 50, 12);
+    expect(result.averageRoadOccupancy).toBeCloseTo(50 / 50 / 2, 12); // 1 unit on road 0, 2 roads
     expect(result.maxRoadOccupancy).toBe(1);
     expect(result.completedTrips).toBe(0);
     expect(result.averageTripTimeMs).toBe(0);
@@ -116,13 +118,14 @@ describe("metrics accumulation", () => {
   });
 
   it("weights gridlock by vehicle time, not by averaging per-tick ratios", () => {
-    // Phase 1 (ticks 1..10): only the stuck car exists -> 1 active, blocked
-    // from tick 6. Phase 2 (ticks 11..20): 100 movers join -> 101 active,
-    // still 1 blocked. Vehicle-time ratio = blockedMs / activeMs.
+    // Phase 1 (ticks 1..45): only the stuck car exists -> 1 active, blocked
+    // from tick 40 (its 30 m approach brakes to the closed exit at 30 + 10).
+    // Phase 2 (ticks 46..55): 100 movers join -> 101 active, still 1 blocked.
+    // Vehicle-time ratio = blockedMs / activeMs.
     const { city, approachRoadIds, exitRoadIds } = makeCrossroads({
       control: "uncontrolled",
       arms: [
-        { angleDeg: 0, length: 6, capacity: 500 },
+        { angleDeg: 0, length: 30, capacity: 500 },
         { angleDeg: 180, length: 10_000, capacity: 500 },
       ],
     });
@@ -131,7 +134,7 @@ describe("metrics accumulation", () => {
     const metrics = createMetricsAccumulator();
     // Stuck car: enters via arm 0 and queues at the closed arm-0 exit.
     spawnVehicle(blocked, state, { id: 0, type: "car", origin: 1, destination: 2, route: [approachRoadIds[0], exitRoadIds[0]] });
-    for (let tick = 0; tick < 10; tick += 1) {
+    for (let tick = 0; tick < 45; tick += 1) {
       stepTraffic(blocked, state);
       recordTick(metrics, blocked, state, DT);
     }
@@ -145,8 +148,9 @@ describe("metrics accumulation", () => {
       recordTick(metrics, blocked, state, DT);
     }
     const result = computeMetrics(metrics, state);
-    // activeMs = 10*1*100 + 10*101*100 = 102000; blockedMs = 15*1*100 = 1500.
-    expect(result.gridlockRatio).toBeCloseTo(1500 / 102_000, 12);
+    // activeMs = 45*1*100 + 10*101*100 = 105500; blockedMs = 16*1*100 = 1600
+    // (queued on tick 40, sampled through tick 55).
+    expect(result.gridlockRatio).toBeCloseTo(1600 / 105_500, 12);
     // Mean-of-per-tick-ratios would give ~0.255 — the vehicle-time definition
     // must NOT produce that.
     expect(result.gridlockRatio).toBeLessThan(0.05);

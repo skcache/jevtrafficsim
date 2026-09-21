@@ -80,7 +80,9 @@ describe("simulation engine", () => {
   });
 
   it("processes scheduled spawns at the start of their tick", () => {
-    const { city } = makeStreet([{ length: 100 }]);
+    // Capacity 8 (local default) keeps three cars below the free-flow
+    // occupancy threshold, so the scheduling assertions stay exact.
+    const { city } = makeStreet([{ length: 100, capacity: 8 }]);
     const engine = createEngine({
       city,
       controller: createFixedController(),
@@ -151,9 +153,12 @@ describe("simulation engine", () => {
   it("routes scheduled spawns with live occupancy (congestion-aware initial routing)", () => {
     // Path A (free-flow 3.0s): rA1 (len 20, cap 2) + rA2 (len 10).
     // Path B (free-flow 3.6s): rB1 (len 20) + rB2 (len 16).
-    // Node 1 is signalized: rA1's approach group is red first, so X parks on
-    // rA1 and its live occupancy (1 of 2 units) makes path A cost
-    // 2.0 * (1 + 0.5) + 1.0 = 4.0s — B becomes cheaper.
+    // Node 1 is signalized: rA1's approach group is red first, so X brakes and
+    // queues on rA1 at t=3.0s. The authoritative traffic state turns that into
+    // a speed factor (occupancy 1 of 2, queue pressure, growing continuous
+    // wait): by t=12s the factor has built to ~0.38 (build tau 5s), so path A
+    // costs 20/(10*0.38) + 10/10 ~= 6.2s — B becomes cheaper. Occupancy reaches
+    // the router ONLY through that same factor.
     // Geometry must stay coherent (every road.length >= euclidean endpoint
     // distance) or the admissible heuristic loses admissibility.
     const nodes: Intersection[] = [
@@ -188,10 +193,10 @@ describe("simulation engine", () => {
       controller: createFixedController(),
       spawns: [
         { timeMs: 0, type: "car", origin: 0, destination: 3 },
-        { timeMs: 4_000, type: "car", origin: 0, destination: 3 },
+        { timeMs: 12_000, type: "car", origin: 0, destination: 3 },
       ],
     });
-    runEngine(engine, 4_100);
+    runEngine(engine, 12_100);
     const [first, second] = engine.traffic.vehicles;
     // X picked the free-flow winner and is now queued at the red signal,
     // loading rA1's occupancy (1 of 2 units).
@@ -199,7 +204,7 @@ describe("simulation engine", () => {
     expect(first.state).toBe("queued");
     expect(first.roadId).toBe(0);
     expect(engine.traffic.occupancy.get(0)).toBe(1);
-    // Y (spawned at 4000ms) saw live occupancy and chose path B instead.
+    // Y (spawned at 12000ms) saw the built-up factor and chose path B instead.
     expect(second.route).toEqual([2, 3]);
     // Without occupancy the router still prefers path A — the engine really
     // supplied the live map.
