@@ -34,6 +34,7 @@
 import { findRoute } from "./astar";
 import { TRAFFIC_LEVEL_TARGETS, TRAFFIC_LEVEL_TYPE_MIX } from "./config";
 import { createRng, type Rng } from "./rng";
+import { DEMAND_SHAPES, SHAPE_TOURNAMENT, demandShape, shapeContext, type DemandShapeName } from "./demand-shape";
 import type { ScheduledSpawn } from "./engine";
 import type { City, TrafficLevel, VehicleType } from "./types";
 
@@ -44,6 +45,19 @@ export interface DemandOptions {
   readonly seed: number;
   /** Demand horizon in simulated milliseconds. */
   readonly durationMs: number;
+  /**
+   * Volume multiplier on the level's active-vehicle target (default 1). Scaling
+   * the target shortens the spawn interval, so a larger multiplier is a strict
+   * SUPERSET of the smaller one's schedule: the same vehicles in the same order,
+   * with more of them. That makes calibration sweeps comparable at the sample
+   * level rather than only in aggregate.
+   */
+  readonly multiplier?: number;
+  /**
+   * Deterministic OD shape (default "uniform", which is the original single-draw
+   * path byte for byte). See sim/demand-shape.ts for what each shape stresses.
+   */
+  readonly shape?: DemandShapeName;
 }
 
 /** OD pairs sampled to estimate the average trip duration (free-flow). */
@@ -92,6 +106,14 @@ function pickType(rng: Rng, level: TrafficLevel): VehicleType {
 /** Builds the full deterministic spawn schedule for a run. */
 export function generateDemand(options: DemandOptions): ScheduledSpawn[] {
   const { city, level, seed, durationMs } = options;
+  const multiplier = options.multiplier ?? 1;
+  const shapeName = options.shape ?? "uniform";
+  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+    throw new RangeError(`multiplier must be finite and positive, received ${String(multiplier)}`);
+  }
+  if (!DEMAND_SHAPES.includes(shapeName)) {
+    throw new RangeError(`unknown demand shape "${String(shapeName)}"`);
+  }
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     throw new RangeError(`durationMs must be finite and positive, received ${durationMs}`);
   }
@@ -103,17 +125,41 @@ export function generateDemand(options: DemandOptions): ScheduledSpawn[] {
   const odRng = trafficRng.fork("od");
   const classRng = trafficRng.fork("classes");
   const targets = TRAFFIC_LEVEL_TARGETS[city.size][level];
-  const targetActive = Math.round((targets.min + targets.max) / 2);
+  const baseTarget = (targets.min + targets.max) / 2;
+  const targetActive = Math.max(1, Math.round(baseTarget * multiplier));
   const estimatedTripMs = estimateAverageTripMs(city, calibrationRng);
   // Raw interval: dense (rush, large) demand may schedule several vehicles
   // per 100 ms tick; the engine snaps each spawn forward to its tick.
   const intervalMs = Math.max(1, Math.round(estimatedTripMs / targetActive));
   const count = city.intersections.length;
+  const shape = shapeName === "uniform" ? null : demandShape(shapeName);
+  const context = shape === null ? null : shapeContext(city);
   const spawns: ScheduledSpawn[] = [];
   for (let timeMs = 0; timeMs < durationMs; timeMs += intervalMs) {
     const type = pickType(classRng, level);
-    const origin = odRng.nextInt(0, count - 1);
-    let destination = odRng.nextInt(0, count - 1);
+    let origin: number;
+    let destination: number;
+    if (shape === null || context === null) {
+      origin = odRng.nextInt(0, count - 1);
+      destination = odRng.nextInt(0, count - 1);
+    } else {
+      // Weighted tournament: a fixed number of candidates per spawn, heaviest
+      // wins, ties broken by draw order. Constant draws, no rejection loop, and
+      // entirely determined by the `od` stream.
+      origin = odRng.nextInt(0, count - 1);
+      destination = odRng.nextInt(0, count - 1);
+      let best = shape.weight(origin, destination, context);
+      for (let candidate = 1; candidate < SHAPE_TOURNAMENT; candidate += 1) {
+        const nextOrigin = odRng.nextInt(0, count - 1);
+        const nextDestination = odRng.nextInt(0, count - 1);
+        const weight = shape.weight(nextOrigin, nextDestination, context);
+        if (weight > best) {
+          best = weight;
+          origin = nextOrigin;
+          destination = nextDestination;
+        }
+      }
+    }
     while (destination === origin) {
       destination = odRng.nextInt(0, count - 1);
     }
