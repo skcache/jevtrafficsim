@@ -18,6 +18,7 @@ import {
   STOP_LINE_CLEARANCE_M,
   VEHICLE_LENGTH_M,
   stopLineSetbackMetres,
+  vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
@@ -180,8 +181,11 @@ describe("turn interpolation", () => {
     )[0];
     // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
     expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    // Lane offset tapers into the shared junction node, so the path stays continuous.
-    expect(beforeJunction.y).toBeCloseTo(-0.53125, 6);
+    // Lane offset tapers into the shared junction node, so the path stays
+    // continuous. The side of the carriageway comes from the authoritative lane
+    // assignment for this vehicle, not a hardcoded sign.
+    const laneOffset = vehicleLaneOffsetMetres(city, laneOffsets, 7, 0);
+    expect(beforeJunction.y).toBeCloseTo(-laneOffset * (2.5 / 8), 6);
     // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
     const pastJunction = interpolateVehicles(
       indexes,

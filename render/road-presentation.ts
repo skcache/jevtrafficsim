@@ -192,18 +192,61 @@ export function laneCentreOffsetMetres(
 }
 
 /**
- * Deterministic presentation-only lane assignment: the same vehicle keeps the
- * same lane on the same road, and different vehicles spread across the lanes
- * the road actually has. Simulation truth is untouched — this only decides where
- * on the carriageway the glyph is painted.
+ * Lane identity key for a directed road: the physical corridor it belongs to,
+ * falling back to the road itself when no corridor claims it.
+ *
+ * Lane slots MUST be keyed on this, never on the directed road id: the
+ * importer splits a street into one road per junction, so a road-id key
+ * re-rolled the slot at every split. Measured on the live map, the ego holding
+ * I-290 drifted -3.4 m -> +1.7 m -> 0 m -> -5.1 m across four consecutive
+ * segments of the same expressway — a car weaving across a 4-lane carriageway
+ * at every interchange. Corridors are the importer's own street-level
+ * grouping, so one physical road has one key.
  */
-export function laneSlotFor(vehicleId: number, roadId: number, lanes: number): number {
+export function laneKeyFor(city: City, roadId: number): number {
+  return laneKeysFor(city)[roadId] ?? roadId;
+}
+
+const laneKeyCache = new WeakMap<City, readonly number[]>();
+
+function laneKeysFor(city: City): readonly number[] {
+  const cached = laneKeyCache.get(city);
+  if (cached) {
+    return cached;
+  }
+  const keys = city.roads.map((road) => road.id);
+  for (const corridor of city.corridors) {
+    for (const roadId of corridor.roadIds) {
+      if (roadId >= 0 && roadId < keys.length) {
+        keys[roadId] = corridor.id;
+      }
+    }
+  }
+  laneKeyCache.set(city, keys);
+  return keys;
+}
+
+/** Hash modulus for the stable lane mix (2^32, exact in a double). */
+const LANE_HASH_MODULUS = 4294967296;
+
+/**
+ * Deterministic presentation-only lane assignment: the same vehicle keeps the
+ * same lane along one physical road (`laneKeyFor`), and different vehicles
+ * spread across the lanes that road actually has. Simulation truth is
+ * untouched — this only decides where on the carriageway the glyph is painted.
+ */
+export function laneSlotFor(vehicleId: number, laneKey: number, lanes: number): number {
   if (lanes <= 1) {
     return 0;
   }
-  // A cheap stable mix: consecutive ids land on different lanes on one road
-  // while staying spread within the road's own lane count.
-  return Math.abs((vehicleId * 2654435761 + roadId * 40503) % lanes);
+  // A cheap stable mix, then read it as a lane PREFERENCE in [0, 1) and map it
+  // onto the lanes this segment has. A preference (rather than a slot index)
+  // keeps the vehicle on the same side of the carriageway when the lane count
+  // changes at a merge or a split: index-modulo would send the same car from
+  // the rightmost lane to the leftmost across one junction.
+  const hashed = Math.abs((vehicleId * 2654435761 + laneKey * 40503) % LANE_HASH_MODULUS);
+  const preference = hashed / LANE_HASH_MODULUS;
+  return Math.min(lanes - 1, Math.floor(preference * lanes));
 }
 
 /**
@@ -212,6 +255,8 @@ export function laneSlotFor(vehicleId: number, roadId: number, lanes: number): n
  * `baseOffsets` contains the centre of the direction's lane group. This helper
  * adds the per-vehicle lane slot inside that group so interpolation, signal
  * clamping and queue packing cannot disagree about which lane a vehicle uses.
+ * The slot is keyed on the road's CORRIDOR (`laneKeyFor`), so the vehicle holds
+ * one lane along a physical road instead of re-rolling it at every junction.
  */
 export function vehicleLaneOffsetMetres(
   city: City,
@@ -221,7 +266,7 @@ export function vehicleLaneOffsetMetres(
 ): number {
   const road = city.roads[roadId];
   const lanes = Math.max(1, road?.lanes ?? 1);
-  const slot = laneSlotFor(vehicleId, roadId, lanes);
+  const slot = laneSlotFor(vehicleId, laneKeyFor(city, roadId), lanes);
   const withinGroup = (slot - (lanes - 1) / 2) * LANE_WIDTH_M;
   return (baseOffsets[roadId] ?? 0) + withinGroup;
 }

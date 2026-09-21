@@ -31,6 +31,7 @@ import {
   STOP_LINE_CLEARANCE_M,
   VEHICLE_LENGTH_M,
   laneSlotFor,
+  laneKeyFor,
   stopLineSetbackMetres,
   vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
@@ -160,12 +161,14 @@ export function packQueues(
       continue;
     }
 
-    // Pack each physical lane independently. Stable id-based lane slots prevent
-    // queue churn from throwing vehicles laterally whenever the front departs.
+    // Pack each physical lane independently. Stable corridor-keyed lane slots
+    // prevent queue churn from throwing vehicles laterally whenever the front
+    // departs, and keep one vehicle in one lane along a whole physical road.
     const laneCount = Math.max(1, road.lanes);
+    const laneKey = laneKeyFor(city, roadId);
     const byLane = new Map<number, RenderedVehicle[]>();
     for (const vehicle of [...queue].sort((a, b) => a.queueRank - b.queueRank || a.id - b.id)) {
-      const slot = laneSlotFor(vehicle.id, roadId, laneCount);
+      const slot = laneSlotFor(vehicle.id, laneKey, laneCount);
       const lane = byLane.get(slot) ?? [];
       lane.push(vehicle);
       byLane.set(slot, lane);
