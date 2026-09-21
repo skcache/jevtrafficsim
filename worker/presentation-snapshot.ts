@@ -21,6 +21,7 @@
  * Deterministic for identical engine state.
  */
 import type { EngineState } from "@/sim/engine";
+import { roadSpeedFactor, severityForFactor } from "@/sim/road-traffic";
 import { currentQueueWaitMs } from "@/sim/approach-stats";
 import { computeMetrics, type SimulationMetrics } from "@/sim/metrics";
 import type { SignalStage } from "@/sim/signals";
@@ -44,6 +45,13 @@ export interface PresentationRoadTraffic {
    * versus a wait field on every vehicle object.
    */
   readonly maxBlockedWaitMs: number;
+  /**
+   * Authoritative flow state from the simulation (sim/road-traffic): the road's
+   * current speed factor and the severity derived from it. Presentation reads
+   * these instead of re-deriving congestion from occupancy.
+   */
+  readonly speedFactor: number;
+  readonly severity: "free" | "slower" | "severe";
 }
 
 /**
@@ -199,14 +207,23 @@ export function aggregateRoadTraffic(engine: EngineState): PresentationRoadTraff
   }
   return [...roadIds]
     .sort((a, b) => a - b)
-    .map((roadId) => ({
-      roadId,
-      occupancy: engine.traffic.occupancy.get(roadId) ?? 0,
-      capacity: engine.city.roads[roadId]?.capacity ?? 0,
-      vehicleCount: vehicleCounts.get(roadId) ?? 0,
-      queuedCount: queuedCounts.get(roadId) ?? 0,
-      maxBlockedWaitMs: maxWaits.get(roadId) ?? 0,
-    }));
+    .map((roadId) => {
+      const factor = roadSpeedFactor(engine.traffic.roadTraffic, roadId);
+      return {
+        roadId,
+        occupancy: engine.traffic.occupancy.get(roadId) ?? 0,
+        capacity: engine.city.roads[roadId]?.capacity ?? 0,
+        vehicleCount: vehicleCounts.get(roadId) ?? 0,
+        queuedCount: queuedCounts.get(roadId) ?? 0,
+        maxBlockedWaitMs: maxWaits.get(roadId) ?? 0,
+        // The simulation's own flow state: how fast traffic actually moves on
+        // this road right now, and the severity that follows from it. Every
+        // consumer paints from these two fields, so colours cannot disagree
+        // with the physics they describe.
+        speedFactor: factor,
+        severity: severityForFactor(factor),
+      };
+    });
 }
 
 /** Intersections the ego still has to pass: the remaining route's endpoints. */

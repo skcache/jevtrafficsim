@@ -11,7 +11,10 @@
  * The classification is a pure function of the snapshot so it is deterministic
  * and testable; the caller turns it into a deck.gl layer.
  */
-import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
+import type {
+  PresentationRoadTraffic,
+  PresentationSnapshot,
+} from "@/worker/presentation-snapshot";
 
 export type CongestionLevel = "warm" | "bad" | "severe";
 
@@ -28,21 +31,6 @@ export interface RoadPressure {
   readonly occupancyRatio: number;
 }
 
-/**
- * Whole-city traffic layer thresholds. Occupancy matters as much as a queue:
- * otherwise moving but dense traffic disappears and the map falsely looks
- * empty until cars physically stop.
- */
-const LEVELS: readonly {
-  level: CongestionLevel;
-  minQueued: number;
-  minWaitMs: number;
-  minOccupancyRatio: number;
-}[] = [
-  { level: "severe", minQueued: 4, minWaitMs: 25_000, minOccupancyRatio: 0.92 },
-  { level: "bad", minQueued: 2, minWaitMs: 12_000, minOccupancyRatio: 0.72 },
-  { level: "warm", minQueued: 1, minWaitMs: 5_000, minOccupancyRatio: 0.46 },
-];
 
 /**
  * City traffic-mode colours: amber means traffic, red means heavy/blocked.
@@ -58,24 +46,19 @@ export const CONGESTION_COLORS: Record<
   severe: [178, 52, 40, 190],
 };
 
-function levelFor(
-  active: number,
-  queued: number,
-  maxBlockedWaitMs: number,
-  occupancyRatio: number,
-): CongestionLevel | null {
-  for (const rule of LEVELS) {
-    if (
-      queued >= rule.minQueued ||
-      maxBlockedWaitMs >= rule.minWaitMs ||
-      occupancyRatio >= rule.minOccupancyRatio
-    ) {
-      return rule.level;
-    }
+/**
+ * Level for a road, from the SIMULATION'S flow state. This used to be a second
+ * threshold table over occupancy/queue/wait; it now reads the same severity the
+ * physics uses, so the overlay cannot paint a road amber that cars cross at
+ * free-flow speed. Free roads stay NEUTRAL (never painted).
+ */
+function levelFor(severity: PresentationRoadTraffic["severity"]): CongestionLevel | null {
+  if (severity === "severe") {
+    return "severe";
   }
-  // No rule matched: the road is free. It stays NEUTRAL — free roads are never
-  // painted, so the overlay only ever adds amber/red pressure on top of the map.
-  void active;
+  if (severity === "slower") {
+    return "warm";
+  }
   return null;
 }
 
@@ -92,7 +75,13 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
   // and the frame no longer carries background vehicle objects at all.
   const stats = new Map<
     number,
-    { active: number; queued: number; maxWait: number; occupancyRatio: number }
+    {
+      active: number;
+      queued: number;
+      maxWait: number;
+      occupancyRatio: number;
+      severity: PresentationRoadTraffic["severity"];
+    }
   >();
   for (const road of snapshot.roadTraffic) {
     stats.set(road.roadId, {
@@ -100,12 +89,13 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
       queued: road.queuedCount,
       maxWait: road.maxBlockedWaitMs,
       occupancyRatio: road.capacity > 0 ? road.occupancy / road.capacity : 0,
+      severity: road.severity,
     });
   }
 
   const pressure: RoadPressure[] = [];
   for (const [roadId, entry] of [...stats.entries()].sort((a, b) => a[0] - b[0])) {
-    const level = levelFor(entry.active, entry.queued, entry.maxWait, entry.occupancyRatio);
+    const level = levelFor(entry.severity);
     if (level === null) {
       continue;
     }

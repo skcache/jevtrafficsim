@@ -13,7 +13,6 @@ import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { metricToLngLat } from "@/cities/map-model";
 import {
   ROUTE_TRAFFIC_COLORS,
-  ROUTE_TRAFFIC_RULES,
   classifyRoadTraffic,
   classifySnapshotRoads,
 } from "@/render/route-traffic";
@@ -32,27 +31,26 @@ function road(partial: Partial<PresentationRoadTraffic>): PresentationRoadTraffi
     vehicleCount: 0,
     queuedCount: 0,
     maxBlockedWaitMs: 0,
+    // Free flow by default; tests that want pressure set the SIMULATION's
+    // severity, which is the only thing the classifier reads now.
+    speedFactor: 1,
+    severity: "free",
     ...partial,
   };
 }
 
 describe("route traffic classification", () => {
-  it("classifies by the stable quantities, never by controller or clock", () => {
+  it("reads the simulation's own flow state, never a second threshold table", () => {
+    // Absent from the sparse frame = free flow, same contract as the sim.
     expect(classifyRoadTraffic(undefined)).toBe("free");
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: 0 }))).toBe("free");
-    // Occupancy ratio crosses into slowdown, then congestion.
-    expect(classifyRoadTraffic(road({ occupancy: 6, capacity: 10 }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10 }))).toBe("congested");
-    // Queue depth alone is enough.
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: ROUTE_TRAFFIC_RULES.slowedQueued }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 1, queuedCount: ROUTE_TRAFFIC_RULES.congestedQueued }))).toBe("congested");
-    // Longest blocked wait alone is enough.
-    expect(classifyRoadTraffic(road({ occupancy: 0, maxBlockedWaitMs: ROUTE_TRAFFIC_RULES.slowedWaitMs }))).toBe("slowed");
-    expect(classifyRoadTraffic(road({ occupancy: 0, maxBlockedWaitMs: ROUTE_TRAFFIC_RULES.congestedWaitMs }))).toBe("congested");
-    // A closed road can never be free.
-    expect(classifyRoadTraffic(road({ occupancy: 0 }), true)).toBe("congested");
-    expect(classifyRoadTraffic(undefined, true)).toBe("congested");
+    // Severity is authoritative: occupancy numbers alone do not decide colour.
+    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10, severity: "free" }))).toBe("free");
+    expect(classifyRoadTraffic(road({ severity: "slower" }))).toBe("slowed");
+    expect(classifyRoadTraffic(road({ severity: "severe" }))).toBe("congested");
+    // A closed road can never read as free, whatever the flow state says.
+    expect(classifyRoadTraffic(road({ severity: "free" }), true)).toBe("congested");
   });
+
 
   it("gives absent sparse roads the free baseline", () => {
     const classes = classifySnapshotRoads({
@@ -60,7 +58,7 @@ describe("route traffic classification", () => {
       timeMs: 0,
       controller: "fixed",
       ego: null,
-      roadTraffic: [road({ roadId: 7, occupancy: 9, capacity: 10 })],
+      roadTraffic: [road({ roadId: 7, occupancy: 9, capacity: 10, severity: "severe" })],
       routeControls: [],
       trip: null,
       roadConditions: [],
@@ -72,7 +70,10 @@ describe("route traffic classification", () => {
   });
 
   it("is deterministic and keeps one colour per class", () => {
-    const entries = [road({ roadId: 1, occupancy: 5 }), road({ roadId: 2, queuedCount: 6 })];
+    const entries = [
+      road({ roadId: 1, occupancy: 5 }),
+      road({ roadId: 2, queuedCount: 6, severity: "severe" }),
+    ];
     const first = entries.map((entry) => classifyRoadTraffic(entry));
     const second = entries.map((entry) => classifyRoadTraffic(entry));
     expect(first).toEqual(second);

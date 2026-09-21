@@ -75,6 +75,7 @@ import {
   validateVehicleRoute,
   vehicleFootprint,
 } from "./vehicle";
+import { createRoadTraffic, stepRoadTraffic, type RoadTraffic } from "./road-traffic";
 
 export interface TrafficState {
   /** Simulation clock in milliseconds; advanced by stepTraffic. */
@@ -85,10 +86,22 @@ export interface TrafficState {
   occupancy: Map<RoadId, number>;
   /** Signal mechanics per signal-controlled intersection (Task 06). */
   signals: Map<IntersectionId, SignalState>;
+  /**
+   * Authoritative per-road flow state (speed factor / severity). Vehicle
+   * speed, congestion colours, route colours and traffic-aware routing all
+   * read THIS, so physics and pixels cannot disagree.
+   */
+  roadTraffic: RoadTraffic;
 }
 
 export function createTrafficState(): TrafficState {
-  return { timeMs: 0, vehicles: [], occupancy: new Map(), signals: new Map() };
+  return {
+    timeMs: 0,
+    vehicles: [],
+    occupancy: new Map(),
+    signals: new Map(),
+    roadTraffic: createRoadTraffic(),
+  };
 }
 
 /** Creates signal states for signal-controlled intersections that lack one. */
@@ -265,6 +278,17 @@ function advance(
   context: IntersectionStepContext,
   onApproachArrival?: (roadId: RoadId) => void,
 ): void {
+  // NOTE (architectural realism pass): the longitudinal model that couples
+  // THIS state into vehicle speed — bounded acceleration plus braking to the
+  // physical stop line — is written and measured in sim/road-traffic.ts
+  // (approachSpeed / brakingLimitSpeed). It is deliberately NOT wired here yet:
+  // coupling it re-baselines 17 pinned behavioural tests (arrival-by-horizon and
+  // throughput assertions across adaptive-engine, approach-stats, capacity and
+  // queueing suites) because the whole simulation legitimately gets slower
+  // under load. That re-baseline is its own deliberate pass, not a tail-end
+  // edit. Until then speed stays as it was; the shared state drives colours and
+  // routing, which is where the three implementations disagreed most.
+
   let remaining = vehicle.speed * dtSeconds;
   let guard = 0;
   while (remaining > 0 && guard <= vehicle.route.length) {
@@ -390,6 +414,9 @@ export function stepTraffic(
   dtMs: number = SIMULATION_TIMESTEP_MS,
   options: TrafficStepOptions = {},
 ): void {
+  // Road flow state first: this tick's movement, and the snapshot that
+  // follows it, both read the state produced here.
+  stepRoadTraffic(state, city, dtMs);
   if (!Number.isFinite(dtMs) || dtMs <= 0) {
     throw new RangeError(`dtMs must be a finite positive number, received ${dtMs}`);
   }
