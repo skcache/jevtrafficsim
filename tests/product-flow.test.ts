@@ -361,6 +361,17 @@ describe("a run a human changed is not shown beside clean baselines", () => {
     });
   });
 
+  it("keeps the worker's result metadata tied to the run it describes", () => {
+    const worker = source("worker/simulation.worker.ts");
+    // The final result and every frame carry the same provenance, taken from
+    // the controller's own meta() — never a guess assembled in the UI.
+    expect(worker).toContain("policy: policyProvenance(),");
+    expect(worker).toContain("policyProvenance(),\n    ),\n  });\n  state.snapshotSequence += 1;");
+    expect(worker).toContain("function policyProvenance(): PresentationPolicy | null {");
+    // The controller id in the frames is the engine's own.
+    expect(source("worker/presentation-snapshot.ts")).toContain("controller: engine.controller.id,");
+  });
+
   it("marks the run modified when a live command changes it", () => {
     const worker = source("worker/simulation.worker.ts");
     // Both mid-run mutations set the flag, and it reaches the result.
