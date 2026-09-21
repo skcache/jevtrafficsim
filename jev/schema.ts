@@ -61,7 +61,102 @@ export const JEV_LIMITS = {
   /** Bounds of the combined weight applied to one phase. */
   COMBINED_WEIGHT_MIN: 0.25,
   COMBINED_WEIGHT_MAX: 2,
+  /**
+   * Ceiling for one serialized request body (Issue #37). Measured, not guessed:
+   * the generator caps corridors at 48, regions at 64 and hotspots at 24, and a
+   * busy Metro rush hour serializes to 18.3 KB (mechanics: 48+41+24 entries with
+   * real values, `scripts` measurement in the issue report). 64 KB leaves ~3.5x
+   * headroom over the largest document production code can produce while staying
+   * far below the previous 512 KB, which allowed ~28x more than any legitimate
+   * request needed.
+   */
+  REQUEST_BODY_BYTES: 64 * 1024,
 } as const;
+
+/**
+ * The closed sets the request schema accepts. Declared with `satisfies` so a
+ * change to the simulation's own unions fails to compile here rather than
+ * silently widening what a caller may send.
+ */
+export const JEV_CORRIDOR_KINDS = ["arterial", "highway", "diagonal"] as const satisfies readonly CorridorKind[];
+export const JEV_SIGNAL_STAGES = ["green", "yellow", "all-red"] as const satisfies readonly JevSignalSummary["stage"][];
+
+/**
+ * Absurdity guards, not city limits (Issue #37). Every one of them sits orders of
+ * magnitude above what the simulation produces for Metro Chicago (2 352
+ * intersections, 5 131 roads, tens of thousands of vehicles), and their job is
+ * only to stop a caller pushing 1e308 into the model's state or a five-digit
+ * wait into a question string.
+ */
+export const JEV_REQUEST_BOUNDS = {
+  /** Any id in the graph. */
+  ID_MAX: 1_000_000,
+  /** A count of intersections, vehicles or signals. */
+  COUNT_MAX: 1_000_000,
+  /** A wait, in ms: one simulated day. */
+  WAIT_MS_MAX: 86_400_000,
+  /** An arrival rate, per second. */
+  RATE_MAX: 1_000_000,
+  /** A ratio: a fraction of capacity, so it cannot exceed 1 by definition. */
+  RATIO_MAX: 1,
+  /** Observation time: the longest horizon the app can run. */
+  TIME_MS_MAX: 86_400_000,
+  /** Rolling window width: the measured window is seconds, never minutes. */
+  WINDOW_MS_MAX: 60_000,
+  /** Phase index / count of one signal. */
+  PHASE_MAX: 64,
+  /**
+   * A hotspot's region, or -1 when the intersection belongs to no region. The
+   * generator emits that sentinel (see `summarizeHotspots`), so it is part of
+   * the contract rather than a special case invented here.
+   */
+  REGION_SENTINEL: -1,
+} as const;
+
+const CORRIDOR_FIELDS = [
+  "corridorId",
+  "kind",
+  "intersections",
+  "queuedVehicles",
+  "maxWaitMs",
+  "arrivalRatePerSecond",
+  "occupancyRatio",
+] as const;
+
+const REGION_FIELDS = [
+  "regionId",
+  "intersections",
+  "signalizedIntersections",
+  "queuedVehicles",
+  "maxWaitMs",
+  "arrivalRatePerSecond",
+  "occupancyRatio",
+] as const;
+
+const HOTSPOT_FIELDS = [
+  "intersectionId",
+  "regionId",
+  "stage",
+  "phaseIndex",
+  "phaseCount",
+  "stageElapsedMs",
+  "queuedVehicles",
+  "maxWaitMs",
+  "arrivalRatePerSecond",
+  "occupancyRatio",
+  "downstreamOccupancyRatio",
+] as const;
+
+const CITY_FIELDS = [
+  "intersections",
+  "signalizedIntersections",
+  "activeVehicles",
+  "queuedVehicles",
+  "maxWaitMs",
+  "arrivalRatePerSecond",
+] as const;
+
+const REQUEST_FIELDS = ["schemaVersion", "timeMs", "windowMs", "city", "corridors", "regions", "hotspots"] as const;
 
 /**
  * Coarse switching hints and their bounded effect on the switch margin.
@@ -176,70 +271,316 @@ function nonNegativeInteger(value: unknown): number | null {
 }
 
 /**
- * Structural validation of a request. The adapter builds requests itself, but
- * the server route accepts one from the browser, so it validates every field it
- * is handed before forwarding anything.
+ * Structural validation of a request (strict since Issue #37).
+ *
+ * The route accepts this document from the browser, and parts of it end up
+ * interpolated into the questions the model is asked and forwarded verbatim as
+ * the model's `state`. So validation is a WHITELIST REBUILD, not a check-then-
+ * cast: the value returned is a fresh object assembled field by field, which
+ * means an unrecognised key cannot survive into gateway state no matter what it
+ * carries, and every string that does survive comes from a closed set rather
+ * than from the caller's imagination.
+ *
+ * Rejected before anything is forwarded:
+ *   - an unknown key at any level (including `model`, `endpoint`, `questions`,
+ *     `prompt` — the route is not a generic proxy and must not be talked into
+ *     looking like one)
+ *   - an id that is not a non-negative integer inside the graph's bounds, or an
+ *     id repeated within a list
+ *   - a `kind` or `stage` outside its enum
+ *   - any number that is non-finite, negative where it must not be, or above its
+ *     absurdity guard
+ *   - more entries than the list limits
+ *
+ * Nothing here is coerced: a hostile value is refused, never repaired.
  */
 export function validateJevPolicyRequest(value: unknown): JevValidation<JevPolicyRequest> {
   if (!isPlainObject(value)) {
     return { ok: false, error: "request must be an object" };
   }
+  const unknown = Object.keys(value).filter((key) => !(REQUEST_FIELDS as readonly string[]).includes(key));
+  if (unknown.length > 0) {
+    return { ok: false, error: `request carries unknown field ${unknown[0]}` };
+  }
   if (value.schemaVersion !== JEV_SCHEMA_VERSION) {
     return { ok: false, error: `unsupported schemaVersion (expected ${JEV_SCHEMA_VERSION})` };
   }
-  const timeMs = finiteNumber(value.timeMs);
-  const windowMs = finiteNumber(value.windowMs);
-  if (timeMs === null || timeMs < 0) {
+
+  const timeMs = boundedNumber(value.timeMs, 0, JEV_REQUEST_BOUNDS.TIME_MS_MAX);
+  if (timeMs === null) {
     return { ok: false, error: "timeMs must be a finite number >= 0" };
   }
-  if (windowMs === null || windowMs <= 0) {
+  const windowMs = boundedNumber(value.windowMs, 0, JEV_REQUEST_BOUNDS.WINDOW_MS_MAX);
+  if (windowMs === null || windowMs === 0) {
     return { ok: false, error: "windowMs must be a finite number > 0" };
   }
-  const city = value.city;
-  if (!isPlainObject(city)) {
-    return { ok: false, error: "city must be an object" };
+
+  const city = readCity(value.city);
+  if (city === null) {
+    return { ok: false, error: "city must be an object with bounded non-negative numbers" };
   }
-  for (const field of [
-    "intersections",
-    "signalizedIntersections",
-    "activeVehicles",
-    "queuedVehicles",
-    "maxWaitMs",
-    "arrivalRatePerSecond",
-  ] as const) {
-    if (finiteNumber(city[field]) === null || (city[field] as number) < 0) {
-      return { ok: false, error: `city.${field} must be a finite number >= 0` };
+
+  const corridors = readCorridors(value.corridors);
+  if (typeof corridors === "string") {
+    return { ok: false, error: corridors };
+  }
+  const regions = readRegions(value.regions);
+  if (typeof regions === "string") {
+    return { ok: false, error: regions };
+  }
+  const hotspots = readHotspots(value.hotspots);
+  if (typeof hotspots === "string") {
+    return { ok: false, error: hotspots };
+  }
+
+  return { ok: true, value: { schemaVersion: JEV_SCHEMA_VERSION, timeMs, windowMs, city, corridors, regions, hotspots } };
+}
+
+/** True when the value is a member of a closed set; narrows the type. */
+function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+}
+
+/** A finite number inside [min, max] (inclusive), or null. */
+function boundedNumber(value: unknown, min: number, max: number): number | null {
+  const parsed = finiteNumber(value);
+  if (parsed === null || parsed < min || parsed > max) {
+    return null;
+  }
+  return parsed;
+}
+
+/**
+ * A whole number inside [min, max], or null. The lower bound is a parameter
+ * because one field is legitimately negative: a hotspot's region id, which the
+ * generator sets to -1 when the intersection belongs to no region.
+ */
+function integerWithin(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    return null;
+  }
+  return value;
+}
+
+/** A whole number inside the graph's id bounds, or null. */
+function boundedId(value: unknown, min: number, max: number): number | null {
+  return integerWithin(value, min, max);
+}
+
+function readCity(value: unknown): JevCitySummary | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  if (!exactKeys(value, CITY_FIELDS)) {
+    return null;
+  }
+  const intersections = boundedNumber(value.intersections, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+  const signalizedIntersections = boundedNumber(value.signalizedIntersections, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+  const activeVehicles = boundedNumber(value.activeVehicles, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+  const queuedVehicles = boundedNumber(value.queuedVehicles, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+  const maxWaitMs = boundedNumber(value.maxWaitMs, 0, JEV_REQUEST_BOUNDS.WAIT_MS_MAX);
+  const arrivalRatePerSecond = boundedNumber(value.arrivalRatePerSecond, 0, JEV_REQUEST_BOUNDS.RATE_MAX);
+  if (
+    intersections === null ||
+    signalizedIntersections === null ||
+    activeVehicles === null ||
+    queuedVehicles === null ||
+    maxWaitMs === null ||
+    arrivalRatePerSecond === null ||
+    signalizedIntersections > intersections
+  ) {
+    return null;
+  }
+  return { intersections, signalizedIntersections, activeVehicles, queuedVehicles, maxWaitMs, arrivalRatePerSecond };
+}
+
+/** Returns the list, or the error message as a string. */
+function readCorridors(value: unknown): JevCorridorSummary[] | string {
+  const list = readList(value, JEV_LIMITS.REQUEST_CORRIDORS, "corridors");
+  if (typeof list === "string") {
+    return list;
+  }
+  const seen = new Set<number>();
+  const out: JevCorridorSummary[] = [];
+  for (const entry of list) {
+    if (!exactKeys(entry, CORRIDOR_FIELDS)) {
+      return "corridors entries carry an unknown field";
+    }
+    const corridorId = boundedId(entry.corridorId, 0, JEV_REQUEST_BOUNDS.ID_MAX);
+    if (corridorId === null) {
+      return "corridors entries need a non-negative integer corridorId";
+    }
+    if (seen.has(corridorId)) {
+      return `corridors repeats id ${corridorId}`;
+    }
+    seen.add(corridorId);
+    if (!isOneOf(entry.kind, JEV_CORRIDOR_KINDS)) {
+      return `corridors kind must be one of ${JEV_CORRIDOR_KINDS.join(", ")}`;
+    }
+    const kind = entry.kind;
+    const intersections = boundedNumber(entry.intersections, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const queuedVehicles = boundedNumber(entry.queuedVehicles, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const maxWaitMs = boundedNumber(entry.maxWaitMs, 0, JEV_REQUEST_BOUNDS.WAIT_MS_MAX);
+    const arrivalRatePerSecond = boundedNumber(entry.arrivalRatePerSecond, 0, JEV_REQUEST_BOUNDS.RATE_MAX);
+    const occupancyRatio = boundedNumber(entry.occupancyRatio, 0, JEV_REQUEST_BOUNDS.RATIO_MAX);
+    if (
+      intersections === null ||
+      queuedVehicles === null ||
+      maxWaitMs === null ||
+      arrivalRatePerSecond === null ||
+      occupancyRatio === null
+    ) {
+      return "corridors entries must carry bounded non-negative numbers";
+    }
+    out.push({ corridorId, kind, intersections, queuedVehicles, maxWaitMs, arrivalRatePerSecond, occupancyRatio });
+  }
+  return out;
+}
+
+/** Returns the list, or the error message as a string. */
+function readRegions(value: unknown): JevRegionSummary[] | string {
+  const list = readList(value, JEV_LIMITS.REQUEST_REGIONS, "regions");
+  if (typeof list === "string") {
+    return list;
+  }
+  const seen = new Set<number>();
+  const out: JevRegionSummary[] = [];
+  for (const entry of list) {
+    if (!exactKeys(entry, REGION_FIELDS)) {
+      return "regions entries carry an unknown field";
+    }
+    const regionId = boundedId(entry.regionId, 0, JEV_REQUEST_BOUNDS.ID_MAX);
+    if (regionId === null) {
+      return "regions entries need a non-negative integer regionId";
+    }
+    if (seen.has(regionId)) {
+      return `regions repeats id ${regionId}`;
+    }
+    seen.add(regionId);
+    const intersections = boundedNumber(entry.intersections, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const signalizedIntersections = boundedNumber(entry.signalizedIntersections, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const queuedVehicles = boundedNumber(entry.queuedVehicles, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const maxWaitMs = boundedNumber(entry.maxWaitMs, 0, JEV_REQUEST_BOUNDS.WAIT_MS_MAX);
+    const arrivalRatePerSecond = boundedNumber(entry.arrivalRatePerSecond, 0, JEV_REQUEST_BOUNDS.RATE_MAX);
+    const occupancyRatio = boundedNumber(entry.occupancyRatio, 0, JEV_REQUEST_BOUNDS.RATIO_MAX);
+    if (
+      intersections === null ||
+      signalizedIntersections === null ||
+      queuedVehicles === null ||
+      maxWaitMs === null ||
+      arrivalRatePerSecond === null ||
+      occupancyRatio === null ||
+      signalizedIntersections > intersections
+    ) {
+      return "regions entries must carry bounded non-negative numbers";
+    }
+    out.push({
+      regionId,
+      intersections,
+      signalizedIntersections,
+      queuedVehicles,
+      maxWaitMs,
+      arrivalRatePerSecond,
+      occupancyRatio,
+    });
+  }
+  return out;
+}
+
+/**
+ * Returns the list, or the error message as a string.
+ *
+ * A hotspot's `regionId` may be the generator's -1 sentinel, and is otherwise an
+ * id. Membership in the region list is deliberately NOT required: the busiest
+ * signals are chosen across the whole city, so a legitimate hotspot can belong
+ * to a region that did not make the top-64 cut.
+ */
+function readHotspots(value: unknown): JevSignalSummary[] | string {
+  const list = readList(value, JEV_LIMITS.REQUEST_HOTSPOTS, "hotspots");
+  if (typeof list === "string") {
+    return list;
+  }
+  const seen = new Set<number>();
+  const out: JevSignalSummary[] = [];
+  for (const entry of list) {
+    if (!exactKeys(entry, HOTSPOT_FIELDS)) {
+      return "hotspots entries carry an unknown field";
+    }
+    const intersectionId = boundedId(entry.intersectionId, 0, JEV_REQUEST_BOUNDS.ID_MAX);
+    if (intersectionId === null) {
+      return "hotspots entries need a non-negative integer intersectionId";
+    }
+    if (seen.has(intersectionId)) {
+      return `hotspots repeats id ${intersectionId}`;
+    }
+    seen.add(intersectionId);
+    const regionId = integerWithin(
+      entry.regionId,
+      JEV_REQUEST_BOUNDS.REGION_SENTINEL,
+      JEV_REQUEST_BOUNDS.ID_MAX,
+    );
+    if (regionId === null) {
+      return "hotspots regionId must be an id or -1";
+    }
+    if (!isOneOf(entry.stage, JEV_SIGNAL_STAGES)) {
+      return `hotspots stage must be one of ${JEV_SIGNAL_STAGES.join(", ")}`;
+    }
+    const stage = entry.stage;
+    const phaseIndex = boundedId(entry.phaseIndex, 0, JEV_REQUEST_BOUNDS.PHASE_MAX);
+    const phaseCount = boundedId(entry.phaseCount, 0, JEV_REQUEST_BOUNDS.PHASE_MAX);
+    const stageElapsedMs = boundedNumber(entry.stageElapsedMs, 0, JEV_REQUEST_BOUNDS.WAIT_MS_MAX);
+    const queuedVehicles = boundedNumber(entry.queuedVehicles, 0, JEV_REQUEST_BOUNDS.COUNT_MAX);
+    const maxWaitMs = boundedNumber(entry.maxWaitMs, 0, JEV_REQUEST_BOUNDS.WAIT_MS_MAX);
+    const arrivalRatePerSecond = boundedNumber(entry.arrivalRatePerSecond, 0, JEV_REQUEST_BOUNDS.RATE_MAX);
+    const occupancyRatio = boundedNumber(entry.occupancyRatio, 0, JEV_REQUEST_BOUNDS.RATIO_MAX);
+    const downstreamOccupancyRatio = boundedNumber(entry.downstreamOccupancyRatio, 0, JEV_REQUEST_BOUNDS.RATIO_MAX);
+    if (
+      phaseIndex === null ||
+      phaseCount === null ||
+      stageElapsedMs === null ||
+      queuedVehicles === null ||
+      maxWaitMs === null ||
+      arrivalRatePerSecond === null ||
+      occupancyRatio === null ||
+      downstreamOccupancyRatio === null
+    ) {
+      return "hotspots entries must carry bounded non-negative numbers";
+    }
+    out.push({
+      intersectionId,
+      regionId,
+      stage,
+      phaseIndex,
+      phaseCount,
+      stageElapsedMs,
+      queuedVehicles,
+      maxWaitMs,
+      arrivalRatePerSecond,
+      occupancyRatio,
+      downstreamOccupancyRatio,
+    });
+  }
+  return out;
+}
+
+function readList(value: unknown, max: number, field: string): Record<string, unknown>[] | string {
+  if (!Array.isArray(value)) {
+    return `${field} must be an array`;
+  }
+  if (value.length > max) {
+    return `${field} exceeds the ${max}-entry limit`;
+  }
+  for (const entry of value) {
+    if (!isPlainObject(entry)) {
+      return `${field} entries must be objects`;
     }
   }
-  const lists = [
-    ["corridors", JEV_LIMITS.REQUEST_CORRIDORS],
-    ["regions", JEV_LIMITS.REQUEST_REGIONS],
-    ["hotspots", JEV_LIMITS.REQUEST_HOTSPOTS],
-  ] as const;
-  for (const [field, max] of lists) {
-    const list = value[field];
-    if (!Array.isArray(list)) {
-      return { ok: false, error: `${field} must be an array` };
-    }
-    if (list.length > max) {
-      return { ok: false, error: `${field} exceeds the ${max}-entry limit` };
-    }
-    for (const entry of list) {
-      if (!isPlainObject(entry)) {
-        return { ok: false, error: `${field} entries must be objects` };
-      }
-      const id = nonNegativeInteger(entry[field === "corridors" ? "corridorId" : field === "regions" ? "regionId" : "intersectionId"]);
-      if (id === null) {
-        return { ok: false, error: `${field} entries need a non-negative integer id` };
-      }
-      for (const numeric of Object.values(entry)) {
-        if (typeof numeric === "number" && !Number.isFinite(numeric)) {
-          return { ok: false, error: `${field} entries must not carry non-finite numbers` };
-        }
-      }
-    }
-  }
-  return { ok: true, value: value as unknown as JevPolicyRequest };
+  return value as Record<string, unknown>[];
+}
+
+/** Every key must be one of the allowed ones: no unrecognised key survives. */
+function exactKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(record).every((key) => allowed.includes(key));
 }
 
 /**
