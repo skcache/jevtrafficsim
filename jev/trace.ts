@@ -34,6 +34,45 @@ export const JEV_TRACE_VERSION = 1;
 /** Where a policy in force came from. */
 export type JevPolicySource = "live" | "replay" | "fallback";
 
+/**
+ * Which policy source a run actually used (Issue #38).
+ *
+ *   mock           deterministic stand-in: no network, no credential, no model
+ *   gateway        TypeSafe AI's jev through the Vercel AI Gateway
+ *   schema-service a service speaking the Jev policy schema (JEV_ENDPOINT)
+ *   replay         an offline recorded trace, zero network calls
+ *   unconfigured   no client at all: the run was the Adaptive fallback throughout
+ */
+export type JevAdapter = "mock" | "gateway" | "schema-service" | "replay" | "unconfigured";
+
+/** The stand-in for an adapter string that arrived from outside this codebase. */
+export function adapterFromId(id: string | null | undefined): JevAdapter | null {
+  switch (id) {
+    case "mock":
+      return "mock";
+    case "gateway":
+      return "gateway";
+    case "live":
+    case "http":
+    case "schema-service":
+      return "schema-service";
+    case "replay":
+      return "replay";
+    default:
+      return null;
+  }
+}
+
+/** True when a real external model produced (or originally produced) policies. */
+export function adapterInvolvesModel(adapter: JevAdapter): boolean {
+  return adapter !== "mock" && adapter !== "replay" && adapter !== "unconfigured";
+}
+
+/** The short label every surface shows: "jev-mock", "jev-replay", ... */
+export function provenanceLabel(adapter: JevAdapter): string {
+  return `jev-${adapter}`;
+}
+
 /** Sources a recorded event can have: fallback is never recorded as a policy. */
 export type JevTraceSource = Exclude<JevPolicySource, "fallback">;
 
@@ -54,6 +93,22 @@ export interface JevTraceEvent {
   readonly source: JevTraceSource;
 }
 
+/**
+ * The RECORDED run's own account of itself (Issue #38). Optional: traces written
+ * before #38 do not carry it, and refusing to load them would break the "a trace
+ * is reproducible from this file alone" promise for no security gain — an absent
+ * block reads as "unknown", never as "no fallback".
+ */
+export interface JevTraceRecordedRun {
+  readonly adapter: JevAdapter;
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly refreshes: number;
+  readonly expiries: number;
+  readonly liveMs: number;
+  readonly fallbackMs: number;
+}
+
 export interface JevTrace {
   readonly version: typeof JEV_TRACE_VERSION;
   /** Controller the trace was recorded for ("jev"). */
@@ -63,6 +118,8 @@ export interface JevTrace {
   /** The scenario every event must match. */
   readonly scenarioFingerprint: string;
   readonly events: readonly JevTraceEvent[];
+  /** What the recorded run was; absent in pre-#38 traces. */
+  readonly recorded?: JevTraceRecordedRun | null;
 }
 
 export function emptyTrace(
@@ -80,7 +137,16 @@ export function compareTraceEvents(a: JevTraceEvent, b: JevTraceEvent): number {
 
 /** A trace with its events in replay order. Pure. */
 export function normalizeTrace(trace: JevTrace): JevTrace {
-  return { ...trace, events: [...trace.events].sort(compareTraceEvents) };
+  const normalized: JevTrace = { ...trace, events: [...trace.events].sort(compareTraceEvents) };
+  // A trace with no recorded-run block serializes WITHOUT the key, so an
+  // artifact written before #38 round-trips byte for byte. `recorded: null` on a
+  // parsed trace still means "unknown" in memory (see parseJevTrace).
+  if (normalized.recorded === null || normalized.recorded === undefined) {
+    const rest = { ...normalized };
+    delete rest.recorded;
+    return rest;
+  }
+  return normalized;
 }
 
 /** Deterministic serialisation: same trace, same bytes. */
@@ -180,6 +246,11 @@ export function parseJevTrace(value: unknown): JevValidation<JevTrace> {
       source: raw.source,
     });
   }
+  const recorded = parseRecorded(value.recorded);
+  if (typeof recorded === "string") {
+    return { ok: false, error: recorded };
+  }
+
   return {
     ok: true,
     value: {
@@ -188,7 +259,44 @@ export function parseJevTrace(value: unknown): JevValidation<JevTrace> {
       client: value.client,
       scenarioFingerprint: value.scenarioFingerprint,
       events,
+      recorded,
     },
+  };
+}
+
+/**
+ * The optional recorded-run block. Returns the block, null when absent, or the
+ * error message as a string. Absent means "unknown", never "no fallback": a
+ * pre-#38 trace simply cannot say what its run's refusals were.
+ */
+function parseRecorded(value: unknown): JevTraceRecordedRun | null | string {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return "trace.recorded must be an object when present";
+  }
+  const raw = value as Record<string, unknown>;
+  const adapter = adapterFromId(typeof raw.adapter === "string" ? raw.adapter : null);
+  if (adapter === null) {
+    return "trace.recorded.adapter must be one of mock, gateway, schema-service, replay";
+  }
+  const numbers: Record<string, number> = {};
+  for (const field of ["accepted", "rejected", "refreshes", "expiries", "liveMs", "fallbackMs"] as const) {
+    const parsed = finite(raw[field]);
+    if (parsed === null || parsed < 0) {
+      return `trace.recorded.${field} must be a finite number >= 0`;
+    }
+    numbers[field] = parsed;
+  }
+  return {
+    adapter,
+    accepted: numbers.accepted,
+    rejected: numbers.rejected,
+    refreshes: numbers.refreshes,
+    expiries: numbers.expiries,
+    liveMs: numbers.liveMs,
+    fallbackMs: numbers.fallbackMs,
   };
 }
 

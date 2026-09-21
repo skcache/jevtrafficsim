@@ -50,7 +50,7 @@ import {
   neutralJevPolicy,
   type JevPolicy,
 } from "@/jev/schema";
-import type { JevPolicySource, JevTrace, JevTraceEvent } from "@/jev/trace";
+import { adapterFromId, type JevAdapter, type JevPolicySource, type JevTrace, type JevTraceEvent, type JevTraceRecordedRun } from "@/jev/trace";
 import type { IntersectionObservation, PhaseObservation } from "@/sim/observations";
 import type { CityPartition } from "@/sim/regions";
 import type { SignalDirective, SignalState } from "@/sim/signals";
@@ -168,6 +168,19 @@ export function jevDirective(
 export interface JevControllerMeta {
   readonly kind: "jev";
   readonly mode: "live" | "replay";
+  /**
+   * Which policy source this run used (Issue #38): "mock" for the deterministic
+   * stand-in, "gateway" / "schema-service" for the real thing, "replay" for an
+   * offline trace, "unconfigured" when no client was ever supplied (the run was
+   * the Adaptive fallback from start to finish). It is part of the run's own
+   * account of itself, so no caller has to remember which adapter it wired.
+   */
+  readonly adapter: JevAdapter;
+  /**
+   * For a replay: what the RECORDED run was (its adapter, refusals and fallback
+   * time). Null when the trace predates #38 — unknown, never "clean".
+   */
+  readonly recorded: JevTraceRecordedRun | null;
   /** The source in force at the end of the run. */
   readonly source: JevPolicySource;
   readonly liveMs: number;
@@ -223,6 +236,14 @@ function countActiveVehicles(traffic: TrafficState): number {
 }
 
 export function createJevController(options: JevControllerOptions): JevController {
+  // Which source this controller's policies come from, decided once from what it
+  // was actually wired with — never taken from a caller's label.
+  const adapter: JevAdapter =
+    options.mode === "replay"
+      ? "replay"
+      : options.client === null
+        ? "unconfigured"
+        : (adapterFromId(options.client.id) ?? "schema-service");
   const runtime: JevRuntime = createJevPolicyRuntime({
     client: options.mode === "replay" ? null : options.client,
     scenarioFingerprint: options.scenarioFingerprint,
@@ -256,6 +277,8 @@ export function createJevController(options: JevControllerOptions): JevControlle
       return {
         kind: "jev",
         mode: status.mode,
+        adapter,
+        recorded: options.trace?.recorded ?? null,
         source: status.source,
         liveMs: status.liveMs,
         replayMs: status.replayMs,
