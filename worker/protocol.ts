@@ -5,6 +5,7 @@
  * React, no simulation execution — the worker owns all of that.
  */
 import type { IncidentKind } from "@/sim/incidents";
+import { TRAFFIC_LEVELS } from "@/sim/types";
 import { DRIVER_CHOICES, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
@@ -20,6 +21,15 @@ import type { ChallengeResult, ComparisonVerdict } from "./challenge-result";
 
 /** Fixed simulation pacing: one 100 ms tick per scheduled worker iteration. */
 export const SIM_TICK_MS = 100;
+
+/**
+ * Playback compression. The simulation itself is untouched — the engine still
+ * advances in its own 100 ms timestep, so speeds, queues and signal timings keep
+ * their real proportions — but each real tick runs this many engine steps, so a
+ * typical curated trip lands in the 30–60 s the challenge is meant to be
+ * watched in.
+ */
+export const PLAYBACK_STEPS_PER_TICK = 8;
 /** Render snapshots at 5 Hz (every 2 ticks); metrics at 2 Hz (every 5). */
 export const SNAPSHOT_EVERY_TICKS = 2;
 export const METRICS_EVERY_TICKS = 5;
@@ -68,6 +78,12 @@ export type WorkerCommand =
   | { readonly type: "PAUSE" }
   | { readonly type: "RESET"; readonly mode: "same-seed" | "new-seed" }
   | { readonly type: "SET_CONTROLLER"; readonly controller: ControllerChoice }
+  /**
+   * Change the traffic level of the RUNNING scenario. The trip, its clock, its
+   * route and the ego identity are untouched: the new level only adds demand
+   * from this moment on, exactly like a real city getting busier.
+   */
+  | { readonly type: "SET_TRAFFIC"; readonly trafficLevel: TrafficLevel }
   | { readonly type: "INCIDENT"; readonly kind: IncidentKind }
   /**
    * Issue #28: run ONE scenario headlessly under both controllers and return
@@ -247,6 +263,14 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
         CONTROLLER_CHOICES,
       );
       return { type, controller };
+    }
+    case "SET_TRAFFIC": {
+      const trafficLevel = readChoice(
+        "SET_TRAFFIC.trafficLevel",
+        record.trafficLevel,
+        TRAFFIC_LEVELS,
+      );
+      return { type, trafficLevel };
     }
     case "INCIDENT": {
       const kind = readChoice("INCIDENT.kind", record.kind, INCIDENT_CHOICES);

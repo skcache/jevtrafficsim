@@ -424,7 +424,19 @@ function maybeReplanEgo(engine: EngineState): void {
  * sequence), with injection sequences above all base sequences, so a base
  * event always precedes incident copies at the same simulated time.
  */
-function injectSpawns(
+/**
+ * Merge extra demand into the live schedule. Deterministic: entries are
+ * sequence-numbered in call order and stable-sorted into the remaining queue,
+ * so the same injection at the same simulated time always produces the same
+ * world. Existing spawns are never reordered or removed.
+ */
+/**
+ * Merge extra demand into the live schedule. Deterministic: entries are
+ * sequence-numbered in call order and stable-sorted into the remaining queue,
+ * so the same injection at the same simulated time always produces the same
+ * world. Existing spawns are never reordered or removed.
+ */
+export function injectSpawns(
   engine: EngineState,
   spawns: ReadonlyArray<{
     timeMs: number;

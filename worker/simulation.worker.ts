@@ -24,10 +24,12 @@ import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
 import { generateDemand } from "@/sim/demand";
+import { TRAFFIC_LEVELS } from "@/sim/types";
 import {
   createEngine,
   queueIncident,
   setEngineController,
+  injectSpawns,
   stepEngine,
   type EngineState,
   type ScheduledSpawn,
@@ -48,6 +50,7 @@ import {
   METRICS_EVERY_TICKS,
   nextSeed,
   parseWorkerCommand,
+  PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
   SNAPSHOT_EVERY_TICKS,
   type ControllerChoice,
@@ -302,16 +305,23 @@ function runTick(): void {
     return;
   }
   try {
-    stepEngine(engine);
+    for (let step = 0; step < PLAYBACK_STEPS_PER_TICK; step += 1) {
+      stepEngine(engine);
+      // Cadence checks live INSIDE the loop: with several steps per real tick
+      // an outer check would fire only when the tick counter happens to align.
+      if (engine.ticks % SNAPSHOT_EVERY_TICKS === 0) {
+        postSnapshot();
+      }
+      if (engine.ticks % METRICS_EVERY_TICKS === 0) {
+        postMetrics();
+      }
+      if (engine.traffic.timeMs >= config.durationMs) {
+        break;
+      }
+    }
   } catch (error) {
     handleError(error);
     return;
-  }
-  if (engine.ticks % SNAPSHOT_EVERY_TICKS === 0) {
-    postSnapshot();
-  }
-  if (engine.ticks % METRICS_EVERY_TICKS === 0) {
-    postMetrics();
   }
   if (engine.traffic.timeMs >= config.durationMs) {
     state.running = false;
@@ -418,6 +428,35 @@ function handleCommand(command: WorkerCommand): void {
         post({ type: "ERROR", message: `comparison failed: ${String((error as Error)?.message ?? error)}` });
       }
       return;
+    }
+    case "SET_TRAFFIC": {
+      const engine = state.engine;
+      const config = state.config;
+      if (!engine || !config || config.trafficLevel === command.trafficLevel) {
+        break;
+      }
+      // Live change: the run, its clock, its trip and the ego stay exactly as
+      // they are. Only NEW demand appears, generated for the new level over the
+      // remaining horizon with a seed derived from (run seed, new level, now) —
+      // so the same change at the same simulated time always adds the same cars.
+      const nowMs = engine.traffic.timeMs;
+      const horizonMs = Math.max(0, config.durationMs - nowMs);
+      if (horizonMs > 0) {
+        const levelIndex = Math.max(0, TRAFFIC_LEVELS.indexOf(command.trafficLevel));
+        const derivedSeed = (config.seed + 0x9e37 + levelIndex * 7919 + Math.floor(nowMs / 1000)) >>> 0;
+        const extra = generateDemand({
+          city: engine.baseCity,
+          level: command.trafficLevel,
+          seed: derivedSeed,
+          durationMs: horizonMs,
+        })
+          .filter((spawn) => spawn.timeMs > 0)
+          .map((spawn) => ({ ...spawn, timeMs: spawn.timeMs + nowMs }));
+        injectSpawns(engine, extra);
+      }
+      state.config = { ...config, trafficLevel: command.trafficLevel };
+      postSnapshot();
+      break;
     }
     case "INCIDENT": {
       const engine = state.engine;

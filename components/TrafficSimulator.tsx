@@ -332,10 +332,18 @@ export function TrafficSimulator() {
 
   const onTrafficLevel = useCallback(
     (trafficLevel: TrafficLevel) => {
-      useUiStore.getState().setTrafficLevel(trafficLevel);
+      const store = useUiStore.getState();
+      store.setTrafficLevel(trafficLevel);
+      // Mid-trip this is a LIVE change: the city gets busier or quieter from
+      // this moment on, and the trip keeps its clock, route and ego. Only a
+      // change made before the run starts (or an explicit trip change) rebuilds.
+      if (store.phase === "city" || store.phase === "entering") {
+        send({ type: "SET_TRAFFIC", trafficLevel });
+        return;
+      }
       startRun({ trafficLevel });
     },
-    [startRun],
+    [send, startRun],
   );
 
   const onSeed = useCallback(

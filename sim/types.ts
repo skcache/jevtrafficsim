@@ -46,6 +46,9 @@ export type CitySize =
 /** Selectable traffic levels (PRD §4.1). */
 export type TrafficLevel = "light" | "everyday" | "rush-hour";
 
+/** Canonical order, lightest to busiest. */
+export const TRAFFIC_LEVELS = ["light", "everyday", "rush-hour"] as const satisfies readonly TrafficLevel[];
+
 /** Node = intersection (PRD §7.1). */
 export interface Intersection {
   id: IntersectionId;
