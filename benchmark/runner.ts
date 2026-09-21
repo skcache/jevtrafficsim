@@ -15,8 +15,8 @@ import type { MapModel } from "@/cities/map-model";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
-import { buildScenarioRun } from "@/worker/challenge-compare";
-import type { ChallengeCityResult, ChallengeTripResult } from "@/worker/challenge-result";
+import { buildScenarioRun, type ScenarioRunOptions } from "@/worker/challenge-compare";
+import type { ChallengeCityResult, ChallengeResult, ChallengeTripResult } from "@/worker/challenge-result";
 import type { ControllerChoice } from "@/worker/protocol";
 import { expandMatrix, type BenchmarkMatrix, type BenchmarkScenario } from "./scenarios";
 
@@ -45,39 +45,77 @@ export interface BenchmarkRunRecord {
   readonly city: ChallengeCityResult;
 }
 
+function recordFrom(
+  run: ReturnType<typeof buildScenarioRun>,
+  scenario: BenchmarkScenario,
+  controller: ControllerChoice,
+  result: ChallengeResult,
+): BenchmarkRunRecord {
+  return {
+    fingerprint: run.fingerprint,
+    scenario: { ...scenario },
+    controller,
+    world: {
+      demandSeed: run.demandSeed,
+      incidentSeed: run.incidents.seed,
+      incidentEntries: run.incidentEntries,
+      spawns: run.spawns.length,
+    },
+    trip: result.trip,
+    city: result.city,
+  };
+}
+
 /**
  * Run one scenario under every listed controller, on ONE shared world.
  * Deterministic: identical inputs produce identical records, byte for byte.
+ *
+ * `options.controllers` supplies factories for controllers the harness cannot
+ * build alone — Jev, whose opinion comes from outside the simulation (a mock
+ * here, the HTTP client in a live smoke run). The world is built once either
+ * way, so adding a controller never changes what the others were handed.
  */
 export function runBenchmarkScenario(
   model: MapModel,
   scenario: BenchmarkScenario,
   controllers: readonly ControllerChoice[],
+  options: ScenarioRunOptions = {},
 ): BenchmarkRunRecord[] {
-  const run = buildScenarioRun(model, {
+  const run = buildScenarioRun(model, scenarioRequest(scenario), options);
+  return controllers.map((controller) => recordFrom(run, scenario, controller, run.runUnder(controller)));
+}
+
+/**
+ * Run one scenario against an ASYNCHRONOUS adapter (a live Jev smoke run): the
+ * same world and the same engine, driven with a yield between ticks so the
+ * adapter's answer can land mid-run. Not used by the matrix, and not
+ * reproducible by design — a live policy arrives on wall-clock time.
+ */
+export async function runLiveScenario(
+  model: MapModel,
+  scenario: BenchmarkScenario,
+  controller: ControllerChoice,
+  options: ScenarioRunOptions = {},
+): Promise<BenchmarkRunRecord> {
+  const run = buildScenarioRun(model, scenarioRequest(scenario), options);
+  const result = await run.runUnderAsync(controller);
+  return recordFrom(run, scenario, controller, result);
+}
+
+function scenarioRequest(scenario: BenchmarkScenario): {
+  tripId: BenchmarkScenario["tripId"];
+  trafficLevel: BenchmarkScenario["trafficLevel"];
+  driver: BenchmarkScenario["driver"];
+  seed: number;
+  durationMs: number;
+} {
+  return {
     tripId: scenario.tripId,
     trafficLevel: scenario.trafficLevel,
     driver: scenario.driver,
     seed: scenario.seed,
     durationMs: scenario.durationMs,
-  });
-  const world = {
-    demandSeed: run.demandSeed,
-    incidentSeed: run.incidents.seed,
-    incidentEntries: run.incidentEntries,
-    spawns: run.spawns.length,
   };
-  return controllers.map((controller) => {
-    const result = run.runUnder(controller);
-    return {
-      fingerprint: run.fingerprint,
-      scenario: { ...scenario },
-      controller,
-      world,
-      trip: result.trip,
-      city: result.city,
-    };
-  });
 }
 
 export interface RunProgress {
@@ -87,23 +125,34 @@ export interface RunProgress {
   readonly controller: ControllerChoice;
 }
 
+export interface BenchmarkRunOptions extends ScenarioRunOptions {
+  /** Called after each run finishes, for CLI progress only. */
+  readonly onRun?: (progress: RunProgress) => void;
+}
+
 /**
- * Run a whole matrix in its stable expansion order. `onRun` is called after
- * each controller finishes, for CLI progress only — it cannot change results.
+ * Run a whole matrix in its stable expansion order. `options.onRun` is called
+ * after each controller finishes, for CLI progress only — it cannot change
+ * results, and `options.controllers` only decides how each controller is built.
  */
 export function runBenchmarkMatrix(
   model: MapModel,
   matrix: BenchmarkMatrix,
-  onRun?: (progress: RunProgress) => void,
+  options: BenchmarkRunOptions = {},
 ): BenchmarkRunRecord[] {
   const scenarios = expandMatrix(matrix);
   const records: BenchmarkRunRecord[] = [];
   let index = 0;
   for (const scenario of scenarios) {
-    for (const record of runBenchmarkScenario(model, scenario, matrix.controllers)) {
+    for (const record of runBenchmarkScenario(model, scenario, matrix.controllers, options)) {
       records.push(record);
       index += 1;
-      onRun?.({ index, total: scenarios.length * matrix.controllers.length, scenario, controller: record.controller });
+      options.onRun?.({
+        index,
+        total: scenarios.length * matrix.controllers.length,
+        scenario,
+        controller: record.controller,
+      });
     }
   }
   return records;

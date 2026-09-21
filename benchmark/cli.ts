@@ -13,12 +13,25 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
+import { createJevController, type JevController } from "@/controllers/jev";
+import {
+  createHttpJevClient,
+  createMockJevClient,
+  JEV_DEFAULT_TIMEOUT_MS,
+  type JevClient,
+} from "@/jev/client";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import { type ControllerChoice } from "@/worker/protocol";
 import { aggregateRuns, type ExperimentGroup } from "./aggregate";
 import { loadBenchmarkModel } from "./model";
-import { runBenchmarkMatrix, type BenchmarkRunRecord } from "./runner";
+import {
+  runBenchmarkMatrix,
+  runBenchmarkScenario,
+  runLiveScenario,
+  type BenchmarkRunRecord,
+  type RunProgress,
+} from "./runner";
 import {
   DEFAULT_BENCHMARK_MATRIX,
   describeMatrix,
@@ -43,7 +56,11 @@ Options:
   --traffic <level,...>     everyday | rush-hour (default: both)
   --driver <name,...>       tourist | local (default: both)
   --seed <n,...>            deterministic seeds (default: 42)
-  --controllers <c,...>     fixed | adaptive (default: both)
+  --controllers <c,...>     fixed | adaptive | jev (default: fixed,adaptive)
+  --jev <mock|live>         how jev gets its policy (default: mock)
+                              mock = deterministic stand-in, no network, no credential
+                              live = JEV_ENDPOINT + JEV_TOKEN from the environment,
+                                     called server-side; refuses to run a big matrix
   --horizon <ms|Ns|Nm>      simulated run length (default: the live horizon)
   --out <path>              JSON output (default: benchmark/results/benchmark-<stamp>.json)
   --quiet                   only the final summary
@@ -117,17 +134,28 @@ function parseDrivers(values: readonly string[]): DriverStrategy[] {
 
 function parseControllers(values: readonly string[]): ControllerChoice[] {
   const controllers = values.flatMap(splitList);
-  const unknown = controllers.filter((c) => c !== "fixed" && c !== "adaptive");
+  const unknown = controllers.filter((c) => c !== "fixed" && c !== "adaptive" && c !== "jev");
   if (unknown.length > 0) {
-    throw new UsageError(`unknown controller(s): ${unknown.join(", ")} (fixed | adaptive)`);
+    throw new UsageError(`unknown controller(s): ${unknown.join(", ")} (fixed | adaptive | jev)`);
   }
   return controllers as ControllerChoice[];
+}
+
+export type JevAdapterChoice = "mock" | "live";
+
+function parseJevAdapter(value: string): JevAdapterChoice {
+  if (value !== "mock" && value !== "live") {
+    throw new UsageError(`--jev must be mock or live (received "${value}")`);
+  }
+  return value;
 }
 
 export interface CliOptions {
   readonly overrides: MatrixOverrides;
   readonly outPath: string | null;
   readonly quiet: boolean;
+  /** How the jev controller gets its policy when it is in the matrix. */
+  readonly jevAdapter: JevAdapterChoice;
 }
 
 /** Parse argv (without node/script) into options. Throws UsageError on bad input. */
@@ -142,6 +170,7 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
   } = {};
   let outPath: string | null = null;
   let quiet = false;
+  let jevAdapter: JevAdapterChoice = "mock";
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -171,6 +200,9 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
       case "--controllers":
         overrides.controllers = parseControllers(take());
         break;
+      case "--jev":
+        jevAdapter = parseJevAdapter(take()[0]);
+        break;
       case "--horizon":
         overrides.durationMs = parseHorizon(take()[0]);
         break;
@@ -188,7 +220,7 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
     const stamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
     outPath = path.join("benchmark", "results", `benchmark-${stamp}.json`);
   }
-  return { overrides, outPath, quiet };
+  return { overrides, outPath, quiet, jevAdapter };
 }
 
 const pad = (value: string, width: number): string => value.padEnd(width, " ").slice(0, width);
@@ -248,7 +280,98 @@ export function buildDocument(
   return { version: 1, matrix, runs, groups: aggregateRuns(runs) };
 }
 
-function main(argv: readonly string[]): number {
+/** A live matrix is a smoke run, not a benchmark: never hammer the service. */
+export const LIVE_SMOKE_MAX_RUNS = 8;
+
+/**
+ * Why a live run cannot proceed, or null when it can. Kept separate from the
+ * CLI so the cap is testable without running anything.
+ */
+export function liveRunCapError(runCount: number): string | null {
+  if (runCount <= LIVE_SMOKE_MAX_RUNS) {
+    return null;
+  }
+  return (
+    `live jev runs are capped at ${LIVE_SMOKE_MAX_RUNS} (this matrix is ${runCount}) — ` +
+    "narrow --trip / --seed / --driver"
+  );
+}
+
+function liveJevClientFromEnv(): { client: JevClient } | { error: string } {
+  const endpoint = process.env.JEV_ENDPOINT?.trim();
+  const token = process.env.JEV_TOKEN?.trim();
+  if (!endpoint || !token) {
+    return {
+      error:
+        "live jev needs JEV_ENDPOINT and JEV_TOKEN in the environment — " +
+        "no policy is fabricated without them (use --jev mock to exercise the seam)",
+    };
+  }
+  const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
+  return {
+    client: createHttpJevClient({
+      endpoint,
+      token,
+      timeoutMs: Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS,
+    }),
+  };
+}
+
+/** Aggregate the adapter's own account of what it did — evidence, not a claim. */
+export function describeJevStatus(controllers: readonly JevController[]): string {
+  if (controllers.length === 0) {
+    return "";
+  }
+  let refreshes = 0;
+  let applied = 0;
+  let rejected = 0;
+  const errors = new Set<string>();
+  for (const controller of controllers) {
+    const status = controller.status();
+    refreshes += status.refreshes;
+    applied += status.applied;
+    rejected += status.rejected;
+    if (status.lastError !== null) {
+      errors.add(status.lastError);
+    }
+  }
+  const lines = [`jev adapter: ${refreshes} policy refreshes, ${applied} applied, ${rejected} rejected`];
+  if (errors.size > 0) {
+    lines.push(`  adapter errors: ${[...errors].join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The live path: the same runs as the matrix, driven with a yield between ticks
+ * so an asynchronous policy can land mid-run. Baseline controllers still go
+ * through the synchronous path — only jev needs the event loop.
+ */
+async function runLiveMatrix(
+  model: ReturnType<typeof loadBenchmarkModel>,
+  matrix: BenchmarkMatrix,
+  controllers: { jev?: () => ReturnType<typeof createJevController> },
+  onRun: (progress: RunProgress) => void,
+): Promise<BenchmarkRunRecord[]> {
+  const scenarios = expandMatrix(matrix);
+  const total = scenarios.length * matrix.controllers.length;
+  const records: BenchmarkRunRecord[] = [];
+  let index = 0;
+  for (const scenario of scenarios) {
+    for (const controller of matrix.controllers) {
+      const record =
+        controller === "jev"
+          ? await runLiveScenario(model, scenario, controller, { controllers })
+          : runBenchmarkScenario(model, scenario, [controller], { controllers })[0];
+      records.push(record);
+      index += 1;
+      onRun({ index, total, scenario, controller });
+    }
+  }
+  return records;
+}
+
+async function main(argv: readonly string[]): Promise<number> {
   let options: CliOptions;
   try {
     options = parseArgs(argv);
@@ -260,17 +383,59 @@ function main(argv: readonly string[]): number {
   }
 
   const matrix = withOverrides(DEFAULT_BENCHMARK_MATRIX, options.overrides);
-  if (expandMatrix(matrix).length === 0) {
+  const scenarios = expandMatrix(matrix);
+  if (scenarios.length === 0) {
     process.stderr.write("the matrix is empty — nothing to run\n");
     return 2;
   }
 
+  const wantsJev = matrix.controllers.includes("jev");
+  const live = wantsJev && options.jevAdapter === "live";
+  let jevClient: JevClient | null = null;
+  if (wantsJev && live) {
+    const configured = liveJevClientFromEnv();
+    if ("error" in configured) {
+      process.stderr.write(`${configured.error}\n`);
+      return 2;
+    }
+    jevClient = configured.client;
+    const capError = liveRunCapError(scenarios.length * matrix.controllers.length);
+    if (capError !== null) {
+      process.stderr.write(`${capError}\n`);
+      return 2;
+    }
+  } else if (wantsJev) {
+    jevClient = createMockJevClient();
+  }
+
+  // One controller per run, kept so the adapter's own account can be reported.
+  const jevControllers: JevController[] = [];
+  const controllerFactories = jevClient
+    ? {
+        jev: () => {
+          const controller = createJevController({ client: jevClient as JevClient });
+          jevControllers.push(controller);
+          return controller;
+        },
+      }
+    : {};
+
   const startedAt = Date.now();
   const model = loadBenchmarkModel();
   process.stdout.write(`benchmark: ${describeMatrix(matrix)}\n`);
-  process.stdout.write(`city: ${model.city.roads.length} roads, ${model.city.intersections.length} intersections\n`);
+  if (wantsJev) {
+    process.stdout.write(
+      live
+        ? "jev: LIVE adapter — policies come from JEV_ENDPOINT server-side; " +
+            "results are not reproducible (wall-clock arrival)\n"
+        : "jev: MOCK adapter — deterministic stand-in, NOT the Jev service\n",
+    );
+  }
+  process.stdout.write(
+    `city: ${model.city.roads.length} roads, ${model.city.intersections.length} intersections\n`,
+  );
 
-  const runs = runBenchmarkMatrix(model, matrix, (progress) => {
+  const report = (progress: RunProgress): void => {
     if (options.quiet) {
       return;
     }
@@ -281,7 +446,11 @@ function main(argv: readonly string[]): number {
         `seed=${progress.scenario.seed} ${progress.scenario.driver} ${progress.controller} ` +
         `(${elapsed}s)\n`,
     );
-  });
+  };
+
+  const runs = live
+    ? await runLiveMatrix(model, matrix, controllerFactories, report)
+    : runBenchmarkMatrix(model, matrix, { controllers: controllerFactories, onRun: report });
 
   const output = buildDocument(matrix, runs);
 
@@ -290,6 +459,9 @@ function main(argv: readonly string[]): number {
   writeFileSync(path.resolve(outPath), `${JSON.stringify(output, null, 2)}\n`);
 
   process.stdout.write(`\n${formatSummary(output.groups)}\n`);
+  if (wantsJev) {
+    process.stdout.write(`\n${describeJevStatus(jevControllers)}\n`);
+  }
   process.stdout.write(
     `\n${runs.length} runs, ${output.groups.length} compatible groups, ` +
       `${((Date.now() - startedAt) / 1000).toFixed(0)}s wall time\n` +
@@ -303,5 +475,12 @@ function main(argv: readonly string[]): number {
  * `require` only exists under the CLI runner, so this guard is safe in ESM too.
  */
 if (typeof require !== "undefined" && require.main === module) {
-  process.exitCode = main(process.argv.slice(2));
+  main(process.argv.slice(2))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error: unknown) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
 }
