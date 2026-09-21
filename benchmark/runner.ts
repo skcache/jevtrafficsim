@@ -15,7 +15,11 @@ import type { MapModel } from "@/cities/map-model";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
-import { buildScenarioRun, type ScenarioRunOptions } from "@/worker/challenge-compare";
+import {
+  buildScenarioRun,
+  type AsyncRunOptions,
+  type ScenarioRunOptions,
+} from "@/worker/challenge-compare";
 import type { ChallengeCityResult, ChallengeResult, ChallengeTripResult } from "@/worker/challenge-result";
 import type { ControllerChoice } from "@/worker/protocol";
 import { expandMatrix, type BenchmarkMatrix, type BenchmarkScenario } from "./scenarios";
@@ -43,6 +47,13 @@ export interface BenchmarkRunRecord {
   readonly trip: ChallengeTripResult;
   /** CHICAGO. */
   readonly city: ChallengeCityResult;
+  /**
+   * Optional runtime metadata about the controller (Issue #14). Present only
+   * when the caller supplies a describer — it exists so a Jev run can say
+   * whether it ran on live policies, on a replay, or on the Adaptive fallback,
+   * and for how much simulated time.
+   */
+  readonly controllerMeta?: Record<string, unknown>;
 }
 
 function recordFrom(
@@ -50,6 +61,7 @@ function recordFrom(
   scenario: BenchmarkScenario,
   controller: ControllerChoice,
   result: ChallengeResult,
+  meta?: Record<string, unknown>,
 ): BenchmarkRunRecord {
   return {
     fingerprint: run.fingerprint,
@@ -63,6 +75,7 @@ function recordFrom(
     },
     trip: result.trip,
     city: result.city,
+    ...(meta === undefined ? {} : { controllerMeta: meta }),
   };
 }
 
@@ -75,14 +88,29 @@ function recordFrom(
  * here, the HTTP client in a live smoke run). The world is built once either
  * way, so adding a controller never changes what the others were handed.
  */
+/** Optional per-run runtime metadata about a controller (Issue #14). */
+export interface ControllerDescriber {
+  readonly describeController?: (
+    controller: ControllerChoice,
+  ) => Record<string, unknown> | undefined;
+}
+
 export function runBenchmarkScenario(
   model: MapModel,
   scenario: BenchmarkScenario,
   controllers: readonly ControllerChoice[],
-  options: ScenarioRunOptions = {},
+  options: ScenarioRunOptions & ControllerDescriber = {},
 ): BenchmarkRunRecord[] {
   const run = buildScenarioRun(model, scenarioRequest(scenario), options);
-  return controllers.map((controller) => recordFrom(run, scenario, controller, run.runUnder(controller)));
+  return controllers.map((controller) =>
+    recordFrom(
+      run,
+      scenario,
+      controller,
+      run.runUnder(controller),
+      options.describeController?.(controller),
+    ),
+  );
 }
 
 /**
@@ -95,11 +123,11 @@ export async function runLiveScenario(
   model: MapModel,
   scenario: BenchmarkScenario,
   controller: ControllerChoice,
-  options: ScenarioRunOptions = {},
+  options: ScenarioRunOptions & AsyncRunOptions & ControllerDescriber = {},
 ): Promise<BenchmarkRunRecord> {
   const run = buildScenarioRun(model, scenarioRequest(scenario), options);
-  const result = await run.runUnderAsync(controller);
-  return recordFrom(run, scenario, controller, result);
+  const result = await run.runUnderAsync(controller, { paceRatio: options.paceRatio });
+  return recordFrom(run, scenario, controller, result, options.describeController?.(controller));
 }
 
 function scenarioRequest(scenario: BenchmarkScenario): {
@@ -125,7 +153,7 @@ export interface RunProgress {
   readonly controller: ControllerChoice;
 }
 
-export interface BenchmarkRunOptions extends ScenarioRunOptions {
+export interface BenchmarkRunOptions extends ScenarioRunOptions, ControllerDescriber, AsyncRunOptions {
   /** Called after each run finishes, for CLI progress only. */
   readonly onRun?: (progress: RunProgress) => void;
 }

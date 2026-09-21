@@ -10,7 +10,7 @@
  * engine, the same controllers and the same geography the app runs, driven from
  * Node with no DOM, no React, no MapLibre and no worker.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
 import { createJevController, type JevController } from "@/controllers/jev";
@@ -25,9 +25,12 @@ import {
   JEV_GATEWAY_ENDPOINT,
   JEV_GATEWAY_MODEL,
 } from "@/jev/gateway";
+import { parseJevTrace, serializeTrace, type JevTrace } from "@/jev/trace";
+import { buildChallengeScenario, scenarioFingerprint } from "@/worker/challenge-scenario";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import { type ControllerChoice } from "@/worker/protocol";
+import type { ScenarioRunOptions } from "@/worker/challenge-compare";
 import { aggregateRuns, type ExperimentGroup } from "./aggregate";
 import { loadBenchmarkModel } from "./model";
 import {
@@ -35,6 +38,7 @@ import {
   runBenchmarkScenario,
   runLiveScenario,
   type BenchmarkRunRecord,
+  type ControllerDescriber,
   type RunProgress,
 } from "./runner";
 import {
@@ -62,14 +66,23 @@ Options:
   --driver <name,...>       tourist | local (default: both)
   --seed <n,...>            deterministic seeds (default: 42)
   --controllers <c,...>     fixed | adaptive | jev (default: fixed,adaptive)
-  --jev <mock|live|gateway> how jev gets its policy (default: mock)
+  --jev <mock|live|gateway|replay>
+                            how jev gets its policy (default: mock)
                               mock    = deterministic stand-in, no network, no credential
                               gateway = TypeSafe AI's jev via the Vercel AI Gateway
                                         (JEV_TOKEN + JEV_MODEL; JEV_GATEWAY_URL overrides
                                         the gateway URL)
                               live    = a service that speaks the Jev policy schema
                                         (JEV_ENDPOINT + JEV_TOKEN), called server-side
-                              live and gateway refuse to run a big matrix
+                              replay  = an offline trace recorded by an earlier run
+                                        (--trace); zero network calls
+                            live and gateway refuse to run a big matrix
+  --trace <path>            accepted-policy trace to replay (required by --jev replay)
+  --trace-out <path>        write the accepted-policy trace of a single run
+  --pace <simPerWall>       live/gateway only: pace simulated time against the wall
+                            clock (8 matches the app's playback). Results are
+                            unchanged; without it a live drive runs as fast as the
+                            event loop allows and can outrun a remote model
   --horizon <ms|Ns|Nm>      simulated run length (default: the live horizon)
   --out <path>              JSON output (default: benchmark/results/benchmark-<stamp>.json)
   --quiet                   only the final summary
@@ -150,13 +163,21 @@ function parseControllers(values: readonly string[]): ControllerChoice[] {
   return controllers as ControllerChoice[];
 }
 
-export type JevAdapterChoice = "mock" | "live" | "gateway";
+export type JevAdapterChoice = "mock" | "live" | "gateway" | "replay";
 
 function parseJevAdapter(value: string): JevAdapterChoice {
-  if (value !== "mock" && value !== "live" && value !== "gateway") {
-    throw new UsageError(`--jev must be mock, live or gateway (received "${value}")`);
+  if (value !== "mock" && value !== "live" && value !== "gateway" && value !== "replay") {
+    throw new UsageError(`--jev must be mock, live, gateway or replay (received "${value}")`);
   }
   return value;
+}
+
+function parsePace(value: string): number {
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    throw new UsageError(`--pace must be a positive number of simulated ms per wall ms`);
+  }
+  return ratio;
 }
 
 export interface CliOptions {
@@ -165,6 +186,12 @@ export interface CliOptions {
   readonly quiet: boolean;
   /** How the jev controller gets its policy when it is in the matrix. */
   readonly jevAdapter: JevAdapterChoice;
+  /** Accepted-policy trace to replay (--jev replay). */
+  readonly tracePath: string | null;
+  /** Where to write this run's accepted-policy trace. */
+  readonly traceOutPath: string | null;
+  /** Pacing for live runs, in simulated ms per wall ms (0 = unpaced). */
+  readonly paceRatio: number;
 }
 
 /** Parse argv (without node/script) into options. Throws UsageError on bad input. */
@@ -180,6 +207,9 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
   let outPath: string | null = null;
   let quiet = false;
   let jevAdapter: JevAdapterChoice = "mock";
+  let tracePath: string | null = null;
+  let traceOutPath: string | null = null;
+  let paceRatio = 0;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -212,6 +242,15 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
       case "--jev":
         jevAdapter = parseJevAdapter(take()[0]);
         break;
+      case "--trace":
+        tracePath = take()[0];
+        break;
+      case "--trace-out":
+        traceOutPath = take()[0];
+        break;
+      case "--pace":
+        paceRatio = parsePace(take()[0]);
+        break;
       case "--horizon":
         overrides.durationMs = parseHorizon(take()[0]);
         break;
@@ -229,7 +268,24 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
     const stamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
     outPath = path.join("benchmark", "results", `benchmark-${stamp}.json`);
   }
-  return { overrides, outPath, quiet, jevAdapter };
+  return { overrides, outPath, quiet, jevAdapter, tracePath, traceOutPath, paceRatio };
+}
+
+/** Load and validate a trace file. Throws UsageError with a clear message. */
+function loadTrace(path: string): JevTrace {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error: unknown) {
+    throw new UsageError(
+      `could not read the trace at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const parsed = parseJevTrace(raw);
+  if (!parsed.ok) {
+    throw new UsageError(`the trace at ${path} is not usable: ${parsed.error}`);
+  }
+  return parsed.value;
 }
 
 const pad = (value: string, width: number): string => value.padEnd(width, " ").slice(0, width);
@@ -345,19 +401,32 @@ export function describeJevStatus(controllers: readonly JevController[]): string
     return "";
   }
   let refreshes = 0;
-  let applied = 0;
+  let accepted = 0;
   let rejected = 0;
+  let expiries = 0;
+  let fallbackMs = 0;
+  let policyMs = 0;
+  const modes = new Set<string>();
   const errors = new Set<string>();
   for (const controller of controllers) {
     const status = controller.status();
     refreshes += status.refreshes;
-    applied += status.applied;
+    accepted += status.accepted;
     rejected += status.rejected;
-    if (status.lastError !== null) {
-      errors.add(status.lastError);
+    expiries += status.expiries;
+    fallbackMs += status.fallbackMs;
+    policyMs += status.liveMs + status.replayMs;
+    modes.add(status.mode);
+    if (status.lastRejection !== null) {
+      errors.add(`${status.lastRejection.kind}: ${status.lastRejection.detail}`);
     }
   }
-  const lines = [`jev adapter: ${refreshes} policy refreshes, ${applied} applied, ${rejected} rejected`];
+  const lines = [
+    `jev adapter [${[...modes].join(",")}]: ${refreshes} policy refreshes, ` +
+      `${accepted} accepted, ${rejected} rejected, ${expiries} expired`,
+    `  governed simulated time: ${(policyMs / 1000).toFixed(1)}s by Jev policy, ` +
+      `${(fallbackMs / 1000).toFixed(1)}s by the Adaptive fallback`,
+  ];
   if (errors.size > 0) {
     lines.push(`  adapter errors: ${[...errors].join(" | ")}`);
   }
@@ -372,8 +441,12 @@ export function describeJevStatus(controllers: readonly JevController[]): string
 async function runLiveMatrix(
   model: ReturnType<typeof loadBenchmarkModel>,
   matrix: BenchmarkMatrix,
-  controllers: { jev?: () => ReturnType<typeof createJevController> },
+  controllers: ScenarioRunOptions["controllers"],
   onRun: (progress: RunProgress) => void,
+  options: {
+    readonly describeController: ControllerDescriber["describeController"];
+    readonly paceRatio: number;
+  },
 ): Promise<BenchmarkRunRecord[]> {
   const scenarios = expandMatrix(matrix);
   const total = scenarios.length * matrix.controllers.length;
@@ -383,8 +456,15 @@ async function runLiveMatrix(
     for (const controller of matrix.controllers) {
       const record =
         controller === "jev"
-          ? await runLiveScenario(model, scenario, controller, { controllers })
-          : runBenchmarkScenario(model, scenario, [controller], { controllers })[0];
+          ? await runLiveScenario(model, scenario, controller, {
+              controllers,
+              describeController: options.describeController,
+              paceRatio: options.paceRatio,
+            })
+          : runBenchmarkScenario(model, scenario, [controller], {
+              controllers,
+              describeController: options.describeController,
+            })[0];
       records.push(record);
       index += 1;
       onRun({ index, total, scenario, controller });
@@ -412,7 +492,48 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const wantsJev = matrix.controllers.includes("jev");
-  const live = wantsJev && options.jevAdapter !== "mock";
+  const replaying = wantsJev && options.jevAdapter === "replay";
+  const live = wantsJev && !replaying && options.jevAdapter !== "mock";
+
+  let replayTrace: JevTrace | null = null;
+  if (replaying) {
+    if (options.tracePath === null) {
+      process.stderr.write("--jev replay needs --trace <path>\n");
+      return 2;
+    }
+    if (options.traceOutPath !== null) {
+      process.stderr.write("--trace-out has nothing to add when replaying a trace\n");
+      return 2;
+    }
+    try {
+      replayTrace = loadTrace(options.tracePath);
+    } catch (error: unknown) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      return 2;
+    }
+    // Every scenario in the matrix must match the trace's fingerprint, or the
+    // replay would silently run the wrong run's policies.
+    for (const scenario of scenarios) {
+      const fingerprint = scenarioFingerprint(
+        buildChallengeScenario({
+          tripId: scenario.tripId,
+          trafficLevel: scenario.trafficLevel,
+          driver: scenario.driver,
+          seed: scenario.seed,
+          durationMs: scenario.durationMs,
+        }),
+      );
+      if (fingerprint !== replayTrace.scenarioFingerprint) {
+        process.stderr.write(
+          `the trace was recorded for scenario ${replayTrace.scenarioFingerprint}, ` +
+            `but ${scenario.tripId}/${scenario.trafficLevel}/${scenario.driver}/seed ` +
+            `${scenario.seed} is ${fingerprint} — replay refused\n`,
+        );
+        return 2;
+      }
+    }
+  }
+
   let jevClient: JevClient | null = null;
   if (wantsJev && live) {
     const configured = liveJevClientFromEnv(options.jevAdapter === "gateway" ? "gateway" : "live");
@@ -426,21 +547,37 @@ async function main(argv: readonly string[]): Promise<number> {
       process.stderr.write(`${capError}\n`);
       return 2;
     }
-  } else if (wantsJev) {
+  } else if (wantsJev && !replaying) {
     jevClient = createMockJevClient();
   }
 
   // One controller per run, kept so the adapter's own account can be reported.
   const jevControllers: JevController[] = [];
-  const controllerFactories = jevClient
+  let currentJev: JevController | null = null;
+  const controllerFactories: ScenarioRunOptions["controllers"] = wantsJev
     ? {
-        jev: () => {
-          const controller = createJevController({ client: jevClient as JevClient });
+        jev: (context) => {
+          const controller = replaying
+            ? createJevController({
+                client: null,
+                mode: "replay",
+                trace: replayTrace,
+                scenarioFingerprint: context.fingerprint,
+              })
+            : createJevController({
+                client: jevClient,
+                scenarioFingerprint: context.fingerprint,
+              });
           jevControllers.push(controller);
+          currentJev = controller;
           return controller;
         },
       }
     : {};
+  const describeController: ControllerDescriber["describeController"] = (choice) =>
+    choice === "jev" && currentJev !== null
+      ? (currentJev.meta() as unknown as Record<string, unknown>)
+      : undefined;
 
   const startedAt = Date.now();
   const model = loadBenchmarkModel();
@@ -449,7 +586,10 @@ async function main(argv: readonly string[]): Promise<number> {
     const adapterLabel =
       options.jevAdapter === "mock"
         ? "jev: MOCK adapter — deterministic stand-in, NOT the Jev service\n"
-        : options.jevAdapter === "gateway"
+        : options.jevAdapter === "replay"
+          ? `jev: REPLAY adapter — ${replayTrace?.events.length ?? 0} recorded policies from ` +
+            `${options.tracePath}; zero network calls\n`
+          : options.jevAdapter === "gateway"
           ? `jev: GATEWAY adapter — ${process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL} via the ` +
             "Vercel AI Gateway; results are not reproducible (wall-clock arrival)\n"
           : "jev: LIVE adapter — policies come from JEV_ENDPOINT server-side; " +
@@ -474,8 +614,15 @@ async function main(argv: readonly string[]): Promise<number> {
   };
 
   const runs = live
-    ? await runLiveMatrix(model, matrix, controllerFactories, report)
-    : runBenchmarkMatrix(model, matrix, { controllers: controllerFactories, onRun: report });
+    ? await runLiveMatrix(model, matrix, controllerFactories, report, {
+        describeController,
+        paceRatio: options.paceRatio,
+      })
+    : runBenchmarkMatrix(model, matrix, {
+        controllers: controllerFactories,
+        onRun: report,
+        describeController,
+      });
 
   const output = buildDocument(matrix, runs);
 
@@ -483,9 +630,27 @@ async function main(argv: readonly string[]): Promise<number> {
   mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
   writeFileSync(path.resolve(outPath), `${JSON.stringify(output, null, 2)}\n`);
 
+  if (options.traceOutPath !== null) {
+    if (jevControllers.length !== 1) {
+      process.stderr.write(
+        `--trace-out records a single run's trace; this matrix ran ${jevControllers.length}\n`,
+      );
+      return 2;
+    }
+    const tracePath = path.resolve(options.traceOutPath);
+    mkdirSync(path.dirname(tracePath), { recursive: true });
+    writeFileSync(tracePath, serializeTrace(jevControllers[0].trace()));
+  }
+
   process.stdout.write(`\n${formatSummary(output.groups)}\n`);
   if (wantsJev) {
     process.stdout.write(`\n${describeJevStatus(jevControllers)}\n`);
+    if (options.traceOutPath !== null) {
+      process.stdout.write(
+        `  trace: ${jevControllers[0].trace().events.length} accepted policies written to ` +
+          `${path.resolve(options.traceOutPath)}\n`,
+      );
+    }
   }
   process.stdout.write(
     `\n${runs.length} runs, ${output.groups.length} compatible groups, ` +
