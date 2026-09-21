@@ -42,7 +42,16 @@ export const PLAYBACK_STEPS_PER_TICK = 8;
 /** One centralized live-run horizon: 10 simulated minutes. */
 export const LIVE_RUN_HORIZON_MS = 600_000;
 
-export const CONTROLLER_CHOICES = ["fixed", "adaptive"] as const;
+/**
+ * Controllers the simulation can run.
+ *
+ * `jev` is a citywide policy controller whose opinion comes from an external
+ * service through the adapter in `jev/` (Issue #13). It is part of the protocol
+ * so the challenge harness and the benchmark can run it, but the setup UI
+ * deliberately still offers Fixed and Adaptive only (`CONTROLLER_OPTIONS`) —
+ * wiring Jev into the product's controls is not this issue's job.
+ */
+export const CONTROLLER_CHOICES = ["fixed", "adaptive", "jev"] as const;
 export type ControllerChoice = (typeof CONTROLLER_CHOICES)[number];
 
 export const CITY_SIZE_CHOICES = [

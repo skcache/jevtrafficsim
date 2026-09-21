@@ -16,7 +16,7 @@ import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import type { TrafficController } from "@/controllers/contract";
 import { generateDemand } from "@/sim/demand";
-import { createEngine, runEngine, type ScheduledSpawn } from "@/sim/engine";
+import { createEngine, runEngine, stepEngine, type EngineState, type ScheduledSpawn } from "@/sim/engine";
 import type { IncidentConfig } from "@/sim/incidents";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
@@ -52,15 +52,26 @@ export interface ComparisonRequest {
 }
 
 /**
- * Controller seam: one factory per controller choice. Adding a controller
- * (Issue #13's Jev) is an entry here plus a protocol choice — nothing about
- * the world, the demand or the incident script changes, which is exactly what
- * keeps the comparison fair.
+ * Controllers the harness can build on its own.
+ *
+ * Jev is deliberately absent: its opinion arrives from outside the simulation,
+ * so a caller must SUPPLY an adapter — a mock for tests and benchmark runs, the
+ * HTTP client server-side. Asking for a controller with no adapter throws
+ * rather than substituting something that merely looks like Jev.
  */
-const CONTROLLER_FACTORIES: Record<ControllerChoice, () => TrafficController> = {
+const DEFAULT_CONTROLLER_FACTORIES: Partial<Record<ControllerChoice, () => TrafficController>> = {
   fixed: createFixedController,
   adaptive: createAdaptiveController,
 };
+
+export interface ScenarioRunOptions {
+  /**
+   * Controller factories the caller supplies, keyed by controller. The fairness
+   * seam is unchanged by this: whichever controllers run, they run the same
+   * world, and this only decides how each one is built.
+   */
+  readonly controllers?: Partial<Record<ControllerChoice, () => TrafficController>>;
+}
 
 /**
  * One scenario resolved into ONE world, ready to be stepped under any
@@ -79,9 +90,18 @@ export interface ScenarioRun {
   readonly demandSeed: number;
   /** Step the shared world under one controller. Deterministic per controller. */
   runUnder(controller: ControllerChoice): ChallengeResult;
+  /**
+   * The same world and the same engine, driven with a yield between ticks so an
+   * asynchronous policy adapter can answer mid-run (live Jev smoke only).
+   */
+  runUnderAsync(controller: ControllerChoice): Promise<ChallengeResult>;
 }
 
-export function buildScenarioRun(model: MapModel, request: ComparisonRequest): ScenarioRun {
+export function buildScenarioRun(
+  model: MapModel,
+  request: ComparisonRequest,
+  options: ScenarioRunOptions = {},
+): ScenarioRun {
   const scenario = buildChallengeScenario(request);
   const challenge = materializeChallengeTrip(model, request.tripId, request.seed);
   const world = resolveScenarioWorld(model, challenge.trip, scenario);
@@ -101,6 +121,22 @@ export function buildScenarioRun(model: MapModel, request: ComparisonRequest): S
     script: [...world.incidentPlan.entries],
   };
 
+  const buildEngine = (controller: ControllerChoice) => {
+    const factory = options.controllers?.[controller] ?? DEFAULT_CONTROLLER_FACTORIES[controller];
+    if (!factory) {
+      throw new Error(
+        `no adapter supplied for the "${controller}" controller — pass one via ScenarioRunOptions.controllers`,
+      );
+    }
+    return createEngine({
+      city: model.city,
+      controller: factory(),
+      spawns,
+      driver: request.driver,
+      incidents,
+    });
+  };
+
   return {
     scenario,
     fingerprint: scenarioFingerprint(scenario),
@@ -110,21 +146,43 @@ export function buildScenarioRun(model: MapModel, request: ComparisonRequest): S
     incidentEntries: world.incidentPlan.entries.length,
     demandSeed: world.demandSeed,
     runUnder: (controller) => {
-      const engine = createEngine({
-        city: model.city,
-        controller: CONTROLLER_FACTORIES[controller](),
-        spawns,
-        driver: request.driver,
-        incidents,
-      });
+      const engine = buildEngine(controller);
       runEngine(engine, request.durationMs);
+      return buildChallengeResult(engine, scenario, controller, 0);
+    },
+    runUnderAsync: async (controller) => {
+      const engine = buildEngine(controller);
+      await runEngineAsync(engine, request.durationMs);
       return buildChallengeResult(engine, scenario, controller, 0);
     },
   };
 }
 
-export function runComparison(model: MapModel, request: ComparisonRequest): ComparisonOutcome {
-  const run = buildScenarioRun(model, request);
+/**
+ * The same engine and the same ticks as `runEngine`, with a macrotask yield
+ * between them so an ASYNCHRONOUS controller can settle mid-run: a live policy
+ * adapter needs the event loop to turn before its answer can be applied. Used
+ * by the benchmark's live Jev smoke run; the matrix and every test use the
+ * synchronous loop, which is what keeps them reproducible.
+ */
+export async function runEngineAsync(engine: EngineState, untilMs: number): Promise<void> {
+  if (!Number.isFinite(untilMs) || untilMs < 0) {
+    throw new RangeError(`untilMs must be finite and >= 0, received ${untilMs}`);
+  }
+  while (engine.traffic.timeMs < untilMs) {
+    stepEngine(engine);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+export function runComparison(
+  model: MapModel,
+  request: ComparisonRequest,
+  options: ScenarioRunOptions = {},
+): ComparisonOutcome {
+  const run = buildScenarioRun(model, request, options);
   const fixed = run.runUnder("fixed");
   const adaptive = run.runUnder("adaptive");
   return {

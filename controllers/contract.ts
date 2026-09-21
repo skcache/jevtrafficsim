@@ -12,6 +12,16 @@
  * traffic state and engine-owned context, but never mutate them, so repeated
  * calls with identical input yield identical directives.
  *
+ * ## Policy controllers (Issue #13)
+ *
+ * A controller whose policy arrives from OUTSIDE the simulation (Jev) may hold
+ * exactly one piece of private state: the most recent VALIDATED policy, plus the
+ * bookkeeping needed to refresh it on a simulated-time cadence. That does not
+ * weaken the rule above — its directives are still a pure function of
+ * (city, traffic, context, policy), so a run with a fixed policy sequence
+ * replays exactly. Nothing else may be remembered: no per-signal history, no
+ * private timing, no vehicle memory.
+ *
  * ## Controller context (Task 09)
  *
  * Policy that needs more than raw state (queue pressure, arrival rates,
