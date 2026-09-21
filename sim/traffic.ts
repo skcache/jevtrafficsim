@@ -204,6 +204,9 @@ function hasCapacity(state: TrafficState, road: Road, footprint: number): boolea
 }
 
 function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {
+  // Read BEFORE the road is assigned: after that there is no way to tell a
+  // first entry (an abstract origin) from a junction transfer.
+  const enteringFromOrigin = vehicle.roadId === null;
   addOccupancy(state, road.id, vehicleFootprint(vehicle.type));
   vehicle.roadId = road.id;
   vehicle.progress = 0;
@@ -212,7 +215,6 @@ function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {
   // this road keeps its momentum, capped by the new road's limit — it never
   // gains speed by crossing a junction. From here the per-tick longitudinal
   // model owns the speed: congestion slows it, a blocked control brakes it.
-  const enteringFromOrigin = vehicle.roadId === null;
   const freeFlow = effectiveSpeed(road, vehicle.type);
   vehicle.speed = enteringFromOrigin ? freeFlow : Math.min(vehicle.speed, freeFlow);
   vehicle.state = "moving";
