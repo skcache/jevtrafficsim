@@ -362,6 +362,16 @@ export function liveRunCapError(runCount: number): string | null {
   );
 }
 
+/** Optional confidence floor from the environment; the adapter owns the default. */
+function readMinConfidenceEnv(): number | undefined {
+  const raw = process.env.JEV_MIN_CONFIDENCE?.trim();
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
+}
+
 function liveJevClientFromEnv(
   adapter: "live" | "gateway",
 ): { client: JevClient } | { error: string } {
@@ -384,6 +394,7 @@ function liveJevClientFromEnv(
         endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
         model: process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL,
         timeoutMs,
+        minConfidence: readMinConfidenceEnv(),
       }),
     };
   }

@@ -70,6 +70,40 @@ const WEIGHT_MEANINGS: Record<keyof typeof JEV_WEIGHT_BUCKETS, string> = {
   top: "serve it first, it is the worst bottleneck",
 };
 
+/**
+ * Confidence policy for evaluation answers.
+ *
+ * The model reports a confidence per answer. An answer we cannot trust must not
+ * become a policy opinion, so an answer is USABLE only when its confidence is a
+ * finite number in [0, 1] AND at least `MIN_ANSWER_CONFIDENCE`. An unusable
+ * answer is dropped, and the schema's neutral default takes its place: the
+ * policy stays valid and bounded, it simply carries no opinion there. If nothing
+ * survives, the result is the neutral policy — degraded, never assertive by
+ * accident.
+ *
+ * This is the ONE place the threshold lives. Callers may raise it per client
+ * (`minConfidence`), and the route and the benchmark read JEV_MIN_CONFIDENCE
+ * from the environment; nothing else in the codebase knows a number.
+ */
+export const JEV_CONFIDENCE = {
+  /** Answers below this never shape a policy. A floor, not a quality bar. */
+  MIN_ANSWER_CONFIDENCE: 0.25,
+} as const;
+
+/**
+ * Whether an answer's confidence is usable. Absent, non-finite or out-of-range
+ * confidence is unusable: an unverifiable answer is not an opinion.
+ */
+export function answerConfidenceUsable(confidence: unknown, minimum: number): boolean {
+  return (
+    typeof confidence === "number" &&
+    Number.isFinite(confidence) &&
+    confidence >= 0 &&
+    confidence <= 1 &&
+    confidence >= minimum
+  );
+}
+
 const HINT_MEANINGS: Record<JevHint, string> = {
   neutral: "change nothing about switching behaviour",
   "hold-longer": "keep serving the phases that are already winning",
@@ -85,6 +119,8 @@ export interface GatewayJevClientOptions {
   readonly corridorQuestions?: number;
   readonly regionQuestions?: number;
   readonly timeoutMs?: number;
+  /** Minimum usable confidence per answer; defaults to JEV_CONFIDENCE. */
+  readonly minConfidence?: number;
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -185,6 +221,11 @@ interface EvaluationsAnswer {
   readonly confidence?: unknown;
 }
 
+export interface PolicyTranslationOptions {
+  /** Minimum usable confidence for one answer; defaults to JEV_CONFIDENCE. */
+  readonly minConfidence?: number;
+}
+
 /**
  * Translate the model's answers into a policy object. Every value comes from a
  * bucket table, so the result is always inside the schema's bounds; anything
@@ -196,15 +237,23 @@ interface EvaluationsAnswer {
 export function policyFromEvaluations(
   body: EvaluationsBody,
   response: unknown,
+  options: PolicyTranslationOptions = {},
 ): JevPolicy {
   const answers = (response as { answers?: Record<string, EvaluationsAnswer> } | null)?.answers;
   if (answers === null || typeof answers !== "object") {
     throw new Error("gateway response carried no answers");
   }
+  const minConfidence = options.minConfidence ?? JEV_CONFIDENCE.MIN_ANSWER_CONFIDENCE;
 
   const chosen = (questionId: string): string | null => {
     const answer = answers[questionId];
     if (answer === null || typeof answer !== "object") {
+      return null;
+    }
+    // Low-confidence and malformed-confidence answers are indistinguishable in
+    // effect, on purpose: neither becomes an opinion. The schema's neutral
+    // default covers the field instead.
+    if (!answerConfidenceUsable(answer.confidence, minConfidence)) {
       return null;
     }
     const choice = answer.choice;
@@ -290,7 +339,9 @@ export function createGatewayJevClient(options: GatewayJevClientOptions): JevCli
         // Status only: an upstream error body can echo credentials back.
         throw new Error(`jev gateway responded ${response.status}`);
       }
-      return policyFromEvaluations(body, (await response.json()) as unknown);
+      return policyFromEvaluations(body, (await response.json()) as unknown, {
+        minConfidence: options.minConfidence,
+      });
     },
   };
 }

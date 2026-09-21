@@ -31,7 +31,12 @@ export interface JevEnvironment {
   readonly token: string;
   readonly timeoutMs: number;
   /** Set when this deployment talks to the Vercel AI Gateway. */
-  readonly gateway: { readonly endpoint: string; readonly model: string } | null;
+  readonly gateway: {
+    readonly endpoint: string;
+    readonly model: string;
+    /** Minimum usable answer confidence; undefined = the adapter's default. */
+    readonly minConfidence: number | undefined;
+  } | null;
   /** Set when this deployment talks to a service speaking the policy schema. */
   readonly endpoint: string | null;
 }
@@ -50,6 +55,16 @@ export interface JevEnvironment {
  * called, and without a token there is no client at all — the route answers 503
  * rather than inventing a policy.
  */
+/** One named, optional confidence floor; the adapter owns the default. */
+function readMinConfidence(): number | undefined {
+  const raw = process.env.JEV_MIN_CONFIDENCE?.trim();
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
+}
+
 export function readJevEnvironment(): JevEnvironment | null {
   const token = process.env.JEV_TOKEN?.trim();
   if (!token) {
@@ -66,6 +81,7 @@ export function readJevEnvironment(): JevEnvironment | null {
       gateway: {
         endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
         model,
+        minConfidence: readMinConfidence(),
       },
       endpoint: null,
     };
@@ -86,6 +102,7 @@ export function jevClientFromEnvironment(environment: JevEnvironment): JevClient
       endpoint: environment.gateway.endpoint,
       model: environment.gateway.model,
       timeoutMs: environment.timeoutMs,
+      minConfidence: environment.gateway.minConfidence,
     });
   }
   return createHttpJevClient({
