@@ -378,8 +378,14 @@ describe("benchmark CLI", () => {
   it("parses the jev adapter choice", () => {
     expect(parseArgs(["--controllers", "jev"]).jevAdapter).toBe("mock");
     expect(parseArgs(["--controllers", "jev", "--jev", "live"]).jevAdapter).toBe("live");
-    expect(() => parseArgs(["--jev", "guess"])).toThrow(/--jev must be mock, live or gateway/);
+    expect(() => parseArgs(["--jev", "guess"])).toThrow(/--jev must be mock, live, gateway or replay/);
     expect(parseArgs(["--controllers", "jev", "--jev", "gateway"]).jevAdapter).toBe("gateway");
+    expect(parseArgs(["--controllers", "jev", "--jev", "replay", "--trace", "t.json"]).tracePath).toBe(
+      "t.json",
+    );
+    expect(parseArgs(["--pace", "8"]).paceRatio).toBe(8);
+    expect(() => parseArgs(["--pace", "0"])).toThrow(/--pace must be a positive/);
+    expect(parseArgs(["--trace-out", "out.json"]).traceOutPath).toBe("out.json");
   });
 
   it("refuses unknown trips, levels, drivers, controllers and horizons", () => {
@@ -552,9 +558,9 @@ describe("benchmark runs Jev through the same seam", () => {
     // The adapter's own account: requests were made AND policies applied.
     const status = controllersSeen[0].status();
     expect(status.refreshes).toBeGreaterThan(0);
-    expect(status.applied).toBeGreaterThan(0);
+    expect(status.accepted).toBeGreaterThan(0);
     expect(status.rejected).toBe(0);
-    expect(controllersSeen[0].policy().pressureScale).toBe(1.2);
+    expect(controllersSeen[0].policy()?.pressureScale).toBe(1.2);
   });
 
   it("keeps a failed live service from fabricating a policy", async () => {
@@ -582,10 +588,10 @@ describe("benchmark runs Jev through the same seam", () => {
     });
     expect(record.controller).toBe("jev");
     const status = controllersSeen[0].status();
-    expect(status.applied).toBe(0);
+    expect(status.accepted).toBe(0);
     expect(status.rejected).toBeGreaterThan(0);
-    expect(status.policySource).toBe("neutral");
-    expect(status.lastError).toMatch(/500/);
+    expect(status.source).toBe("fallback");
+    expect(status.lastRejection?.detail).toMatch(/500/);
   });
 
   it("caps a live run at a smoke size", () => {

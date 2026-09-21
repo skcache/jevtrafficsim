@@ -502,18 +502,21 @@ describe("client boundary", () => {
       },
     };
     const { engine, partition } = crossroadsCity();
-    const controller = createJevController({ client, refreshMs: 500 });
-    const context = { observations: frameOf(engine), partition };
+    const controller = createJevController({ client, refreshMs: 500, minHoldMs: 100 });
     for (let tick = 0; tick < 60; tick += 1) {
+      // A fresh frame per tick, exactly as the engine supplies one.
+      controller.directives(engine.city, engine.traffic, {
+        observations: frameOf(engine),
+        partition,
+      });
       stepEngine(engine);
-      controller.directives(engine.city, engine.traffic, context);
     }
     const status = controller.status();
-    expect(status.applied).toBeGreaterThanOrEqual(1);
+    expect(status.accepted).toBeGreaterThanOrEqual(1);
     expect(status.rejected).toBeGreaterThanOrEqual(1);
-    expect(status.lastError).toContain("service exploded");
+    expect(status.lastRejection?.detail).toContain("service exploded");
     // The good policy is still in force; nothing was invented to replace it.
-    expect(controller.policy().pressureScale).toBe(1.4);
+    expect(controller.policy()?.pressureScale).toBe(1.4);
   });
 });
 
@@ -588,8 +591,10 @@ describe("policy translation", () => {
       const controller = createJevController({ client: createMockJevClient() });
       const trace: string[] = [];
       for (let tick = 0; tick < 80; tick += 1) {
-        const context = { observations: frameOf(engine), partition };
-        const directives = controller.directives(engine.city, engine.traffic, context);
+        const directives = controller.directives(engine.city, engine.traffic, {
+          observations: frameOf(engine),
+          partition,
+        });
         trace.push(
           [...directives.entries()]
             .sort(([a], [b]) => a - b)
@@ -646,15 +651,20 @@ describe("signal safety", () => {
     });
     const legal = new Set<SignalDirective>(["hold", "advance"]);
     for (let tick = 0; tick < 120; tick += 1) {
-      const context = { observations: frameOf(engine), partition };
-      for (const directive of hostile.directives(engine.city, engine.traffic, context).values()) {
+      const directives = hostile.directives(engine.city, engine.traffic, {
+        observations: frameOf(engine),
+        partition,
+      });
+      for (const directive of directives.values()) {
         expect(legal.has(directive)).toBe(true);
       }
       stepEngine(engine);
     }
     // Clamped, not obeyed: the scale never leaves its bounds.
-    expect(hostile.policy().pressureScale).toBeLessThanOrEqual(JEV_LIMITS.PRESSURE_SCALE_MAX);
-    expect(hostile.policy().corridorWeights.every((entry) => entry.weight <= JEV_LIMITS.WEIGHT_MAX)).toBe(true);
+    expect(hostile.policy()?.pressureScale ?? 0).toBeLessThanOrEqual(JEV_LIMITS.PRESSURE_SCALE_MAX);
+    expect(
+      (hostile.policy()?.corridorWeights ?? []).every((entry) => entry.weight <= JEV_LIMITS.WEIGHT_MAX),
+    ).toBe(true);
   });
 
   it("keeps the engine's own signal timing intact under a hostile policy", () => {
@@ -748,8 +758,10 @@ describe("refresh cadence", () => {
     let lastObservedMs = 0;
     for (let tick = 0; tick < horizonTicks; tick += 1) {
       lastObservedMs = engine.traffic.timeMs;
-      const context = { observations: frameOf(engine), partition };
-      controller.directives(engine.city, engine.traffic, context);
+      controller.directives(engine.city, engine.traffic, {
+        observations: frameOf(engine),
+        partition,
+      });
       stepEngine(engine);
     }
     // One request per refresh window of simulated time, including t = 0.
@@ -819,12 +831,23 @@ describe("refresh cadence", () => {
     const controller: JevController = createJevController({
       client: { id: "mock", requestPolicy: () => new Promise(() => undefined) },
     });
-    const context = { observations: frameOf(engine), partition };
-    controller.directives(engine.city, engine.traffic, context);
+    // Two ticks: the first only establishes the clock, the second accounts for
+    // the interval the fallback governed.
+    controller.directives(engine.city, engine.traffic, {
+      observations: frameOf(engine),
+      partition,
+    });
+    stepEngine(engine);
+    controller.directives(engine.city, engine.traffic, {
+      observations: frameOf(engine),
+      partition,
+    });
     const status = controller.status();
-    expect(status.policySource).toBe("neutral");
-    expect(status.policyTimeMs).toBeNull();
-    expect(controller.policy()).toEqual(neutralJevPolicy());
+    // No policy yet: the Adaptive fallback is what governs the city.
+    expect(status.source).toBe("fallback");
+    expect(status.acceptedAtSimMs).toBeNull();
+    expect(controller.policy()).toBeNull();
+    expect(status.fallbackMs).toBeGreaterThan(0);
   });
 });
 

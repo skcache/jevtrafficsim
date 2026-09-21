@@ -266,21 +266,12 @@ describe("gateway client", () => {
     });
     const controller = createJevController({ client });
     // Sanity: the neutral starting point is the mock's, not the gateway's.
-    expect(controller.policy()).toEqual(createMockJevClientPolicyShape());
-    expect(controller.status().applied).toBe(0);
+    // Before any tick the runtime holds nothing: the fallback is in force.
+    expect(controller.policy()).toBeNull();
+    expect(controller.status().source).toBe("fallback");
+    expect(controller.status().accepted).toBe(0);
   });
 });
-
-/** The neutral policy shape the controller starts from. */
-function createMockJevClientPolicyShape() {
-  return {
-    schemaVersion: JEV_SCHEMA_VERSION,
-    pressureScale: 1,
-    hint: "neutral",
-    corridorWeights: [],
-    regionWeights: [],
-  };
-}
 
 describe("gateway client keeps the mock available", () => {
   it("leaves the deterministic mock untouched", async () => {
