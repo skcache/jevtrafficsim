@@ -57,6 +57,23 @@ No winner score is computed. Every number in the panel is a field of a real run.
   fallback is labelled `Jev · fallback used`; a run that never had a live answer is labelled
   `Adaptive fallback`.
 
+## Lifecycle: nothing is lost by surprise
+
+The experiment is easy to invalidate by accident, so the app says so before it
+happens rather than after:
+
+| Moment | What the user sees |
+| --- | --- |
+| The **first** manual incident (or the first live demand change) | The consequence, in words: the run keeps playing, but the clean same-scenario comparison is off. Asked once — never repeated once the run is modified. |
+| An incident this world cannot run | Disabled, with the worker's own reason ("no safe route-relevant bridge"), not a click that ends in "not available". |
+| Arrival, while the baselines finish | "Computing same-scenario baselines…" — a named state with no invented progress. |
+| The baselines fail | An explicit failure with **Retry baselines**, which re-asks for the same scenario. Never an indefinite wait. |
+| Anything that discards the run (trip, driver, seed, restart, new scenario) | A confirmation when there is progress to lose — and nothing at all before the first run. |
+
+The guards themselves are unchanged: a run touched by hand, or a scenario moved
+mid-run, is marked `modified` and will not sit beside untouched baselines.
+`/api/jev/policy` and the simulation stay exactly as they were.
+
 ## Deterministic replay
 
 Every accepted policy is recorded with the simulated time it was accepted at. A trace can be
