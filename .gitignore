@@ -59,3 +59,5 @@ public/chicago/
 # python preprocessing environment and raw OSM caches (tools/chicago-map)
 __pycache__/
 *.pyc
+.env*
+!.env.example
