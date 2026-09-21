@@ -245,7 +245,8 @@ describe("contextual controls: route distance", () => {
     expect(retiring?.lifecycle).toBe("retiring");
     expect(retiring?.distanceAheadM).toBe(-5);
     expect(retiring?.emphasis).toBeGreaterThan(0.9);
-    expect(controlSpriteFor(retiring!)).toBe("control-signal-neutral");
+    // Never blank: a control with no live state reads as red, not "nothing".
+    expect(controlSpriteFor(retiring!)).toBe("control-signal-red");
     expect(upcomingControl(justPassed)?.intersectionId).toBe(2);
     expect(upcomingControl(justPassed)?.distanceAheadM).toBeCloseTo(88, 6);
 

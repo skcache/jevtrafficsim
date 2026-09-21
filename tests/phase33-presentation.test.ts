@@ -158,8 +158,10 @@ describe("ego vehicle presentation stays coherent", () => {
     expect(car.props.data).toHaveLength(1);
     expect(car.props.sizeUnits).toBe("meters");
     expect(car.props.getSize).toBeGreaterThan(0);
-    expect(car.props.sizeMinPixels).toBeGreaterThanOrEqual(18);
-    expect(car.props.sizeMinPixels).toBeLessThanOrEqual(24);
+    // Nav-app legibility floor: big enough to track at city zoom, still a
+    // map object (metres first) rather than a fixed-size UI badge.
+    expect(car.props.sizeMinPixels).toBeGreaterThanOrEqual(40);
+    expect(car.props.sizeMinPixels).toBeLessThanOrEqual(80);
   });
 });
 

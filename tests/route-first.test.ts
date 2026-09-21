@@ -190,16 +190,19 @@ describe("route-first layers", () => {
       },
     ];
     const routeLayers = buildRouteLayers(segments);
-    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-band"]);
+    // Free route: one blue run. A congested stretch would add its own run(s).
+    expect(routeLayers.map((layer) => layer.id)).toEqual(["route-band-free"]);
     const route = (routeLayers[0] as unknown as { props: Record<string, unknown> }).props;
     expect(route.widthUnits).toBe("meters");
     expect(route.widthMinPixels).toBeGreaterThan(0);
     expect(route.widthMaxPixels).toBeGreaterThan(route.widthMinPixels as number);
     expect(route.getWidth).toBe(ROUTE_SCALE.widthM);
-    expect(route.capRounded).toBe(false);
-    expect(route.jointRounded).toBe(false);
+    expect(route.capRounded).toBe(true);
+    expect(route.jointRounded).toBe(true);
+    // The band paints the road's OWN traffic state (blue / amber / red), so a
+    // congested stretch of the route is visible instead of staying solid blue.
     expect((route.getColor as () => number[])()).toEqual([
-      ...ROUTE_SCALE.color,
+      ...ROUTE_TRAFFIC_COLORS.free,
       Math.round(ROUTE_SCALE.opacity * 255),
     ]);
 
@@ -212,14 +215,19 @@ describe("route-first layers", () => {
     expect(pin.sizeMinPixels).toBeGreaterThan(0);
   });
 
-  it("coalesces the whole contiguous trip into one band even when traffic state changes", () => {
+  it("merges same-state roads into runs, and splits where the state changes", () => {
     const runs = buildRouteRuns([
       { roadId: 1, path: [[0, 0], [1, 1]], traffic: "free" },
       { roadId: 2, path: [[1, 1], [2, 1]], traffic: "slowed" },
-      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "congested" },
+      { roadId: 3, path: [[2, 1], [3, 1]], traffic: "slowed" },
+      { roadId: 4, path: [[3, 1], [4, 1]], traffic: "congested" },
     ]);
-    expect(runs).toHaveLength(1);
-    expect(runs[0].path).toEqual([[0, 0], [1, 1], [2, 1], [3, 1]]);
+    // Contiguous same-state roads are ONE stroke (no per-road seams); a state
+    // change starts a new run so the congested stretch can paint amber/red.
+    expect(runs.map((run) => run.traffic)).toEqual(["free", "slowed", "congested"]);
+    expect(runs[0].path).toEqual([[0, 0], [1, 1]]);
+    expect(runs[1].path).toEqual([[1, 1], [2, 1], [3, 1]]);
+    expect(runs[2].path).toEqual([[3, 1], [4, 1]]);
   });
 
   it("removes duplicate junction points that can render as circles", () => {

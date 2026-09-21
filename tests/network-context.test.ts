@@ -82,7 +82,9 @@ describe("citywide traffic-system presentation", () => {
     expect(["bad", "severe"]).toContain(pressure[0].level);
   });
 
-  it("shows moving background traffic quietly, not only jams", () => {
+  it("leaves lightly-loaded traffic NEUTRAL instead of painting it green", () => {
+    // Traffic pressure is amber/red only: a road that is merely carrying a
+    // moving car is not a problem, so it is not painted at all.
     const snapshot = {
       roadTraffic: [
         {
@@ -95,9 +97,7 @@ describe("citywide traffic-system presentation", () => {
         },
       ],
     } as unknown as PresentationSnapshot;
-    expect(roadPressure(snapshot)).toEqual([
-      expect.objectContaining({ roadId: 4, level: "flowing" }),
-    ]);
+    expect(roadPressure(snapshot)).toEqual([]);
   });
 
   it("leaves a truly empty road out of the sparse traffic overlay", () => {
