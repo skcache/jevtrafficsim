@@ -23,7 +23,12 @@ import { describe, expect, it } from "vitest";
 import { aggregateRuns, groupIdOf, groupKeyOf, type ExperimentGroup } from "@/benchmark/aggregate";
 import { buildDocument, formatSummary, parseArgs } from "@/benchmark/cli";
 import { loadBenchmarkModel } from "@/benchmark/model";
-import { runBenchmarkMatrix, runBenchmarkScenario, type BenchmarkRunRecord } from "@/benchmark/runner";
+import {
+  runBenchmarkMatrix,
+  runBenchmarkScenario,
+  runLiveScenario,
+  type BenchmarkRunRecord,
+} from "@/benchmark/runner";
 import {
   DEFAULT_BENCHMARK_MATRIX,
   describeMatrix,
@@ -32,6 +37,9 @@ import {
   type BenchmarkMatrix,
 } from "@/benchmark/scenarios";
 import { CURATED_TRIP_IDS } from "@/cities/chicago-trips";
+import { createJevController, type JevController } from "@/controllers/jev";
+import { createHttpJevClient, createMockJevClient } from "@/jev/client";
+import { liveRunCapError } from "@/benchmark/cli";
 import { buildScenarioRun, runComparison } from "@/worker/challenge-compare";
 import { resolveScenarioWorld } from "@/worker/challenge-scenario";
 
@@ -362,11 +370,22 @@ describe("benchmark CLI", () => {
     expect(outPath).toBe("benchmark/results/benchmark-2026-09-21_05-06-07.json");
   });
 
+  it("accepts jev as a controller and rejects a controller it does not know", () => {
+    expect(parseArgs(["--controllers", "fixed,jev"]).overrides.controllers).toEqual(["fixed", "jev"]);
+    expect(() => parseArgs(["--controllers", "swarm"])).toThrow(/unknown controller/);
+  });
+
+  it("parses the jev adapter choice", () => {
+    expect(parseArgs(["--controllers", "jev"]).jevAdapter).toBe("mock");
+    expect(parseArgs(["--controllers", "jev", "--jev", "live"]).jevAdapter).toBe("live");
+    expect(() => parseArgs(["--jev", "guess"])).toThrow(/--jev must be mock or live/);
+  });
+
   it("refuses unknown trips, levels, drivers, controllers and horizons", () => {
     expect(() => parseArgs(["--trip", "nope"])).toThrow(/unknown trip id/);
     expect(() => parseArgs(["--traffic", "gridlock"])).toThrow(/unknown traffic level/);
     expect(() => parseArgs(["--driver", "racer"])).toThrow(/unknown driver/);
-    expect(() => parseArgs(["--controllers", "jev"])).toThrow(/unknown controller/);
+    expect(() => parseArgs(["--controllers", "swarm"])).toThrow(/unknown controller/);
     expect(() => parseArgs(["--horizon", "soon"])).toThrow(/--horizon/);
     expect(() => parseArgs(["--seed", "-1"])).toThrow(/--seed/);
     expect(() => parseArgs(["--nope"])).toThrow(/unknown option/);
@@ -411,5 +430,167 @@ describe("benchmark stays browser-free", () => {
     expect(seam).toContain('from "@/sim/engine"');
     expect(seam).toContain('from "@/controllers/fixed"');
     expect(seam).toContain('from "@/controllers/adaptive"');
+  });
+});
+
+/**
+ * Issue #13: Jev joins the matrix through the same seam, and adding it must not
+ * disturb the baseline. The mock adapter is used throughout — deterministic, no
+ * network, no credential — and the live path is exercised against a stubbed
+ * service, which is what makes it testable without inventing Jev's answers.
+ */
+describe("benchmark runs Jev through the same seam", () => {
+  function jevFactories(): {
+    controllers: { jev: () => JevController };
+    controllersSeen: JevController[];
+  } {
+    const controllersSeen: JevController[] = [];
+    return {
+      controllersSeen,
+      controllers: {
+        jev: () => {
+          const controller = createJevController({ client: createMockJevClient() });
+          controllersSeen.push(controller);
+          return controller;
+        },
+      },
+    };
+  }
+
+  it("adds a Jev record without changing the Fixed and Adaptive records", () => {
+    const matrix = smokeMatrix();
+    const baseline = runBenchmarkMatrix(model, matrix);
+    const withJev = runBenchmarkMatrix(model, { ...matrix, controllers: [...matrix.controllers, "jev"] }, jevFactories());
+    expect(withJev).toHaveLength(3);
+    const baselineRecords = withJev.filter((run) => run.controller !== "jev");
+    expect(JSON.stringify(baselineRecords)).toBe(JSON.stringify(baseline));
+    // Same world for all three: fingerprint and receipt are shared.
+    expect(new Set(withJev.map((run) => run.fingerprint)).size).toBe(1);
+    expect(new Set(withJev.map((run) => JSON.stringify(run.world))).size).toBe(1);
+  });
+
+  it("produces a deterministic Jev record with the mock adapter", () => {
+    const scenario = {
+      tripId: "soldier-field-to-navy-pier" as const,
+      trafficLevel: "everyday" as const,
+      seed: 42,
+      driver: "tourist" as const,
+      durationMs: SMOKE_HORIZON_MS,
+    };
+    const first = runBenchmarkScenario(model, scenario, ["jev"], jevFactories());
+    const second = runBenchmarkScenario(model, scenario, ["jev"], jevFactories());
+    expect(first[0].controller).toBe("jev");
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(first[0].trip.distanceM).toBeGreaterThan(0);
+  });
+
+  it("refuses to run Jev with no adapter rather than inventing one", () => {
+    const scenario = {
+      tripId: "soldier-field-to-navy-pier" as const,
+      trafficLevel: "everyday" as const,
+      seed: 42,
+      driver: "tourist" as const,
+      durationMs: SMOKE_HORIZON_MS,
+    };
+    expect(() => runBenchmarkScenario(model, scenario, ["jev"])).toThrow(/no adapter supplied/);
+  });
+
+  it("applies live policies mid-run through the HTTP client, without a real service", async () => {
+    // A stubbed service: the point is the wiring (async adapter -> policy ->
+    // directives), not Jev's judgement, which no test may invent.
+    const seen: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body)) as {
+        schemaVersion: number;
+        corridors: { corridorId: number }[];
+      };
+      seen.push(String(url));
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      // The token rides in the header, never in the body.
+      if (!String(headers.authorization ?? "").startsWith("Bearer ")) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+      }
+      return new Response(
+        JSON.stringify({
+          schemaVersion: request.schemaVersion,
+          pressureScale: 1.2,
+          hint: "neutral",
+          corridorWeights: request.corridors.slice(0, 1).map((corridor) => ({ id: corridor.corridorId, weight: 1.5 })),
+          regionWeights: [],
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const controllersSeen: JevController[] = [];
+    const live = createHttpJevClient({
+      endpoint: "https://jev.invalid/policy",
+      token: "test-token-not-a-real-secret",
+      fetchImpl,
+    });
+    const scenario = {
+      tripId: "soldier-field-to-navy-pier" as const,
+      trafficLevel: "everyday" as const,
+      seed: 42,
+      driver: "tourist" as const,
+      durationMs: 20_000,
+    };
+    const record = await runLiveScenario(model, scenario, "jev", {
+      controllers: {
+        jev: () => {
+          const controller = createJevController({ client: live, refreshMs: 5_000 });
+          controllersSeen.push(controller);
+          return controller;
+        },
+      },
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((url) => url === "https://jev.invalid/policy")).toBe(true);
+    expect(record.controller).toBe("jev");
+    expect(record.trip.distanceM).toBeGreaterThan(0);
+    // The adapter's own account: requests were made AND policies applied.
+    const status = controllersSeen[0].status();
+    expect(status.refreshes).toBeGreaterThan(0);
+    expect(status.applied).toBeGreaterThan(0);
+    expect(status.rejected).toBe(0);
+    expect(controllersSeen[0].policy().pressureScale).toBe(1.2);
+  });
+
+  it("keeps a failed live service from fabricating a policy", async () => {
+    const controllersSeen: JevController[] = [];
+    const failing = createHttpJevClient({
+      endpoint: "https://jev.invalid/policy",
+      token: "test-token-not-a-real-secret",
+      fetchImpl: (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch,
+    });
+    const scenario = {
+      tripId: "soldier-field-to-navy-pier" as const,
+      trafficLevel: "everyday" as const,
+      seed: 42,
+      driver: "tourist" as const,
+      durationMs: 20_000,
+    };
+    const record = await runLiveScenario(model, scenario, "jev", {
+      controllers: {
+        jev: () => {
+          const controller = createJevController({ client: failing, refreshMs: 5_000 });
+          controllersSeen.push(controller);
+          return controller;
+        },
+      },
+    });
+    expect(record.controller).toBe("jev");
+    const status = controllersSeen[0].status();
+    expect(status.applied).toBe(0);
+    expect(status.rejected).toBeGreaterThan(0);
+    expect(status.policySource).toBe("neutral");
+    expect(status.lastError).toMatch(/500/);
+  });
+
+  it("caps a live run at a smoke size", () => {
+    expect(liveRunCapError(1)).toBeNull();
+    expect(liveRunCapError(8)).toBeNull();
+    expect(liveRunCapError(9)).toMatch(/capped at 8/);
+    expect(liveRunCapError(96)).toMatch(/narrow/);
   });
 });

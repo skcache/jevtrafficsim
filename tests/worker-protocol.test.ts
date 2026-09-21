@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTROLLER_CHOICES,
   LIVE_RUN_HORIZON_MS,
   nextSeed,
   parseWorkerCommand,
   PLAYBACK_STEPS_PER_TICK,
   SIM_TICK_MS,
 } from "@/worker/protocol";
+import { CONTROLLER_OPTIONS } from "@/components/ui-model";
 
 describe("worker protocol validation", () => {
   it("accepts a well-formed INIT and applies defaults", () => {
@@ -56,7 +58,7 @@ describe("worker protocol validation", () => {
     expect(() => parseWorkerCommand({ ...base, citySize: "huge" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, trafficLevel: "apocalypse" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, tripId: "made-up-trip" })).toThrow(RangeError);
-    expect(() => parseWorkerCommand({ ...base, controller: "jev" })).toThrow(RangeError);
+    expect(() => parseWorkerCommand({ ...base, controller: "swarm" })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, seed: Number.NaN })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, seed: -1 })).toThrow(RangeError);
     expect(() => parseWorkerCommand({ ...base, seed: 1.5 })).toThrow(RangeError);
@@ -90,16 +92,20 @@ describe("worker protocol validation", () => {
     expect(() => parseWorkerCommand({ type: "RESET" })).toThrow(RangeError);
   });
 
-  it("validates SET_CONTROLLER and never accepts Jev", () => {
-    expect(parseWorkerCommand({ type: "SET_CONTROLLER", controller: "fixed" })).toEqual({
-      type: "SET_CONTROLLER",
-      controller: "fixed",
-    });
-    expect(parseWorkerCommand({ type: "SET_CONTROLLER", controller: "adaptive" })).toEqual({
-      type: "SET_CONTROLLER",
-      controller: "adaptive",
-    });
-    expect(() => parseWorkerCommand({ type: "SET_CONTROLLER", controller: "jev" })).toThrow(
+  it("validates SET_CONTROLLER against the known controllers", () => {
+    // Jev joined the protocol in Issue #13 (it is a citywide controller like the
+    // other two). The setup UI still offers Fixed and Adaptive only — wiring Jev
+    // into the product's controls was explicitly out of scope — so the protocol
+    // accepting it is not the same as a user being able to pick it.
+    for (const controller of CONTROLLER_CHOICES) {
+      expect(parseWorkerCommand({ type: "SET_CONTROLLER", controller })).toEqual({
+        type: "SET_CONTROLLER",
+        controller,
+      });
+    }
+    expect([...CONTROLLER_CHOICES]).toEqual(["fixed", "adaptive", "jev"]);
+    expect(CONTROLLER_OPTIONS.map((option) => option.value)).toEqual(["fixed", "adaptive"]);
+    expect(() => parseWorkerCommand({ type: "SET_CONTROLLER", controller: "swarm" })).toThrow(
       RangeError,
     );
     expect(() => parseWorkerCommand({ type: "SET_CONTROLLER" })).toThrow(RangeError);
