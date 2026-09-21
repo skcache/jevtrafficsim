@@ -40,6 +40,13 @@ export interface ChallengeResult {
   readonly driver: DriverStrategy;
   /** Human-fired incidents during this run: > 0 makes it non-comparable. */
   readonly manualIncidents: number;
+  /**
+   * The scenario itself was changed while this run was playing (a live traffic
+   * level change, a mid-run controller switch). The run really happened, but it
+   * did not play one scenario start to finish — so it may not be shown beside
+   * baseline results for the scenario it started as.
+   */
+  readonly modified: boolean;
   readonly simulatedMs: number;
   readonly trip: ChallengeTripResult;
   readonly city: ChallengeCityResult;
@@ -50,6 +57,7 @@ export function buildChallengeResult(
   scenario: ChallengeScenario,
   controller: ControllerChoice,
   manualIncidents: number,
+  modified = false,
 ): ChallengeResult {
   const ego =
     engine.egoVehicleId === null
@@ -79,6 +87,7 @@ export function buildChallengeResult(
     controller,
     driver: scenario.driver,
     manualIncidents,
+    modified,
     simulatedMs: engine.traffic.timeMs,
     trip: {
       completed: ego?.state === "arrived",
@@ -104,9 +113,9 @@ export type ComparisonVerdict =
   | { readonly comparable: false; readonly reason: string };
 
 /**
- * The comparison guard. Same world (fingerprint), same driver, and no human
- * interventions on either side — otherwise the two results are not a
- * comparison, and the UI must say so rather than show a misleading table.
+ * The comparison guard. Same world (fingerprint) and no human interventions on
+ * either side — otherwise the two results are not a comparison, and the UI must
+ * say so rather than show a misleading table.
  */
 export function comparisonVerdict(a: ChallengeResult, b: ChallengeResult): ComparisonVerdict {
   if (a.fingerprint !== b.fingerprint) {
@@ -115,8 +124,42 @@ export function comparisonVerdict(a: ChallengeResult, b: ChallengeResult): Compa
   if (a.controller === b.controller) {
     return { comparable: false, reason: "same controller" };
   }
-  if (a.manualIncidents > 0 || b.manualIncidents > 0) {
-    return { comparable: false, reason: "a run was changed by hand" };
+  return cleanRunVerdict([a, b]);
+}
+
+/**
+ * The product's comparison is three runs of ONE scenario: the visible Jev run
+ * and the two headless baselines. The same guard applies, plus the rule that
+ * every fingerprint must agree — three results from two scenarios are not a
+ * comparison either.
+ */
+export function comparisonVerdictAll(results: readonly ChallengeResult[]): ComparisonVerdict {
+  if (results.length < 2) {
+    return { comparable: false, reason: "not enough runs to compare" };
+  }
+  const first = results[0];
+  for (const result of results) {
+    if (result.fingerprint !== first.fingerprint) {
+      return { comparable: false, reason: "different scenarios" };
+    }
+    if (result.controller === first.controller && result !== first) {
+      return { comparable: false, reason: "same controller" };
+    }
+  }
+  return cleanRunVerdict(results);
+}
+
+/** Neither run may have been touched by hand, in an incident or in its setup. */
+function cleanRunVerdict(results: readonly ChallengeResult[]): ComparisonVerdict {
+  for (const result of results) {
+    if (result.manualIncidents > 0) {
+      return { comparable: false, reason: "a run was changed by hand" };
+    }
+  }
+  for (const result of results) {
+    if (result.modified) {
+      return { comparable: false, reason: "the scenario changed mid-run" };
+    }
   }
   return { comparable: true };
 }

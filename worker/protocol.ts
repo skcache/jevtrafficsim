@@ -11,6 +11,7 @@ import { CURATED_TRIP_IDS, type CuratedTripId } from "@/cities/chicago-trips";
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type {
   PresentationMetrics,
+  PresentationPolicy,
   PresentationSnapshot,
 } from "./presentation-snapshot";
 import type {
@@ -45,11 +46,11 @@ export const LIVE_RUN_HORIZON_MS = 600_000;
 /**
  * Controllers the simulation can run.
  *
- * `jev` is a citywide policy controller whose opinion comes from an external
- * service through the adapter in `jev/` (Issue #13). It is part of the protocol
- * so the challenge harness and the benchmark can run it, but the setup UI
- * deliberately still offers Fixed and Adaptive only (`CONTROLLER_OPTIONS`) —
- * wiring Jev into the product's controls is not this issue's job.
+ * `jev` is the product's primary live run: a citywide policy controller whose
+ * opinion comes from an external service through the adapter in `jev/`. Fixed
+ * and Adaptive are the deterministic baselines for the SAME scenario, run
+ * headlessly beside it (never one at a time in front of the user). Choosing a
+ * controller by hand is a developer control: it lives behind `?debug`.
  */
 export const CONTROLLER_CHOICES = ["fixed", "adaptive", "jev"] as const;
 export type ControllerChoice = (typeof CONTROLLER_CHOICES)[number];
@@ -115,6 +116,21 @@ export type WorkerCommand =
       readonly durationMs?: number;
     };
 
+/**
+ * Baseline comparison request (Issue #15). The product runs one scenario three
+ * ways: the visible Jev run, plus Fixed and Adaptive on the SAME world. The two
+ * baselines travel to their own worker with the scenario fields and nothing
+ * else — no controller choice, no adapter, no live state.
+ */
+export type BaselinesCommand = {
+  readonly type: "BASELINES";
+  readonly tripId: CuratedTripId;
+  readonly trafficLevel: TrafficLevel;
+  readonly driver: DriverStrategy;
+  readonly seed: number;
+  readonly durationMs: number;
+};
+
 /* ------------------------------ worker -> main ------------------------------ */
 
 export interface RunConfig {
@@ -165,6 +181,8 @@ export type WorkerEvent =
       readonly timeMs: number;
       /** The run's outcome under its controller, tagged for fair comparison. */
       readonly result: ChallengeResult;
+      /** Who governed the signals: null when there was no external policy. */
+      readonly policy: PresentationPolicy | null;
     }
   | {
       readonly type: "COMPARE_RESULT";
@@ -179,6 +197,20 @@ export type WorkerEvent =
       readonly incidentEntries: number;
     }
   | { readonly type: "ERROR"; readonly message: string };
+
+/** What the baseline worker sends back: two results for one fingerprint. */
+export type BaselinesEvent =
+  | {
+      readonly type: "BASELINES_RESULT";
+      readonly fingerprint: string;
+      readonly driver: DriverStrategy;
+      readonly tripId: CuratedTripId;
+      readonly trafficLevel: TrafficLevel;
+      readonly fixed: ChallengeResult;
+      readonly adaptive: ChallengeResult;
+      readonly incidentEntries: number;
+    }
+  | { readonly type: "BASELINES_ERROR"; readonly message: string };
 
 /* -------------------------------- validation -------------------------------- */
 
@@ -299,6 +331,35 @@ export function parseWorkerCommand(raw: unknown): WorkerCommand {
     default:
       fail("worker command", `unknown type ${String(type)}`);
   }
+}
+
+/**
+ * Validates one baseline request. Same rules as the interactive comparison: the
+ * fields must name a real scenario, and the duration is bounded like every other
+ * run horizon.
+ */
+export function parseBaselinesCommand(raw: unknown): BaselinesCommand {
+  const record = readRecord(raw);
+  if (record.type !== "BASELINES") {
+    fail("baselines command", `expected type BASELINES, received ${String(record.type)}`);
+  }
+  const tripId = readChoice("BASELINES.tripId", record.tripId, CURATED_TRIP_IDS);
+  const trafficLevel = readChoice("BASELINES.trafficLevel", record.trafficLevel, TRAFFIC_LEVEL_CHOICES);
+  const driver = readChoice("BASELINES.driver", record.driver, DRIVER_CHOICES);
+  const seed = readSeed("BASELINES.seed", record.seed);
+  let durationMs = LIVE_RUN_HORIZON_MS;
+  if (record.durationMs !== undefined) {
+    if (
+      typeof record.durationMs !== "number" ||
+      !Number.isFinite(record.durationMs) ||
+      record.durationMs <= 0 ||
+      record.durationMs > 24 * 60 * 60 * 1000
+    ) {
+      fail("BASELINES.durationMs", `expected a positive finite duration, received ${String(record.durationMs)}`);
+    }
+    durationMs = record.durationMs;
+  }
+  return { type: "BASELINES", tripId, trafficLevel, driver, seed, durationMs };
 }
 
 /** Deterministic next seed for a "new seed" reset: +1 in uint32 space. */

@@ -11,18 +11,24 @@ import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
 import type {
   PresentationMetrics,
+  PresentationPolicy,
   PresentationTripProgress,
 } from "@/worker/presentation-snapshot";
 import type { ControllerChoice, RunConfig } from "@/worker/protocol";
 import type { DriverStrategy } from "@/sim/driver";
-import type { ChallengeResult, ComparisonVerdict } from "@/worker/challenge-result";
+import type { ChallengeResult } from "@/worker/challenge-result";
 
-/** A finished headless comparison of the current scenario (Issue #28). */
-export interface ComparisonState {
+/**
+ * The two deterministic baselines for one scenario (Issue #15), computed off
+ * the interactive thread while the visible Jev run plays. They belong to the
+ * fingerprint they were built for: results for another scenario are ignored
+ * rather than quietly shown beside this run.
+ */
+export interface BaselineState {
   readonly fixed: ChallengeResult;
   readonly adaptive: ChallengeResult;
-  readonly verdict: ComparisonVerdict;
   readonly fingerprint: string;
+  readonly incidentEntries: number;
 }
 
 export type UiPhase = "landing" | "config" | "entering" | "city";
@@ -40,9 +46,15 @@ export interface UiState {
   driver: DriverStrategy;
   /** Scenario identity of the running world (Issue #28), shown instead of the seed. */
   scenarioFingerprint: string | null;
-  /** Headless Fixed-vs-Adaptive run of the current scenario, when one exists. */
-  comparison: ComparisonState | null;
-  comparing: boolean;
+  /** Fixed and Adaptive baselines for the running scenario, once computed. */
+  baselines: BaselineState | null;
+  baselinesRunning: boolean;
+  /** The visible run's own outcome, published when it finishes. */
+  liveResult: ChallengeResult | null;
+  /** Who governed the signals in the visible run (live | replay | fallback). */
+  policy: PresentationPolicy | null;
+  /** Developer controls (?debug) only: controller choice, raw seed, city scale. */
+  debug: boolean;
   seed: number;
   ready: boolean;
   running: boolean;
@@ -71,8 +83,11 @@ export interface UiState {
   setController: (controller: ControllerChoice) => void;
   setDriver: (driver: DriverStrategy) => void;
   setScenarioFingerprint: (fingerprint: string | null) => void;
-  setComparison: (comparison: ComparisonState | null) => void;
-  setComparing: (comparing: boolean) => void;
+  setBaselines: (baselines: BaselineState | null) => void;
+  setBaselinesRunning: (running: boolean) => void;
+  setLiveResult: (result: ChallengeResult | null) => void;
+  setPolicy: (policy: PresentationPolicy | null) => void;
+  setDebug: (debug: boolean) => void;
   setSeed: (seed: number) => void;
   setScenarioOpen: (open: boolean) => void;
   applyReady: (config: RunConfig, scaleLabel: string) => void;
@@ -98,11 +113,15 @@ export const useUiStore = create<UiState>()((set) => ({
   citySize: "large",
   trafficLevel: "everyday",
   tripId: "soldier-field-to-navy-pier",
-  controller: "adaptive",
+  /** Jev is the product's visible run; Fixed/Adaptive are the baselines. */
+  controller: "jev",
   driver: "tourist",
   scenarioFingerprint: null,
-  comparison: null,
-  comparing: false,
+  baselines: null,
+  baselinesRunning: false,
+  liveResult: null,
+  policy: null,
+  debug: false,
   seed: 42,
   ready: false,
   running: false,
@@ -127,8 +146,11 @@ export const useUiStore = create<UiState>()((set) => ({
   setController: (controller) => set({ controller }),
   setDriver: (driver) => set({ driver }),
   setScenarioFingerprint: (scenarioFingerprint) => set({ scenarioFingerprint }),
-  setComparison: (comparison) => set({ comparison }),
-  setComparing: (comparing) => set({ comparing }),
+  setBaselines: (baselines) => set({ baselines }),
+  setBaselinesRunning: (baselinesRunning) => set({ baselinesRunning }),
+  setLiveResult: (liveResult) => set({ liveResult }),
+  setPolicy: (policy) => set({ policy }),
+  setDebug: (debug) => set({ debug }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
   applyReady: (config, scaleLabel) =>
@@ -149,6 +171,10 @@ export const useUiStore = create<UiState>()((set) => ({
       egoSpeedMps: 0,
       feedback: null,
       surgeVisible: false,
+      // A new run invalidates the previous run's outcome and provenance. The
+      // baselines are dispatched separately and are matched by fingerprint.
+      liveResult: null,
+      policy: null,
     }),
   setRunning: (running) => set({ running }),
   setRunComplete: (runComplete) => set({ runComplete }),
@@ -167,5 +193,12 @@ export const useUiStore = create<UiState>()((set) => ({
   showSurge: () => set({ surgeVisible: true }),
   hideSurge: () => set({ surgeVisible: false }),
   resetMetrics: () =>
-    set({ metrics: null, metricsHistory: [], trip: null, egoState: null, egoSpeedMps: 0 }),
+    set({
+      metrics: null,
+      metricsHistory: [],
+      trip: null,
+      egoState: null,
+      egoSpeedMps: 0,
+      liveResult: null,
+    }),
 }));

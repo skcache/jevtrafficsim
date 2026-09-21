@@ -25,6 +25,7 @@ import {
   type ChallengeScenario,
 } from "@/worker/challenge-scenario";
 import { buildChallengeResult } from "@/worker/challenge-result";
+import type { PresentationPolicy } from "@/worker/presentation-snapshot";
 import { fingerprintForRun } from "@/worker/challenge-scenario";
 import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
@@ -95,6 +96,8 @@ interface WorkerState {
   scenario: ChallengeScenario | null;
   /** Human-fired incidents during this run; > 0 makes the result non-comparable. */
   manualIncidents: number;
+  /** A live command changed the scenario mid-run (see ChallengeResult.modified). */
+  modified: boolean;
   /** Guards against overlapping async builds (fast scale switching). */
   buildToken: number;
 }
@@ -115,6 +118,7 @@ const state: WorkerState = {
   manualIncidentSequence: 0,
   scenario: null,
   manualIncidents: 0,
+  modified: false,
   buildToken: 0,
 };
 
@@ -134,6 +138,37 @@ function makeController(choice: ControllerChoice, identity: string) {
   return choice === "adaptive" ? createAdaptiveController() : createFixedController();
 }
 
+/**
+ * Who is really deciding the signals right now.
+ *
+ * A policy controller knows how much of the run its own policy governed and how
+ * much the safety fallback had to cover. That distinction is the product's, not
+ * an implementation detail: a run that spent meaningful time on the fallback may
+ * never be presented as pure live Jev. Controllers without an external policy
+ * (Fixed, Adaptive) report nothing.
+ */
+function policyProvenance(): PresentationPolicy | null {
+  const controller = state.engine?.controller as
+    | { meta?: () => PresentationPolicy & { kind?: string } }
+    | undefined;
+  if (!controller || typeof controller.meta !== "function") {
+    return null;
+  }
+  try {
+    const meta = controller.meta();
+    return {
+      source: meta.source,
+      liveMs: meta.liveMs,
+      replayMs: meta.replayMs,
+      fallbackMs: meta.fallbackMs,
+      accepted: meta.accepted,
+      rejected: meta.rejected,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function postSnapshot(): void {
   if (!state.engine) {
     return;
@@ -144,6 +179,7 @@ function postSnapshot(): void {
       state.engine,
       state.snapshotSequence,
       state.config?.tripId ?? null,
+      policyProvenance(),
     ),
   });
   state.snapshotSequence += 1;
@@ -247,6 +283,7 @@ async function buildRun(config: RunConfig): Promise<void> {
   });
   state.scenario = scenario;
   state.manualIncidents = 0;
+  state.modified = false;
   state.config = config;
   state.engine = engine;
   state.trip = trip;
@@ -366,6 +403,7 @@ function runTick(): void {
     post({
       type: "RUN_COMPLETE",
       timeMs: engine.traffic.timeMs,
+      policy: policyProvenance(),
       result: buildChallengeResult(
         engine,
         state.scenario ??
@@ -378,6 +416,7 @@ function runTick(): void {
           }),
         config.controller,
         state.manualIncidents,
+        state.modified,
       ),
     });
     return;
@@ -430,6 +469,9 @@ function handleCommand(command: WorkerCommand): void {
       // mid-run must not change the scenario identity: the new Jev controller is
       // bound to the run that is already in progress.
       const runningConfig = state.config;
+      // Half the run under one controller and half under another is not a run
+      // of either: the result stays visible but is marked non-comparable.
+      state.modified = true;
       setEngineController(
         state.engine,
         makeController(command.controller, fingerprintForRun(runningConfig)),
@@ -496,6 +538,9 @@ function handleCommand(command: WorkerCommand): void {
         injectSpawns(engine, extra);
       }
       state.config = { ...config, trafficLevel: command.trafficLevel };
+      // The scenario this run started as is no longer the scenario it is
+      // playing, so its outcome cannot sit beside a clean baseline run.
+      state.modified = true;
       postSnapshot();
       break;
     }

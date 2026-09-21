@@ -116,11 +116,38 @@ export interface PresentationIncidentMarker {
   readonly expiresAtMs: number | null;
 }
 
+/**
+ * Who actually governed the signals this run, in the smallest form the product
+ * needs. A policy run that spent time in its fallback must say so: the numbers
+ * on screen came from two different decision makers, and presenting the whole
+ * run as pure live Jev would be a lie about the experiment.
+ */
+export interface PresentationPolicy {
+  /** "live" and "replay" are the policy speaking; "fallback" is the safety net. */
+  readonly source: "live" | "replay" | "fallback";
+  readonly liveMs: number;
+  readonly replayMs: number;
+  readonly fallbackMs: number;
+  readonly accepted: number;
+  readonly rejected: number;
+}
+
+/** Fraction of a policy run that its fallback had to cover, in [0,1]. */
+export function fallbackShare(policy: PresentationPolicy): number {
+  const total = policy.liveMs + policy.replayMs + policy.fallbackMs;
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, policy.fallbackMs / total));
+}
+
 export interface PresentationSnapshot {
   /** Monotonic frame counter from the worker. */
   readonly sequence: number;
   readonly timeMs: number;
   readonly controller: string;
+  /** Policy provenance, or null for controllers that have no external policy. */
+  readonly policy: PresentationPolicy | null;
   /** The challenge's protagonist, or null before it exists. At most one. */
   readonly ego: PresentationEgoVehicle | null;
   /** Sparse road state for later traffic colouring. No vehicle objects. */
@@ -307,6 +334,7 @@ export function buildPresentationSnapshot(
   engine: EngineState,
   sequence: number,
   tripId: string | null = null,
+  policy: PresentationPolicy | null = null,
 ): PresentationSnapshot {
   const vehicles = engine.traffic.vehicles;
   const queueRanks = assignQueueRanks(vehicles);
@@ -370,6 +398,7 @@ export function buildPresentationSnapshot(
     sequence,
     timeMs: engine.traffic.timeMs,
     controller: engine.controller.id,
+    policy,
     ego,
     roadTraffic: aggregateRoadTraffic(engine),
     routeControls,
