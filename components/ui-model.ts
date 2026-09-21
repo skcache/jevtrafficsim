@@ -360,6 +360,41 @@ export function comparisonRows(
 }
 
 /* ------------------------------------------------------------------ */
+/* Baselines (Issue #15)                                               */
+/* ------------------------------------------------------------------ */
+
+/** Past this long with no baselines, the run asks for them once more. */
+export const BASELINES_REGRACE_MS = 60_000;
+
+export interface BaselineWait {
+  readonly runComplete: boolean;
+  readonly hasBaselines: boolean;
+  readonly fingerprint: string | null;
+  /** Which fingerprint was last asked for, and when. */
+  readonly askedFingerprint: string | null;
+  readonly msSinceAsk: number;
+  readonly alreadyReasked: boolean;
+}
+
+/**
+ * The payoff needs two headless runs that are computed off-thread. A dispatch
+ * can be lost without the page ever learning (a worker that never answers), and
+ * then the comparison would simply never appear. So: if the run has finished,
+ * the scenario's baselines are still missing well past the time they take, and
+ * this scenario has not been re-asked yet, ask once more. Idempotent — the
+ * baselines are a pure function of the scenario — and bounded to one extra ask.
+ */
+export function shouldReaskBaselines(wait: BaselineWait): boolean {
+  if (!wait.runComplete || wait.hasBaselines || wait.alreadyReasked) {
+    return false;
+  }
+  if (wait.fingerprint === null || wait.askedFingerprint !== wait.fingerprint) {
+    return false;
+  }
+  return wait.msSinceAsk >= BASELINES_REGRACE_MS;
+}
+
+/* ------------------------------------------------------------------ */
 /* Provenance (Issue #15)                                              */
 /* ------------------------------------------------------------------ */
 

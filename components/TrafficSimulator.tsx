@@ -32,7 +32,7 @@ import { IncidentBar } from "./IncidentBar";
 import { TripHUD } from "./TripHUD";
 import { Onboarding } from "./Onboarding";
 import { SimChrome } from "./SimChrome";
-import { debugMode, scaleIndexForSize } from "./ui-model";
+import { debugMode, scaleIndexForSize, shouldReaskBaselines } from "./ui-model";
 
 interface JevDebugHook {
   config: unknown;
@@ -153,6 +153,9 @@ export function TrafficSimulator() {
   const framesRef = useRef<FrameBuffer>(createFrameBuffer());
   const workerRef = useRef<Worker | null>(null);
   const baselinesRef = useRef<Worker | null>(null);
+  /** The scenario the baselines were last asked for, and when. */
+  const baselinesAskedRef = useRef<{ fingerprint: string; request: BaselinesCommand; at: number } | null>(null);
+  const baselinesReaskedRef = useRef<string | null>(null);
   const mapHandleRef = useRef<MapHandle | null>(null);
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
@@ -226,14 +229,20 @@ export function TrafficSimulator() {
           // Baselines for the scenario that is ACTUALLY running: the READY
           // config is authoritative, so a setup change made mid-build cannot
           // make the comparison describe a different city than the live run.
-          baselinesRef.current?.postMessage({
+          const request: BaselinesCommand = {
             type: "BASELINES",
             tripId: data.config.tripId,
             trafficLevel: data.config.trafficLevel,
             driver: data.config.driver,
             seed: data.config.seed,
             durationMs: data.config.durationMs,
-          } satisfies BaselinesCommand);
+          };
+          baselinesRef.current?.postMessage(request);
+          baselinesAskedRef.current = {
+            fingerprint: data.scenarioFingerprint,
+            request,
+            at: Date.now(),
+          };
           store.setBaselines(null);
           store.setBaselinesRunning(true);
           const entering = store.phase === "entering";
@@ -465,6 +474,36 @@ export function TrafficSimulator() {
   // Follow camera: the map owns the state; the chrome only mirrors and toggles it.
   const debug = useUiStore((state) => state.debug);
   const following = useUiStore((state) => state.following);
+  const baselines = useUiStore((state) => state.baselines);
+  const runComplete = useUiStore((state) => state.runComplete);
+  const scenarioFingerprint = useUiStore((state) => state.scenarioFingerprint);
+
+  /**
+   * Safety net for a lost baselines dispatch: the comparison is the whole
+   * payoff, so if the run has finished and the scenario's baselines still are
+   * not here, ask once more (bounded — see shouldReaskBaselines).
+   */
+  useEffect(() => {
+    if (!runComplete) {
+      return;
+    }
+    const asked = baselinesAskedRef.current;
+    const reask = shouldReaskBaselines({
+      runComplete,
+      hasBaselines: baselines !== null,
+      fingerprint: scenarioFingerprint,
+      askedFingerprint: asked?.fingerprint ?? null,
+      msSinceAsk: asked === null ? 0 : Date.now() - asked.at,
+      alreadyReasked:
+        asked !== null && baselinesReaskedRef.current === asked.fingerprint,
+    });
+    if (!reask || asked === null) {
+      return;
+    }
+    baselinesReaskedRef.current = asked.fingerprint;
+    useUiStore.getState().setBaselinesRunning(true);
+    baselinesRef.current?.postMessage(asked.request);
+  }, [runComplete, baselines, scenarioFingerprint]);
   const onFollow = useCallback(() => {
     mapHandleRef.current?.followEgo();
   }, []);

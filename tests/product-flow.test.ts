@@ -25,7 +25,15 @@ import { buildCityPartition } from "@/sim/regions";
 import type { JevClient } from "@/jev/client";
 import { JEV_SCHEMA_VERSION } from "@/jev/schema";
 import { useUiStore } from "@/store/ui-store";
-import { COMPARISON_COLUMNS, JEV_FALLBACK_NOTICE_SHARE, comparisonRows, debugMode, policyLabel } from "@/components/ui-model";
+import {
+  BASELINES_REGRACE_MS,
+  COMPARISON_COLUMNS,
+  JEV_FALLBACK_NOTICE_SHARE,
+  comparisonRows,
+  debugMode,
+  policyLabel,
+  shouldReaskBaselines,
+} from "@/components/ui-model";
 import { buildScenarioRun } from "@/worker/challenge-compare";
 import {
   buildChallengeScenario,
@@ -359,5 +367,42 @@ describe("a run a human changed is not shown beside clean baselines", () => {
     expect(worker.match(/state\.modified = true;/g)).toHaveLength(2);
     expect(worker).toContain("state.manualIncidents,\n        state.modified,");
     expect(worker).toContain("state.modified = false;");
+  });
+});
+
+/* ------------------------------------------ 5. the payoff never strands --- */
+
+describe("the payoff does not depend on one delivery of the baselines", () => {
+  const base = {
+    runComplete: true,
+    hasBaselines: false,
+    fingerprint: "abc12345",
+    askedFingerprint: "abc12345",
+    msSinceAsk: BASELINES_REGRACE_MS + 1,
+    alreadyReasked: false,
+  };
+
+  it("asks once more only when the run is over and the answer never came", () => {
+    expect(shouldReaskBaselines(base)).toBe(true);
+    // Still running: the baselines may simply not be needed yet.
+    expect(shouldReaskBaselines({ ...base, runComplete: false })).toBe(false);
+    // They arrived: nothing to do.
+    expect(shouldReaskBaselines({ ...base, hasBaselines: true })).toBe(false);
+    // Too soon to conclude anything is wrong.
+    expect(shouldReaskBaselines({ ...base, msSinceAsk: BASELINES_REGRACE_MS - 1 })).toBe(false);
+    // Exactly at the grace period the answer is due.
+    expect(shouldReaskBaselines({ ...base, msSinceAsk: BASELINES_REGRACE_MS })).toBe(true);
+    // Never re-ask the same scenario twice, and never ask for another one.
+    expect(shouldReaskBaselines({ ...base, alreadyReasked: true })).toBe(false);
+    expect(shouldReaskBaselines({ ...base, askedFingerprint: "other000" })).toBe(false);
+    expect(shouldReaskBaselines({ ...base, fingerprint: null })).toBe(false);
+  });
+
+  it("is wired: READY records what was asked, and the payoff re-asks once", () => {
+    const simulator = source("components/TrafficSimulator.tsx");
+    expect(simulator).toContain("baselinesAskedRef.current = {");
+    expect(simulator).toContain("baselinesReaskedRef.current === asked.fingerprint");
+    expect(simulator).toContain("baselinesRef.current?.postMessage(asked.request);");
+    expect(simulator).toContain("shouldReaskBaselines({");
   });
 });
