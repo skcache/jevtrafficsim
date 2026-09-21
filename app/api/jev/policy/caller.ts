@@ -23,6 +23,21 @@
  * caller-controlled text with no role in identity: it is not read, not parsed
  * and not consulted as a fallback.
  *
+ * CONFIRMED ON THE REAL EDGE (preview deployment, forged headers): a client
+ * `x-real-ip` is REPLACED by the true client address, a client `x-forwarded-for`
+ * chain is replaced rather than appended, and `Forwarded` is replaced by a
+ * signed value. `True-Client-IP` passes through untouched, which is exactly why
+ * nothing here reads it.
+ *
+ * Worth stating plainly, because it is a correction: on this edge today the old
+ * code — the first `x-forwarded-for` entry — would also have resolved to the
+ * true client, since Vercel replaces that header. There was no live bypass at
+ * the time of review. The defect was that the limiter's key rested on an
+ * undocumented platform behaviour that varies (many proxies append, and Vercel
+ * documents neither guarantee), while the platform's own SDKs name a different
+ * header as the client address. This file removes the dependence on that
+ * accident instead of relying on it.
+ *
  * ## Failure behaviour
  *
  * Anything that is missing or unparseable resolves to ONE shared bucket rather
