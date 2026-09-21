@@ -45,6 +45,7 @@ describe("core world-model types", () => {
       state: "queued",
       spawnTimeMs: 0,
       queuedSinceMs: null,
+      rerouteCount: 0,
     };
 
     expect(intersection.control).toBe("signal");

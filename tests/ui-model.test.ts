@@ -12,6 +12,8 @@ import {
   trafficLabel,
 } from "@/components/ui-model";
 import { useUiStore } from "@/store/ui-store";
+import { comparisonRows } from "@/components/ui-model";
+import type { ChallengeResult } from "@/worker/challenge-result";
 
 describe("UI model", () => {
   it("labels the five nested scales Tiny..Metro", () => {
@@ -114,7 +116,7 @@ describe("UI store phases", () => {
     store.setCitySize("large");
     store.setTrafficLevel("rush-hour");
     store.applyReady(
-      { citySize: "large", trafficLevel: "rush-hour", tripId: "willis-tower-to-near-west-side", controller: "adaptive", seed: 77, durationMs: 600_000 },
+      { citySize: "large", trafficLevel: "rush-hour", tripId: "willis-tower-to-near-west-side", controller: "adaptive", driver: "tourist", seed: 77, durationMs: 600_000 },
       "Metro",
     );
     const state = useUiStore.getState();
@@ -130,7 +132,7 @@ describe("UI store phases", () => {
   it("switching controller is a live change, not a reset", () => {
     const store = useUiStore.getState();
     store.applyReady(
-      { citySize: "large", trafficLevel: "everyday", tripId: "united-center-to-navy-pier", controller: "adaptive", seed: 42, durationMs: 600_000 },
+      { citySize: "large", trafficLevel: "everyday", tripId: "united-center-to-navy-pier", controller: "adaptive", driver: "tourist", seed: 42, durationMs: 600_000 },
       "Medium",
     );
     store.setRunComplete(true);
@@ -149,5 +151,53 @@ describe("UI store phases", () => {
     expect(useUiStore.getState().error).toBe("boom");
     store.setError(null);
     expect(useUiStore.getState().error).toBeNull();
+  });
+});
+
+describe("comparison panel (Issue #28)", () => {
+  const result = (
+    completed: boolean,
+    overrides: Partial<ChallengeResult["trip"]> = {},
+    city: Partial<ChallengeResult["city"]> = {},
+  ): ChallengeResult => ({
+    fingerprint: "abc12345",
+    controller: "fixed",
+    driver: "tourist",
+    manualIncidents: 0,
+    simulatedMs: 600_000,
+    trip: {
+      completed,
+      tripTimeMs: 600_000,
+      stoppedMs: 251_000,
+      distanceM: 8_400,
+      averageSpeedMps: 14,
+      rerouteCount: 2,
+      ...overrides,
+    },
+    city: {
+      averageWaitMs: 90_000,
+      p95WaitMs: 261_000,
+      completedTrips: 1_084,
+      throughputPerMinute: 108.4,
+      gridlockRatio: 0.36,
+      activeVehicles: 900,
+      ...city,
+    },
+  });
+
+  it("formats both runs into the same rows", () => {
+    const rows = comparisonRows(result(true), result(true, { stoppedMs: 98_000 }, { gridlockRatio: 0.16 }));
+    const byLabel = new Map(rows.map((row) => [row.label, row]));
+    expect(byLabel.get("Stopped")?.fixed).toBe("4m 11s");
+    expect(byLabel.get("Stopped")?.adaptive).toBe("1m 38s");
+    expect(byLabel.get("Trips done")?.fixed).toBe("1,084");
+    expect(byLabel.get("Gridlock")?.adaptive).toBe("16%");
+    expect(byLabel.get("Reroutes")?.fixed).toBe("2");
+  });
+
+  it("reports no trip time for a run that never arrived", () => {
+    const rows = comparisonRows(result(false), result(true));
+    expect(rows.find((row) => row.label === "Trip time")?.fixed).toBe("—");
+    expect(rows.find((row) => row.label === "Trip time")?.adaptive).toBe("10m 00s");
   });
 });

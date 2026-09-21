@@ -18,12 +18,14 @@ describe("worker protocol validation", () => {
       controller: "adaptive",
       seed: 42,
     });
+    // Driver is part of the scenario; it defaults to the tourist profile.
     expect(command).toEqual({
       type: "INIT",
       citySize: "medium",
       trafficLevel: "everyday",
       tripId: "united-center-to-navy-pier",
       controller: "adaptive",
+      driver: "tourist",
       seed: 42,
       durationMs: undefined,
     });
@@ -33,10 +35,12 @@ describe("worker protocol validation", () => {
       trafficLevel: "rush-hour",
       tripId: "soldier-field-to-river-north",
       controller: "fixed",
+      driver: "local",
       seed: 0xffffffff,
       durationMs: 120_000,
     });
     expect(withDuration.type === "INIT" && withDuration.durationMs).toBe(120_000);
+    expect(withDuration.type === "INIT" && withDuration.driver).toBe("local");
   });
 
   it("rejects malformed INIT payloads", () => {
