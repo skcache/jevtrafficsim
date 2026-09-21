@@ -17,9 +17,8 @@
  * intersection artifacts and made the route read as multiple objects.
  */
 export const ROUTE_SCALE = {
-  /** Navigation blue stays constant; traffic state is a separate city layer. */
-  color: [55, 112, 214] as const,
-  widthM: 13,
+  /** Colours come from ROUTE_TRAFFIC_COLORS (blue / amber / red). */
+  widthM: 15,
   minPixels: 5,
   maxPixels: 36,
   opacity: 0.96,
@@ -87,11 +86,14 @@ export const NETWORK_CONTROL_SCALE = {
 } as const;
 
 /**
- * The ego is intentionally easier to track than a physically exact 4.6 m car,
- * but remains a map object rather than a fixed-size UI badge.
+ * The ego is intentionally easier to track than a physically exact 4.6 m car:
+ * it reads like the car in a navigation app, filling most of its lane. It is
+ * still a map object (metres first) with a pixel FLOOR so it never shrinks away
+ * when the camera pulls back and a CAP so it never smears when it descends —
+ * which is what keeps the scale stable across zoom.
  */
 export const EGO_SCALE = {
-  lengthScale: 2.15,
-  minPixelsByClass: { car: 22, truck: 30, bicycle: 14 } as const,
-  maxPixelsByClass: { car: 150, truck: 190, bicycle: 90 } as const,
+  lengthScale: 4.5,
+  minPixelsByClass: { car: 58, truck: 76, bicycle: 34 } as const,
+  maxPixelsByClass: { car: 260, truck: 320, bicycle: 150 } as const,
 } as const;

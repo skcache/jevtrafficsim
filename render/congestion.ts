@@ -13,7 +13,7 @@
  */
 import type { PresentationSnapshot } from "@/worker/presentation-snapshot";
 
-export type CongestionLevel = "flowing" | "warm" | "bad" | "severe";
+export type CongestionLevel = "warm" | "bad" | "severe";
 
 export interface RoadPressure {
   readonly roadId: number;
@@ -45,18 +45,17 @@ const LEVELS: readonly {
 ];
 
 /**
- * City traffic-mode colours. Flowing roads get a quiet green proof-of-life;
- * pressure graduates through amber/orange/red. The currently visible ego route
- * is filtered out by CityMap because it stays one navigation-blue band.
+ * City traffic-mode colours: amber means traffic, red means heavy/blocked.
+ * There is deliberately NO colour for a free-flowing road — a neutral road
+ * stays neutral, so "nothing painted" is the free baseline.
  */
 export const CONGESTION_COLORS: Record<
   CongestionLevel,
   readonly [number, number, number, number]
 > = {
-  flowing: [79, 143, 104, 72],
-  warm: [217, 168, 92, 120],
-  bad: [214, 124, 58, 150],
-  severe: [178, 58, 44, 170],
+  warm: [222, 164, 72, 140],
+  bad: [214, 108, 46, 168],
+  severe: [178, 52, 40, 190],
 };
 
 function levelFor(
@@ -74,9 +73,10 @@ function levelFor(
       return rule.level;
     }
   }
-  // A road carrying moving background vehicles is still part of the traffic
-  // system. Draw it quietly instead of making the city look empty until a jam.
-  return active > 0 ? "flowing" : null;
+  // No rule matched: the road is free. It stays NEUTRAL — free roads are never
+  // painted, so the overlay only ever adds amber/red pressure on top of the map.
+  void active;
+  return null;
 }
 
 /**

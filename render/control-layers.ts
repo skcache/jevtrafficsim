@@ -29,7 +29,9 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
   }
   const signal = control.signal;
   if (!signal) {
-    return "control-signal-neutral";
+    // A control with no live signal state is a stop sign in every way that
+    // matters to the driver: never render a blank head.
+    return "control-signal-red";
   }
   if (signal.stage === "yellow") {
     return "control-signal-yellow";
@@ -37,6 +39,8 @@ export function controlSpriteFor(control: ContextualControl): ControlSpriteId {
   if (signal.stage === "green" && signal.egoApproachPermitted) {
     return "control-signal-green";
   }
+  // yellow -> yellow, all-red -> red, green-with-other-group -> red: every
+  // stage maps to a lamp, so the head is never blank between phases.
   return "control-signal-red";
 }
 
