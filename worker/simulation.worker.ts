@@ -14,6 +14,8 @@
  */
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
+import { createJevController } from "@/controllers/jev";
+import { createRelayJevClient } from "@/jev/client";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
@@ -120,6 +122,11 @@ function post(event: WorkerEvent): void {
 }
 
 function makeController(choice: ControllerChoice) {
+  if (choice === "jev") {
+    // Browser path: the relay client asks our own route, which is the only
+    // place the service credential lives. Nothing secret reaches this worker.
+    return createJevController({ client: createRelayJevClient() });
+  }
   return choice === "adaptive" ? createAdaptiveController() : createFixedController();
 }
 
