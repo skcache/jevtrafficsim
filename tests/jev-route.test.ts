@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { POST } from "@/app/api/jev/policy/route";
+import { POST, readJevEnvironment } from "@/app/api/jev/policy/route";
 import { JEV_SCHEMA_VERSION } from "@/jev/schema";
 import { DEFAULT_SIGNAL_TIMING } from "@/sim/config";
 import type { JevPolicyRequest } from "@/jev/schema";
@@ -24,12 +24,14 @@ const originalEnv = {
   JEV_ENDPOINT: process.env.JEV_ENDPOINT,
   JEV_TOKEN: process.env.JEV_TOKEN,
   JEV_TIMEOUT_MS: process.env.JEV_TIMEOUT_MS,
+  JEV_MODEL: process.env.JEV_MODEL,
 };
 const originalFetch = globalThis.fetch;
 
 function configure(): void {
   process.env.JEV_ENDPOINT = ENDPOINT;
   process.env.JEV_TOKEN = TOKEN;
+  delete process.env.JEV_MODEL;
 }
 
 function request(overrides: Partial<JevPolicyRequest> = {}): JevPolicyRequest {
@@ -105,6 +107,11 @@ afterEach(() => {
   process.env.JEV_ENDPOINT = originalEnv.JEV_ENDPOINT;
   process.env.JEV_TOKEN = originalEnv.JEV_TOKEN;
   process.env.JEV_TIMEOUT_MS = originalEnv.JEV_TIMEOUT_MS;
+  if (originalEnv.JEV_MODEL === undefined) {
+    delete process.env.JEV_MODEL;
+  } else {
+    process.env.JEV_MODEL = originalEnv.JEV_MODEL;
+  }
   globalThis.fetch = originalFetch;
 });
 
@@ -211,6 +218,82 @@ describe("jev server boundary", () => {
       expect(body.error.length).toBeGreaterThan(0);
       expect(JSON.stringify(body)).not.toContain(TOKEN);
     }
+  });
+
+  it("uses the gateway backend, and only that model, when JEV_MODEL is set", async () => {
+    process.env.JEV_MODEL = "typesafe-ai/jev";
+    const seen: { url: string; model: string; authorization: string | null }[] = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as {
+        model: string;
+        questions: Record<string, unknown>;
+      };
+      seen.push({
+        url: String(url),
+        model: body.model,
+        authorization: new Headers(init.headers).get("authorization"),
+      });
+      const answers = Object.fromEntries(
+        Object.keys(body.questions).map((id) => [
+          id,
+          {
+            type: "choice",
+            choice: id === "hint" ? "hold-longer" : id === "pressure" ? "assertive" : "high",
+            confidence: 0.6,
+          },
+        ]),
+      );
+      return new Response(JSON.stringify({ answers }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const response = await post(request());
+    expect(response.status).toBe(200);
+    // The gateway endpoint, and exactly the configured model — no fallbacks.
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe("https://ai-gateway.vercel.sh/v1/evaluate");
+    expect(seen[0].model).toBe("typesafe-ai/jev");
+    expect(seen[0].authorization).toBe(`Bearer ${TOKEN}`);
+
+    const body = (await response.json()) as {
+      policy: { hint: string; pressureScale: number; corridorWeights: { id: number; weight: number }[] };
+      clamped: string[];
+    };
+    expect(body.policy.hint).toBe("hold-longer");
+    expect(body.policy.pressureScale).toBe(1.25);
+    expect(body.policy.corridorWeights).toEqual([{ id: 3, weight: 1.5 }]);
+    expect(body.clamped).toEqual([]);
+  });
+
+  it("keeps the schema-speaking service backend when no model is configured", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      seen.push(String(url));
+      return new Response(
+        JSON.stringify({
+          schemaVersion: JEV_SCHEMA_VERSION,
+          pressureScale: 1.1,
+          corridorWeights: [{ id: 3, weight: 1.2 }],
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const response = await post(request());
+    expect(response.status).toBe(200);
+    expect(seen[0]).toBe(ENDPOINT);
+    const body = (await response.json()) as { policy: { pressureScale: number } };
+    expect(body.policy.pressureScale).toBe(1.1);
+  });
+
+  it("does not use the gateway's default endpoint unless a model is configured", async () => {
+    const env = readJevEnvironment();
+    expect(env?.gateway).toBeNull();
+    expect(env?.endpoint).toBe(ENDPOINT);
+
+    process.env.JEV_MODEL = "typesafe-ai/jev";
+    const gatewayEnv = readJevEnvironment();
+    expect(gatewayEnv?.gateway?.model).toBe("typesafe-ai/jev");
+    expect(gatewayEnv?.endpoint).toBeNull();
   });
 
   it("logs nothing at all", () => {

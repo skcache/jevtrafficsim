@@ -378,7 +378,8 @@ describe("benchmark CLI", () => {
   it("parses the jev adapter choice", () => {
     expect(parseArgs(["--controllers", "jev"]).jevAdapter).toBe("mock");
     expect(parseArgs(["--controllers", "jev", "--jev", "live"]).jevAdapter).toBe("live");
-    expect(() => parseArgs(["--jev", "guess"])).toThrow(/--jev must be mock or live/);
+    expect(() => parseArgs(["--jev", "guess"])).toThrow(/--jev must be mock, live or gateway/);
+    expect(parseArgs(["--controllers", "jev", "--jev", "gateway"]).jevAdapter).toBe("gateway");
   });
 
   it("refuses unknown trips, levels, drivers, controllers and horizons", () => {
