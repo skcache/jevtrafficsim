@@ -110,7 +110,8 @@ JEV_MODEL=typesafe-ai/jev
 JEV_TOKEN=<your Vercel AI Gateway key>
 # optional
 JEV_MIN_CONFIDENCE=0.25
-JEV_TIMEOUT_MS=4000
+JEV_TIMEOUT_MS=12000   # the free evaluation tier is variable; a tight
+                       # timeout turns slow answers into fallback time
 ```
 
 `JEV_ENDPOINT` is the alternative backend: a service that speaks the Jev policy schema
