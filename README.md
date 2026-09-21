@@ -71,6 +71,12 @@ A trace whose scenario fingerprint does not match is refused before anything run
 carrying a policy that live code could not have accepted is refused too: replay may reproduce
 an accepted policy, never invent one.
 
+A replay says both that it is a replay **and** what the recorded run was. `--trace-out` writes
+the recorded run's own history into the trace (its adapter, accepted/rejected counts, and its
+fallback time), so replaying a run that spent time on the Adaptive fallback cannot present
+itself as a clean live-Jev result. Traces written before that block existed report
+`"recorded": null` — unknown, never "clean", and the banner says so.
+
 ## Architecture
 
 ```
@@ -136,9 +142,40 @@ pnpm benchmark --out results.json                  # write the run document
 
 The default matrix is 6 curated trips × 2 traffic levels × 2 seeds × 2 drivers × 2 controllers
 (96 runs at a 600 s horizon), aggregated only across compatible groups. JSON output stays
-local and gitignored. Fixed and Adaptive are deterministic; Jev needs an adapter, which the
-CLI supplies (`--jev mock` for a deterministic stand-in, `--jev gateway` or `--jev replay`
-for real and recorded policies).
+local and gitignored.
+
+Fixed and Adaptive are deterministic. Jev needs a policy source, and **the artifact always says
+which one it used** — in the file name, in the document, and in every run record:
+
+```bash
+pnpm benchmark --controllers jev --jev mock     # -> benchmark-jev-mock.json     (no model, no network)
+pnpm benchmark --controllers jev --jev gateway  # -> benchmark-jev-gateway.json  (real model, not reproducible)
+pnpm benchmark --controllers jev --jev live     # -> benchmark-jev-schema-service.json (JEV_ENDPOINT)
+pnpm benchmark --controllers jev --jev replay --trace t.json  # -> benchmark-jev-replay.json
+```
+
+A mock run is never presentable as a live one: the CLI banner says so in words, the file is
+named `jev-mock`, and each record carries `provenance` — the authoritative typed object
+(`jev/provenance.ts`) built from the controller's own account of its run:
+
+```json
+"provenance": {
+  "controller": "jev",
+  "label": "jev-mock",
+  "adapter": "mock",
+  "mode": "live",
+  "modelInvolved": false,
+  "accepted": 3, "rejected": 2, "refreshes": 5, "expiries": 0,
+  "liveMs": 15000, "replayMs": 0, "fallbackMs": 5000,
+  "trace": null,
+  "recorded": null
+}
+```
+
+A replay fills in `trace` (what it consumed) and `recorded` (what that run was), and keeps
+`modelInvolved` true when the recorded run used a model — replayed offline, still
+model-derived. Groups are keyed by controller **and** provenance, so a mock Jev run and a
+gateway Jev run of the same scenario are never averaged together.
 
 ## Commands
 
