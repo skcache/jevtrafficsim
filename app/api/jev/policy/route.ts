@@ -25,28 +25,55 @@
  * back, and a free-form error message can carry anything, so neither is allowed
  * near the log. `failureReason` is the single place that decides what a log line
  * may say, which is what makes the rule testable.
+ *
+ * ## What guards this route, and what each guard is worth (Issue #37)
+ *
+ * | guard | scope | guarantee |
+ * |---|---|---|
+ * | platform rate limit (Vercel Firewall) | deployment-wide | real, when a rule exists — configured by id, see below |
+ * | first-party check | per request | a browser on another site cannot use our quota |
+ * | in-memory budget | ONE serverless instance | bounds a runaway caller on that instance; it is NOT a global limit |
+ * | strict schema + body ceiling | per request | zero upstream calls for anything malformed |
+ * | bounded question set | by construction | the route can never become a general model proxy |
+ *
+ * The in-memory counter is the last guard, not the wall: serverless instances
+ * are created and destroyed on demand, so a caller spread across many of them
+ * gets a budget per instance. The deployment-wide control is the platform's own
+ * (`JEV_RATE_LIMIT_ID` → `@vercel/firewall`), which is inert until a matching
+ * rate-limit rule is created in the Vercel Firewall — that step is a dashboard
+ * action, and it is the one thing this repository cannot do for itself.
  */
+import { unstable_checkRateLimit as checkRateLimit } from "@vercel/firewall";
 import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
 import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
 import { jevPolicyContext } from "@/jev/request";
-import { parseJevPolicy, validateJevPolicyRequest } from "@/jev/schema";
-
-/** Requests are bounded by construction; refuse anything wildly larger. */
-const MAX_BODY_BYTES = 512 * 1024;
+import { JEV_LIMITS, parseJevPolicy, validateJevPolicyRequest } from "@/jev/schema";
+import { callerIdentity } from "./caller";
 
 /**
- * Abuse guard for the public relay (Issue #15).
+ * Ceiling for one request body. The size was measured against the production
+ * generator (see JEV_LIMITS.REQUEST_BODY_BYTES): a legitimate maximum is 18.3 KB,
+ * and the schema caps the entry lists independently, so this cannot reject a
+ * request the app can actually build.
+ */
+const MAX_BODY_BYTES = JEV_LIMITS.REQUEST_BODY_BYTES;
+
+/**
+ * Instance-local abuse budget (Issue #15, corrected in Issue #37).
  *
- * Two things keep this endpoint from being a free model proxy: the request must
- * be first-party, and each caller gets a budget. Neither is a security boundary
- * on its own — a scripted client can forge headers, and this counter lives in
- * one serverless instance — so both are deliberately small and dependency-free
- * rather than pretending to be more than they are. The real bound is the
- * contract: only the Jev question set is ever forwarded (see jev/gateway.ts),
- * so a caller cannot turn this into a general completion endpoint.
+ * HONEST SCOPE: this counter lives in one serverless instance's memory. It
+ * bounds a runaway caller that keeps hitting the same instance; it does NOT
+ * bound a caller spread across instances, and it must never be described as the
+ * endpoint's global limit. The deployment-wide control is the platform's own
+ * rate limiter (see `platformRateLimited`), and the durable bound on cost is the
+ * contract: only the Jev question set is ever forwarded (see jev/gateway.ts), so
+ * this route cannot become a general completion endpoint whatever the caller
+ * sends.
  *
- * A caller that trips the budget gets 429, the runtime falls back to Adaptive,
- * and the run continues. Nothing is retried or queued server-side.
+ * The key comes from `callerIdentity` — the platform's client address, never a
+ * caller-supplied header. A caller that trips this budget gets 429, the runtime
+ * falls back to Adaptive, and the run continues; nothing is retried or queued
+ * server-side.
  */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 180;
@@ -60,21 +87,43 @@ interface RateWindow {
 
 const rateWindows = new Map<string, RateWindow>();
 
-/** The caller's identity for rate limiting: the platform's client IP. */
-export function callerKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) {
-      return first;
-    }
+/**
+ * The deployment-wide limiter: Vercel's own Firewall rate limiting.
+ *
+ * `checkRateLimit` matches a rule defined in the Firewall by id, and keys it on
+ * the same client address this route uses. Set `JEV_RATE_LIMIT_ID` to turn it
+ * on; with no rule configured the platform answers "not-found", which is
+ * reported once per process and then treated as "not configured" rather than as
+ * a block. The limit itself is counted by the platform, not by us, so it holds
+ * across every instance of this deployment.
+ */
+const rateLimitId = process.env.JEV_RATE_LIMIT_ID?.trim();
+
+let warnedMissingRule = false;
+
+/** True when the platform says this request is over its rule's budget. */
+async function platformRateLimited(request: Request, key: string): Promise<boolean> {
+  if (rateLimitId === undefined || rateLimitId === "" || process.env.NODE_ENV !== "production") {
+    return false;
   }
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
+  try {
+    const { rateLimited, error } = await checkRateLimit(rateLimitId, { request, rateLimitKey: key });
+    if (error === "not-found" && !warnedMissingRule) {
+      warnedMissingRule = true;
+      console.error(
+        "[jev-relay] no Vercel Firewall rate-limit rule matches JEV_RATE_LIMIT_ID; only the per-instance budget is active",
+      );
+    }
+    return rateLimited || error === "blocked";
+  } catch {
+    // Availability wins over an optional extra guard: the request continues to
+    // the instance-local budget rather than failing because the platform call did.
+    return false;
+  }
 }
 
 /**
- * True when the caller may spend one request. Fixed window, per instance: the
- * point is to bound a runaway client, not to account for every caller on earth.
+ * True when the caller may spend one request here. Fixed window, per instance.
  */
 export function allowRequest(key: string, nowMs: number): boolean {
   for (const [existing, window] of rateWindows) {
@@ -238,7 +287,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "cross-origin requests are not allowed" }, { status: 403 });
   }
 
-  if (!allowRequest(callerKey(request), Date.now())) {
+  // Identity comes from the platform (see caller.ts), never from the caller's
+  // own forwarding headers, and is never echoed back in a response.
+  const key = callerIdentity(request);
+  if (await platformRateLimited(request, key)) {
+    return Response.json({ error: "too many policy requests" }, { status: 429 });
+  }
+  if (!allowRequest(key, Date.now())) {
     return Response.json({ error: "too many policy requests" }, { status: 429 });
   }
 
