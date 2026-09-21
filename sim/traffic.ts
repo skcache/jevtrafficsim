@@ -361,6 +361,7 @@ export function spawnVehicle(
     state: spec.route.length === 0 ? "arrived" : "pending",
     spawnTimeMs,
     queuedSinceMs: null,
+    rerouteCount: 0,
   };
   state.vehicles.push(vehicle);
   if (vehicle.state === "pending") {

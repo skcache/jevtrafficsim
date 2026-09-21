@@ -91,6 +91,8 @@ export interface Vehicle {
   spawnTimeMs: number;
   /** Simulation time when the vehicle began waiting at a road end; null otherwise. */
   queuedSinceMs: number | null;
+  /** Successful route changes for this vehicle (invalidity or driver switch). */
+  rerouteCount: number;
 }
 
 /** Corridor classification for structural policy metadata (PRD §12.5). */

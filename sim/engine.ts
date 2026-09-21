@@ -82,6 +82,14 @@
  */
 import { createApproachStats, updateApproachStats, type ApproachStats } from "./approach-stats";
 import { findRoute } from "./astar";
+import {
+  createDriverState,
+  decideReplan,
+  LOCAL_REPLAN,
+  remainingRouteSeconds,
+  type DriverState,
+  type DriverStrategy,
+} from "./driver";
 import { SIMULATION_TIMESTEP_MS, VEHICLE_TYPE_SPECS } from "./config";
 import {
   buildObservationFrame,
@@ -156,6 +164,12 @@ export interface EngineOptions {
   readonly spawns: readonly ScheduledSpawn[];
   /** Optional deterministic incident configuration (Task 10). */
   readonly incidents?: IncidentConfig;
+  /**
+   * How the EGO car plans (Issue #28). Defaults to "tourist", which is exactly
+   * the behaviour every vehicle already had: plan once, reroute only when the
+   * remaining path becomes invalid. Background vehicles are never affected.
+   */
+  readonly driver?: DriverStrategy;
 }
 
 /** One entry of the dynamic spawn queue (base events and injections). */
@@ -218,6 +232,9 @@ export interface EngineState {
    * created, so nothing has to assume "vehicle 0 is the ego forever".
    */
   egoVehicleId: VehicleId | null;
+  /** Driver strategy of the ego car; never part of controller input. */
+  driver: DriverStrategy;
+  driverState: DriverState;
 }
 
 function validateSpawn(city: City, spawn: ScheduledSpawn): void {
@@ -285,6 +302,8 @@ export function createEngine(options: EngineOptions): EngineState {
     nextSpawnIndex: 0,
     ticks: 0,
     egoVehicleId: null,
+    driver: options.driver ?? "tourist",
+    driverState: createDriverState(),
   };
 }
 
@@ -334,6 +353,69 @@ function spawnDueVehicles(engine: EngineState): void {
       engine.egoVehicleId = vehicleId;
     }
   }
+}
+
+/**
+ * The local driver's periodic look at alternatives (Issue #28).
+ *
+ * Tourist never gets here. For local: at most one look per interval, never
+ * inside the cooldown that follows a switch, and only when the candidate route
+ * is MATERIALLY better than what the ego is already driving — the candidate
+ * comes from the same congestion-aware A* everyone else uses, so the driver
+ * cannot invent a shortcut the network does not have.
+ *
+ * The route is replaced from the ego's CURRENT road onward, which keeps its
+ * position and progress untouched: this is a plan change, not a teleport.
+ */
+function maybeReplanEgo(engine: EngineState): void {
+  if (engine.driver !== "local" || engine.egoVehicleId === null) {
+    return;
+  }
+  const ego = engine.traffic.vehicles.find((vehicle) => vehicle.id === engine.egoVehicleId);
+  if (!ego || ego.state === "arrived" || ego.state === "pending" || ego.roadId === null) {
+    return;
+  }
+  const nowMs = engine.traffic.timeMs;
+  if (nowMs - engine.driverState.lastCheckMs < LOCAL_REPLAN.intervalMs) {
+    return;
+  }
+  // The check is recorded AFTER the decision: decideReplan applies the same
+  // interval gate, so stamping it first would make every look "not due".
+  const road = engine.city.roads[ego.roadId];
+  if (!road) {
+    return;
+  }
+  const candidate = findRoute(engine.city, road.to, ego.destination, {
+    occupancy: engine.traffic.occupancy,
+  });
+  if (!candidate.found) {
+    return;
+  }
+  const candidateRoute = [ego.roadId, ...candidate.roadIds];
+  const currentSeconds = remainingRouteSeconds(
+    engine.city,
+    engine.traffic,
+    ego.route,
+    ego.routeIndex,
+    ego.progress,
+  );
+  const candidateSeconds = remainingRouteSeconds(
+    engine.city,
+    engine.traffic,
+    candidateRoute,
+    0,
+    ego.progress,
+  );
+  const decision = decideReplan(engine.driver, engine.driverState, nowMs, currentSeconds, candidateSeconds);
+  engine.driverState.lastCheckMs = nowMs;
+  if (!decision.replan) {
+    return;
+  }
+  ego.route = candidateRoute;
+  ego.routeIndex = 0;
+  ego.rerouteCount += 1;
+  engine.driverState.lastSwitchMs = nowMs;
+  engine.driverState.switches += 1;
 }
 
 /**
@@ -650,6 +732,7 @@ function attemptReroute(engine: EngineState, vehicleId: number, force: boolean):
   if (!keepPrefix) {
     vehicle.routeIndex = 0;
   }
+  vehicle.rerouteCount += 1;
   book.failed = false;
   engine.reroutes.set(vehicleId, book);
   engine.rerouteStats.succeeded += 1;
@@ -691,6 +774,7 @@ export function stepEngine(engine: EngineState): void {
   applyIncidents(engine);
   processRerouteRetries(engine);
   spawnDueVehicles(engine);
+  maybeReplanEgo(engine);
   // Controller context: derived from the CURRENT state (after spawns, before
   // this tick's movement) so identical inputs always yield identical policy.
   expireApproachArrivals(engine.arrivals, traffic.timeMs);
