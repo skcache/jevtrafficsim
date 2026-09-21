@@ -1,0 +1,56 @@
+[
+ {
+  "slug": "landing",
+  "view": "Landing hero, city seen whole",
+  "shows": "The public entry: the experiment stated in one line, one action, the live city behind it.",
+  "settleMs": 4200
+ },
+ {
+  "slug": "setup",
+  "view": "Setup card",
+  "shows": "The public inputs and only the public inputs: trip, traffic, driver, New scenario. No controller picker, no raw seed.",
+  "steps": [{ "clickText": "Start", "waitMs": 1800 }],
+  "settleMs": 2600
+ },
+ {
+  "slug": "setup-rush-hour",
+  "view": "Setup card, rush hour chosen",
+  "shows": "Traffic raised to Rush Hour on the discrete slider before entering the city.",
+  "steps": [
+   { "slider": 0, "arrowRight": 6, "waitMs": 900 }
+  ],
+  "settleMs": 2400
+ },
+ {
+  "slug": "enter-city",
+  "view": "Entering Metro Chicago",
+  "shows": "The challenge starts: the camera flies into Central while the live Jev run begins.",
+  "steps": [{ "clickText": "Enter City", "waitMs": 5200 }],
+  "settleMs": 3200
+ },
+ {
+  "slug": "live-run",
+  "view": "Live run, street zoom",
+  "shows": "The live Jev run: trip HUD, signals provenance badge, scenario fingerprint, incident dock.",
+  "center": [-87.6294, 41.8825],
+  "zoom": 16.2,
+  "settleMs": 5200
+ },
+ {
+  "slug": "scenario-panel",
+  "view": "Live scenario popover",
+  "shows": "Mid-run scenario changes: trip, traffic and driver — the four public decisions, editable live.",
+  "steps": [{ "clickText": "Scenario", "waitMs": 1400 }],
+  "settleMs": 2200
+ },
+ {
+  "slug": "run-complete-comparison",
+  "view": "The payoff: one scenario, three runs",
+  "shows": "Fixed, Adaptive and the visible Jev run side by side on one scenario fingerprint, with the Jev column named for whoever governed it.",
+  "steps": [
+   { "clickText": "Scenario", "waitMs": 900 },
+   { "waitMs": 95000 }
+  ],
+  "settleMs": 4000
+ }
+]
