@@ -111,3 +111,41 @@ export function boundsLngLat(
     [east, north],
   ];
 }
+
+/**
+ * How far past the network the camera centre may travel, as a fraction of the
+ * network's own span. Soft, not tight: the lake, the river mouth and the
+ * surrounding blocks stay reachable for context, but the map cannot be dragged
+ * off the extent into blank paper.
+ */
+export const MAX_PAN_PADDING_FRACTION = 0.35;
+
+/**
+ * The box the camera centre is confined to: the network bounds grown by
+ * `MAX_PAN_PADDING_FRACTION` of their span on every side.
+ *
+ * This is a PAN bound, deliberately not a MapLibre `maxBounds`: maxBounds also
+ * constrains zoom-out (measured: a 25%-padded box pinned the map at zoom 13.09
+ * and made the app's own minZoom 12 unreachable, because MapLibre zooms in
+ * whenever the viewport is larger than the bounds). Clamping the centre leaves
+ * the zoom range alone.
+ */
+export function maxPanBounds(model: MapModel, fraction = MAX_PAN_PADDING_FRACTION): Bounds {
+  const bounds = networkBounds(model);
+  const padX = (bounds.maxX - bounds.minX) * fraction;
+  const padY = (bounds.maxY - bounds.minY) * fraction;
+  return {
+    minX: bounds.minX - padX,
+    minY: bounds.minY - padY,
+    maxX: bounds.maxX + padX,
+    maxY: bounds.maxY + padY,
+  };
+}
+
+/** Clamp a metric point into a bounds box (a point already inside is returned unchanged). */
+export function clampToBounds(bounds: Bounds, x: number, y: number): [number, number] {
+  return [
+    Math.min(Math.max(x, bounds.minX), bounds.maxX),
+    Math.min(Math.max(y, bounds.minY), bounds.maxY),
+  ];
+}

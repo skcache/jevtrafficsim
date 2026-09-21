@@ -28,7 +28,7 @@ import { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
-import { metricToLngLat, type MapModel } from "@/cities/map-model";
+import { lngLatToMetric, metricToLngLat, type MapModel } from "@/cities/map-model";
 import {
   clamp01,
   frameAlpha,
@@ -45,7 +45,9 @@ import {
 import { roadPressure } from "@/render/congestion";
 import {
   boundsLngLat as cameraBoundsLngLat,
+  clampToBounds,
   FIT_PADDING,
+  maxPanBounds,
   networkBounds,
   presetPose,
 } from "@/render/camera-presets";
@@ -247,6 +249,24 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     });
     map.touchZoomRotate.disableRotation();
     map.dragRotate.disable();
+    // Soft pan boundary: the camera centre is confined to the network box grown
+    // by MAX_PAN_PADDING_FRACTION, so a drag can look past the city edge for
+    // context but cannot leave the map behind. Deliberately NOT MapLibre's
+    // maxBounds: that also constrains zoom-out (measured: a 25%-padded box
+    // pinned the map at zoom 13.09 and put the app's own minZoom 12 out of
+    // reach). Read through the refs so a scale change re-boxes the same map.
+    map.on("move", () => {
+      const active = modelRef.current;
+      if (!active) {
+        return;
+      }
+      const center = map.getCenter();
+      const [x, y] = lngLatToMetric(active.projection, center.lng, center.lat);
+      const [clampedX, clampedY] = clampToBounds(maxPanBounds(active), x, y);
+      if (clampedX !== x || clampedY !== y) {
+        map.setCenter(metricToLngLat(active.projection, clampedX, clampedY));
+      }
+    });
     const overlay = new MapLibreOverlay({ interleaved: false, layers: [] });
     map.addControl(overlay as unknown as IControl);
     mapRef.current = map;
