@@ -93,10 +93,10 @@ describe("worker protocol validation", () => {
   });
 
   it("validates SET_CONTROLLER against the known controllers", () => {
-    // Jev joined the protocol in Issue #13 (it is a citywide controller like the
-    // other two). The setup UI still offers Fixed and Adaptive only — wiring Jev
-    // into the product's controls was explicitly out of scope — so the protocol
-    // accepting it is not the same as a user being able to pick it.
+    // All three controllers are part of the protocol. The product does not ask a
+    // visitor which one to run (the visible run is Jev, the baselines are
+    // computed beside it), so the picker exists only behind ?debug — but it must
+    // be able to reach every controller the protocol accepts.
     for (const controller of CONTROLLER_CHOICES) {
       expect(parseWorkerCommand({ type: "SET_CONTROLLER", controller })).toEqual({
         type: "SET_CONTROLLER",
@@ -104,7 +104,7 @@ describe("worker protocol validation", () => {
       });
     }
     expect([...CONTROLLER_CHOICES]).toEqual(["fixed", "adaptive", "jev"]);
-    expect(CONTROLLER_OPTIONS.map((option) => option.value)).toEqual(["fixed", "adaptive"]);
+    expect(CONTROLLER_OPTIONS.map((option) => option.value)).toEqual([...CONTROLLER_CHOICES]);
     expect(() => parseWorkerCommand({ type: "SET_CONTROLLER", controller: "swarm" })).toThrow(
       RangeError,
     );

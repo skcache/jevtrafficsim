@@ -244,7 +244,9 @@ describe("ego wiring in the worker", () => {
     expect(code).toContain("const scaleIndex = METRO_SCALE_INDEX;");
     expect(code).toMatch(/spawns: ScheduledSpawn\[\] = \[challenge\.spawn, \.\.\.background\]/);
     // The frame carries the trip id, so the snapshot can report progress.
-    expect(code).toMatch(/buildPresentationSnapshot\(\s*state\.engine,\s*state\.snapshotSequence,\s*state\.config\?\.tripId \?\? null,?\s*\)/);
+    expect(code).toMatch(
+      /buildPresentationSnapshot\(\s*state\.engine,\s*state\.snapshotSequence,\s*state\.config\?\.tripId \?\? null,\s*policyProvenance\(\),?\s*\)/,
+    );
   });
 
   it("resets deterministically and switches controller without touching the ego", () => {

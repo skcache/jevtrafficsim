@@ -308,3 +308,78 @@ describe("jev server boundary", () => {
     expect(DEFAULT_SIGNAL_TIMING.minGreenMs).toBeGreaterThan(0);
   });
 });
+
+describe("public relay abuse guard (Issue #15)", () => {
+  /** Every policy answer in these tests comes from a stub, never the network. */
+  function stubFetch(): () => number {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ schemaVersion: JEV_SCHEMA_VERSION, pressureScale: 1.1 }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    return () => calls;
+  }
+
+  it("refuses another site's browser before it spends anything", async () => {
+    const calls = stubFetch();
+    const json = { "content-type": "application/json" };
+    const foreignOrigin = await post(request(), {
+      headers: { ...json, origin: "https://not-our-app.example" },
+    });
+    expect(foreignOrigin.status).toBe(403);
+    const crossSite = await post(request(), {
+      headers: { ...json, "sec-fetch-site": "cross-site" },
+    });
+    expect(crossSite.status).toBe(403);
+    // Nothing reached the service on either attempt.
+    expect(calls()).toBe(0);
+
+    // The app's own worker (same origin) is served normally.
+    const own = await post(request(), { headers: { ...json, origin: "https://app.invalid" } });
+    expect(own.status).toBe(200);
+    expect(calls()).toBe(1);
+  });
+
+  it("bounds one caller's spend", async () => {
+    stubFetch();
+    const headers = { "content-type": "application/json", "x-forwarded-for": "203.0.113.7" };
+    let served = 0;
+    let refused = 0;
+    for (let index = 0; index < 200 && refused === 0; index += 1) {
+      const response = await post(request(), { headers });
+      if (response.status === 200) {
+        served += 1;
+      } else {
+        expect(response.status).toBe(429);
+        refused += 1;
+      }
+    }
+    // A generous budget for a real visitor, a hard stop for a runaway client.
+    expect(served).toBe(180);
+    expect(refused).toBe(1);
+  });
+
+  it("refuses a body that lies about its length", async () => {
+    const calls = stubFetch();
+    const oversized = `{"schemaVersion":1,"pad":"${"x".repeat(600 * 1024)}"}`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(oversized));
+        controller.close();
+      },
+    });
+    // No content-length at all: the route must measure what it actually reads.
+    const response = await POST(
+      new Request("https://app.invalid/api/jev/policy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+    expect(response.status).toBe(413);
+    expect(calls()).toBe(0);
+  });
+});

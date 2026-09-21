@@ -100,6 +100,7 @@ function snapshot(
     sequence: timeMs,
     timeMs,
     controller: "fixed",
+    policy: null,
     // Defaults first; the caller's own fields (id, roadId, progress, overrides)
     // land last so nothing is silently overwritten.
     ego: first

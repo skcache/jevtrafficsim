@@ -154,7 +154,7 @@ describe("UI store phases", () => {
   });
 });
 
-describe("comparison panel (Issue #28)", () => {
+describe("comparison panel (Issue #28, three columns since #15)", () => {
   const result = (
     completed: boolean,
     overrides: Partial<ChallengeResult["trip"]> = {},
@@ -164,6 +164,7 @@ describe("comparison panel (Issue #28)", () => {
     controller: "fixed",
     driver: "tourist",
     manualIncidents: 0,
+    modified: false,
     simulatedMs: 600_000,
     trip: {
       completed,
@@ -185,19 +186,36 @@ describe("comparison panel (Issue #28)", () => {
     },
   });
 
-  it("formats both runs into the same rows", () => {
-    const rows = comparisonRows(result(true), result(true, { stoppedMs: 98_000 }, { gridlockRatio: 0.16 }));
+  it("formats all three runs into the same rows", () => {
+    const rows = comparisonRows(
+      result(true),
+      result(true, { stoppedMs: 98_000 }, { gridlockRatio: 0.16 }),
+      result(true, { stoppedMs: 130_000, averageSpeedMps: 9 }, { averageWaitMs: 84_000 }),
+    );
     const byLabel = new Map(rows.map((row) => [row.label, row]));
     expect(byLabel.get("Stopped")?.fixed).toBe("4m 11s");
     expect(byLabel.get("Stopped")?.adaptive).toBe("1m 38s");
+    expect(byLabel.get("Stopped")?.jev).toBe("2m 10s");
     expect(byLabel.get("Trips done")?.fixed).toBe("1,084");
     expect(byLabel.get("Gridlock")?.adaptive).toBe("16%");
     expect(byLabel.get("Reroutes")?.fixed).toBe("2");
+    // Every row is a field of a real run, so no column is ever blank.
+    for (const row of rows) {
+      expect(row.jev, row.label).not.toBe("");
+      expect(row.fixed, row.label).not.toBe("");
+      expect(row.adaptive, row.label).not.toBe("");
+    }
   });
 
-  it("reports no trip time for a run that never arrived", () => {
-    const rows = comparisonRows(result(false), result(true));
-    expect(rows.find((row) => row.label === "Trip time")?.fixed).toBe("—");
-    expect(rows.find((row) => row.label === "Trip time")?.adaptive).toBe("10m 00s");
+  it("reports no trip time for a run that never arrived, per column", () => {
+    const rows = comparisonRows(result(false), result(true), result(false));
+    const tripTime = rows.find((row) => row.label === "Trip time");
+    expect(tripTime?.fixed).toBe("—");
+    expect(tripTime?.adaptive).toBe("10m 00s");
+    expect(tripTime?.jev).toBe("—");
+    const arrived = rows.find((row) => row.label === "Arrived");
+    expect(arrived?.fixed).toBe("No");
+    expect(arrived?.adaptive).toBe("Yes");
+    expect(arrived?.jev).toBe("No");
   });
 });
