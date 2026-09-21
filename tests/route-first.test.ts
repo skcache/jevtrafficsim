@@ -57,6 +57,7 @@ describe("route traffic classification", () => {
       sequence: 0,
       timeMs: 0,
       controller: "fixed",
+      governance: { modified: false, manualIncidents: 0 },
       policy: null,
       ego: null,
       roadTraffic: [road({ roadId: 7, occupancy: 9, capacity: 10, severity: "severe" })],

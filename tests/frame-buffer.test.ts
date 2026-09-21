@@ -14,6 +14,7 @@ function snapshot(sequence: number, timeMs: number): PresentationSnapshot {
     sequence,
     timeMs,
     controller: "adaptive",
+    governance: { modified: false, manualIncidents: 0 },
     policy: null,
     ego: null,
     roadTraffic: [],

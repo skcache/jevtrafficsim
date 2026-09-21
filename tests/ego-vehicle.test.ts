@@ -245,7 +245,7 @@ describe("ego wiring in the worker", () => {
     expect(code).toMatch(/spawns: ScheduledSpawn\[\] = \[challenge\.spawn, \.\.\.background\]/);
     // The frame carries the trip id, so the snapshot can report progress.
     expect(code).toMatch(
-      /buildPresentationSnapshot\(\s*state\.engine,\s*state\.snapshotSequence,\s*state\.config\?\.tripId \?\? null,\s*policyProvenance\(\),?\s*\)/,
+      /buildPresentationSnapshot\(\s*state\.engine,\s*state\.snapshotSequence,\s*state\.config\?\.tripId \?\? null,\s*policyProvenance\(\),\s*\{ modified: state\.modified, manualIncidents: state\.manualIncidents \},\s*\)/,
     );
   });
 
