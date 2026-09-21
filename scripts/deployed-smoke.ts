@@ -36,6 +36,24 @@ async function main(): Promise<void> {
   const page = await context.newPage();
   await page.setViewport({ width: 1440, height: 900 });
 
+  /**
+   * Body text arrives with CSS applied, and this UI renders its small labels in
+   * uppercase ("TRIP", "JEV TRAFFIC · CHICAGO", "SAME SCENARIO · THREE RUNS").
+   * Every text assertion below is therefore case-insensitive — matching the
+   * source strings instead was how this probe once reported the setup screen as
+   * missing its fields and the payoff panel as never appearing.
+   */
+  const has = (text: string, needle: string): boolean =>
+    text.toUpperCase().includes(needle.toUpperCase());
+
+  /** Clickable controls only: a descriptive line is not a picker. */
+  const buttonLabels = async (): Promise<string[]> =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll("button")).map((element) =>
+        (element as HTMLElement).innerText.trim(),
+      ),
+    );
+
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
   const relays: RelayCall[] = [];
@@ -72,7 +90,7 @@ async function main(): Promise<void> {
 
   const text = async (): Promise<string> => page.evaluate(() => document.body.innerText);
   const start = await text();
-  console.log("landing shows the thesis:", /three ways to run the city/i.test(start));
+  console.log("landing shows the thesis:", has(start, "three ways to run the city's signals"));
   console.log("chicago assets requested:", await page.evaluate(() =>
     performance
       .getEntriesByType("resource")
@@ -94,15 +112,22 @@ async function main(): Promise<void> {
   console.log("Start clicked:", await clickText("Start"));
   await new Promise((resolve) => setTimeout(resolve, 1_800));
   const setup = await text();
-  console.log("setup shows Trip/Traffic/Driver:", /Trip/.test(setup) && /Traffic/.test(setup) && /Driver/.test(setup));
-  console.log("setup shows no controller picker:", !/Fixed/.test(setup) && !/Adaptive/.test(setup));
-  console.log("setup shows no raw seed:", !/Seed/.test(setup));
+  console.log(
+    "setup shows Trip/Traffic/Driver:",
+    has(setup, "Trip") && has(setup, "Traffic") && has(setup, "Driver"),
+  );
+  const setupButtons = await buttonLabels();
+  console.log(
+    "setup has no controller picker:",
+    !setupButtons.some((label) => /^(Fixed|Adaptive|Jev)$/i.test(label)),
+  );
+  console.log("setup shows no raw seed:", !has(setup, "Seed"));
 
   console.log("Enter City clicked:", await clickText("Enter City"));
   // The challenge runs at 8x; a 600 s horizon is ~75 s of wall time.
   await new Promise((resolve) => setTimeout(resolve, 15_000));
   const live = await text();
-  console.log("live chrome present:", live.includes("Jev Traffic · Chicago"));
+  console.log("live chrome present:", has(live, "Jev Traffic · Chicago"));
   console.log("signals provenance line:", (live.match(/Signals\s*\n?\s*([^\n]+)/) ?? [])[1] ?? "(none)");
   console.log("scenario fingerprint shown:", /Scenario/.test(live));
 
@@ -117,7 +142,8 @@ async function main(): Promise<void> {
   for (let waited = 0; waited < 24; waited += 1) {
     await new Promise((resolve) => setTimeout(resolve, 7_500));
     const body = await text();
-    if (body.includes("Same scenario") && body.includes("Fixed")) {
+    // The panel's own header, uppercase on screen; the column labels come with it.
+    if (has(body, "Same scenario") && (has(body, "Fixed") || has(body, "Adaptive"))) {
       comparison = body;
       break;
     }
@@ -125,15 +151,21 @@ async function main(): Promise<void> {
   if (comparison === "") {
     console.log("comparison panel: DID NOT APPEAR");
   } else {
-    const columns = (comparison.match(/Same scenario · three runs\s*\n\s*([0-9a-f]{8})\s*\n\s*([^\n]*)\n([^\n]*)\n([^\n]*)/) ?? []).slice(1);
+    const columns = (comparison.match(/Same scenario · three runs\s*\n\s*([0-9a-f]{8})\s*\n\s*([^\n]*)\n([^\n]*)\n([^\n]*)/i) ?? []).slice(1);
     console.log("payoff fingerprint:", columns[0] ?? "(none)");
     console.log("payoff column headers:", columns.slice(1).join(" | "));
-    const rows = comparison.split("\n").filter((line) => /^(Arrived|Trip time|Stopped|Distance|Avg speed|Reroutes|Avg wait|P95 wait|Trips done|Throughput|Gridlock|Active cars)/.test(line));
+    const rows = comparison
+      .split("\n")
+      .filter((line) =>
+        /^(Arrived|Trip time|Stopped|Distance|Avg speed|Reroutes|Avg wait|P95 wait|Trips done|Throughput|Gridlock|Active cars)/i.test(
+          line,
+        ),
+      );
     console.log("payoff rows found:", rows.length);
     for (const row of rows.slice(0, 6)) {
       console.log("   ", row.replace(/\s+/g, " "));
     }
-    const fallbackLine = comparison.match(/(\d+% of the run on the adaptive fallback|[0-9]+ live policies?)/);
+    const fallbackLine = comparison.match(/(\d+% of the run on the adaptive fallback|[0-9]+ live policies?)/i);
     console.log("provenance detail:", fallbackLine?.[0] ?? "(none)");
   }
 
