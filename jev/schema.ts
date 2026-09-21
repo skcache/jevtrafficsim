@@ -242,11 +242,22 @@ export function validateJevPolicyRequest(value: unknown): JevValidation<JevPolic
   return { ok: true, value: value as unknown as JevPolicyRequest };
 }
 
+/**
+ * The ids a policy is allowed to reference, taken from the request it answers.
+ *
+ * Optional on purpose: a policy that arrives WITH a request (the live path) is
+ * checked against the ids that request carried, while a policy that has no
+ * originating request — a recorded trace being loaded, or a replay — has no id
+ * set to check against. Omitting the context still enforces every OTHER part of
+ * the live contract: schema version, hints, finiteness, bounds, entry counts and
+ * duplicate ids. Unknown ids are inert where they are used: a weight for a
+ * corridor this city does not have simply never matches a phase.
+ */
 export interface JevPolicyContext {
   /** Corridor ids the request carried. */
-  readonly corridorIds: readonly number[];
+  readonly corridorIds?: readonly number[];
   /** Region ids the request carried. */
-  readonly regionIds: readonly number[];
+  readonly regionIds?: readonly number[];
 }
 
 export interface ParsedJevPolicy {
@@ -261,7 +272,7 @@ export interface ParsedJevPolicy {
  */
 export function parseJevPolicy(
   value: unknown,
-  context: JevPolicyContext,
+  context: JevPolicyContext = {},
 ): JevValidation<ParsedJevPolicy> {
   if (!isPlainObject(value)) {
     return { ok: false, error: "policy must be an object" };
@@ -310,7 +321,7 @@ export function parseJevPolicy(
     if (list.length > JEV_LIMITS.POLICY_ENTRIES) {
       return { ok: false, error: `${field} exceeds the ${JEV_LIMITS.POLICY_ENTRIES}-entry limit` };
     }
-    const knownIds = new Set(known);
+    const knownIds = known === undefined ? null : new Set(known);
     const seen = new Set<number>();
     for (const entry of list) {
       if (!isPlainObject(entry)) {
@@ -320,7 +331,7 @@ export function parseJevPolicy(
       if (id === null) {
         return { ok: false, error: `${field} entries need a non-negative integer id` };
       }
-      if (!knownIds.has(id)) {
+      if (knownIds !== null && !knownIds.has(id)) {
         return { ok: false, error: `${field} references id ${id}, which was not in the request` };
       }
       if (seen.has(id)) {

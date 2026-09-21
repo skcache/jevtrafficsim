@@ -27,13 +27,7 @@
  * replay therefore consumes an identical stream and, given the same scenario,
  * produces an identical ChallengeResult.
  */
-import {
-  JEV_HINTS,
-  JEV_SCHEMA_VERSION,
-  type JevHint,
-  type JevPolicy,
-  type JevValidation,
-} from "./schema";
+import { parseJevPolicy, type JevPolicy, type JevValidation } from "./schema";
 
 export const JEV_TRACE_VERSION = 1;
 
@@ -102,48 +96,31 @@ function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function parsePolicy(value: unknown): JevPolicy | null {
-  if (!isPlainObject(value) || value.schemaVersion !== JEV_SCHEMA_VERSION) {
-    return null;
+/**
+ * A trace policy must satisfy the LIVE bounded-policy contract exactly.
+ *
+ * The contract is `parseJevPolicy` — the same function the live path runs on a
+ * service response, with no id context because a recorded policy has no
+ * originating request to check ids against. Anything it would CLAMP is refused
+ * outright here: a recorded policy was already clamped when it was accepted, so
+ * a trace carrying an out-of-range value could not have come from a real run.
+ *
+ * That is the invariant this whole loader exists to keep: replay may reproduce
+ * an accepted live policy, but it may never introduce one that live code could
+ * not have accepted.
+ */
+function parsePolicy(value: unknown): { ok: true; policy: JevPolicy } | { ok: false; error: string } {
+  const parsed = parseJevPolicy(value);
+  if (!parsed.ok) {
+    return { ok: false, error: parsed.error };
   }
-  const pressureScale = finite(value.pressureScale);
-  if (pressureScale === null) {
-    return null;
+  if (parsed.value.clamped.length > 0) {
+    return {
+      ok: false,
+      error: `policy is outside the live bounds (${parsed.value.clamped.join("; ")})`,
+    };
   }
-  const hint = value.hint;
-  if (typeof hint !== "string" || !(JEV_HINTS as readonly string[]).includes(hint)) {
-    return null;
-  }
-  const list = (raw: unknown): { id: number; weight: number }[] | null => {
-    if (!Array.isArray(raw)) {
-      return null;
-    }
-    const entries: { id: number; weight: number }[] = [];
-    for (const entry of raw) {
-      if (!isPlainObject(entry)) {
-        return null;
-      }
-      const id = finite(entry.id);
-      const weight = finite(entry.weight);
-      if (id === null || !Number.isInteger(id) || weight === null) {
-        return null;
-      }
-      entries.push({ id, weight });
-    }
-    return entries;
-  };
-  const corridorWeights = list(value.corridorWeights);
-  const regionWeights = list(value.regionWeights);
-  if (corridorWeights === null || regionWeights === null) {
-    return null;
-  }
-  return {
-    schemaVersion: JEV_SCHEMA_VERSION,
-    pressureScale,
-    hint: hint as JevHint,
-    corridorWeights,
-    regionWeights,
-  };
+  return { ok: true, policy: parsed.value.policy };
 }
 
 /**
@@ -191,15 +168,15 @@ export function parseJevTrace(value: unknown): JevValidation<JevTrace> {
       return { ok: false, error: `event ${index} needs source "live" or "replay"` };
     }
     const policy = parsePolicy(raw.policy);
-    if (policy === null) {
-      return { ok: false, error: `event ${index} carries a malformed policy` };
+    if (!policy.ok) {
+      return { ok: false, error: `event ${index} carries an unusable policy: ${policy.error}` };
     }
     events.push({
       scenarioFingerprint: value.scenarioFingerprint,
       simulationTimeMs,
       requestedAtSimMs,
       requestGeneration,
-      policy,
+      policy: policy.policy,
       source: raw.source,
     });
   }
