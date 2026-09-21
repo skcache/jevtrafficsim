@@ -183,7 +183,12 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
   /** Accepted between ticks (live) or waiting for their instant (replay). */
   let pending: JevTraceEvent | null = null;
   let queue: JevTraceEvent[] = [];
-  let inFlight = false;
+  /**
+   * The generation that OWNS the single in-flight slot, or null when it is free.
+   * Ownership is what stops a superseded request from releasing a newer one's
+   * lock when it finally settles: only the owner may clear it.
+   */
+  let inFlightGeneration: number | null = null;
   let lastObservedMs: number | null = null;
   let lastSource: JevPolicySource = "fallback";
   let expiredFor: number | null = null;
@@ -339,7 +344,13 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
     const requestGeneration = generation;
     const requestFingerprint = fingerprint;
     refreshes += 1;
-    inFlight = true;
+    inFlightGeneration = requestGeneration;
+    /** Release the slot only if this request still owns it. */
+    const release = (): void => {
+      if (inFlightGeneration === requestGeneration) {
+        inFlightGeneration = null;
+      }
+    };
     const settle = (raw: unknown): void => {
       consider(raw, {
         requestGeneration,
@@ -363,16 +374,14 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
               error instanceof Error ? error.message : "jev client failed",
             );
           })
-          .finally(() => {
-            inFlight = false;
-          });
+          .finally(release);
       } else {
         settle(answer);
-        inFlight = false;
+        release();
       }
     } catch (error: unknown) {
       reject("client-error", nowMs, error instanceof Error ? error.message : "jev client failed");
-      inFlight = false;
+      release();
     }
   };
 
@@ -409,7 +418,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
           adopt(pending);
           pending = null;
         }
-        if (configured && refreshDue(nowMs, refreshMs) && !inFlight) {
+        if (configured && refreshDue(nowMs, refreshMs) && inFlightGeneration === null) {
           startRequest(observation, nowMs);
         }
       }
@@ -427,7 +436,9 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
       accepted = null;
       pending = null;
       expiredFor = null;
-      inFlight = false;
+      // A reset frees the slot for the new scenario; whatever was in flight is
+      // stale by generation and can no longer clear it (see release()).
+      inFlightGeneration = null;
       lastObservedMs = null;
       lastSource = "fallback";
       recorded = [];
@@ -468,7 +479,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         mode,
         configured,
         source: effectiveAt(lastObservedMs ?? 0).source,
-        inFlight,
+        inFlight: inFlightGeneration !== null,
         requestGeneration: generation,
         refreshes,
         accepted: acceptedCount,
