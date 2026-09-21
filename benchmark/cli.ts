@@ -26,6 +26,7 @@ import {
   JEV_GATEWAY_MODEL,
 } from "@/jev/gateway";
 import { parseJevTrace, serializeTrace, type JevTrace } from "@/jev/trace";
+import { jevProvenance, provenanceLabel, provenanceLine } from "@/jev/provenance";
 import { buildChallengeScenario, scenarioFingerprint } from "@/worker/challenge-scenario";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
@@ -50,9 +51,20 @@ import {
   type MatrixOverrides,
 } from "./scenarios";
 
-/** The JSON contract. Deterministic: no timestamps, no wall times. */
+/**
+ * The JSON contract. Deterministic: no timestamps, no wall times.
+ *
+ * `jevAdapter` names the policy source for this document's jev rows (Issue #38),
+ * so a reader learns what produced them from the artifact's first screen — and
+ * `runs[].provenance` repeats it per run with the funnel and governed time.
+ */
 export interface BenchmarkDocument {
   readonly version: 1;
+  readonly jevAdapter: {
+    readonly adapter: string;
+    readonly label: string;
+    readonly modelInvolved: boolean;
+  } | null;
   readonly matrix: BenchmarkMatrix;
   readonly runs: readonly BenchmarkRunRecord[];
   readonly groups: readonly ExperimentGroup[];
@@ -67,7 +79,9 @@ Options:
   --seed <n,...>            deterministic seeds (default: 42)
   --controllers <c,...>     fixed | adaptive | jev (default: fixed,adaptive)
   --jev <mock|live|gateway|replay>
-                            how jev gets its policy (default: mock)
+                            how jev gets its policy (default: mock). The
+                            artifact records this as jev-<adapter>, and the
+                            output file is named for it.
                               mock    = deterministic stand-in, no network, no credential
                               gateway = TypeSafe AI's jev via the Vercel AI Gateway
                                         (JEV_TOKEN + JEV_MODEL; JEV_GATEWAY_URL overrides
@@ -84,7 +98,8 @@ Options:
                             unchanged; without it a live drive runs as fast as the
                             event loop allows and can outrun a remote model
   --horizon <ms|Ns|Nm>      simulated run length (default: the live horizon)
-  --out <path>              JSON output (default: benchmark/results/benchmark-<stamp>.json)
+  --out <path>              JSON output (default: benchmark/results/benchmark-jev-<adapter>-<stamp>.json
+                            when the matrix includes jev)
   --quiet                   only the final summary
   --help                    this text
 
@@ -266,7 +281,10 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): CliO
   }
   if (outPath === null) {
     const stamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
-    outPath = path.join("benchmark", "results", `benchmark-${stamp}.json`);
+    // The file name carries the policy source (Issue #38): a mock artifact must
+    // never sit in a results directory wearing the same name as a live one.
+    const label = overrides.controllers?.includes("jev") === true ? `-${jevLabel({ jevAdapter })}` : "";
+    outPath = path.join("benchmark", "results", `benchmark${label}-${stamp}.json`);
   }
   return { overrides, outPath, quiet, jevAdapter, tracePath, traceOutPath, paceRatio };
 }
@@ -341,8 +359,27 @@ export function formatSummary(groups: readonly ExperimentGroup[]): string {
 export function buildDocument(
   matrix: BenchmarkMatrix,
   runs: readonly BenchmarkRunRecord[],
+  jevAdapter: JevAdapterChoice = "mock",
 ): BenchmarkDocument {
-  return { version: 1, matrix, runs, groups: aggregateRuns(runs) };
+  return {
+    version: 1,
+    // The document says which adapter produced its jev rows, so the artifact is
+    // self-describing even before its per-run provenance is read.
+    jevAdapter: matrix.controllers.includes("jev")
+      ? {
+          adapter: jevAdapter === "live" ? "schema-service" : jevAdapter,
+          label: jevLabel({ jevAdapter }),
+          // A replay's own flag says nothing about the model: follow the records
+          // when they exist, so replaying a gateway run cannot read as model-free.
+          modelInvolved:
+            runs.find((run) => run.provenance !== undefined)?.provenance?.modelInvolved ??
+            (jevAdapter === "gateway" || jevAdapter === "live"),
+        }
+      : null,
+    matrix,
+    runs,
+    groups: aggregateRuns(runs),
+  };
 }
 
 /** A live matrix is a smoke run, not a benchmark: never hammer the service. */
@@ -360,6 +397,42 @@ export function liveRunCapError(runCount: number): string | null {
     `live jev runs are capped at ${LIVE_SMOKE_MAX_RUNS} (this matrix is ${runCount}) — ` +
     "narrow --trip / --seed / --driver"
   );
+}
+
+/** The run's provenance token, from the flag the user actually passed. */
+export function jevLabel(options: { readonly jevAdapter: JevAdapterChoice }): string {
+  return provenanceLabel(options.jevAdapter === "live" ? "schema-service" : options.jevAdapter);
+}
+
+/** One explicit banner, so no reader has to infer the adapter from the numbers. */
+export function adapterBanner(options: { readonly jevAdapter: JevAdapterChoice }, trace: JevTrace | null): string {
+  switch (options.jevAdapter) {
+    case "mock":
+      return (
+        `jev: ${jevLabel(options)} — MOCK adapter: a deterministic stand-in. ` +
+        "NO model, NO network, NO credential, NOT the Jev service; the numbers below describe the stub, not Jev."
+      );
+    case "replay":
+      return (
+        `jev: ${jevLabel(options)} — REPLAY adapter: ${trace?.events.length ?? 0} recorded policies, ` +
+        `zero network calls; it reproduces a run recorded from client "${trace?.client ?? "unknown"}"` +
+        (trace?.recorded == null
+          ? " (that run's fallback history is NOT recorded — treat refusals as unknown)"
+          : ` (recorded run used ${provenanceLabel(trace.recorded.adapter)}: ` +
+            `${trace.recorded.accepted} accepted, ${trace.recorded.rejected} rejected, ` +
+            `${(trace.recorded.fallbackMs / 1000).toFixed(1)}s on the Adaptive fallback)`)
+      );
+    case "gateway":
+      return (
+        `jev: ${jevLabel(options)} — GATEWAY adapter: ${process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL} ` +
+        "via the Vercel AI Gateway; results are not reproducible (wall-clock arrival)"
+      );
+    default:
+      return (
+        `jev: ${jevLabel(options)} — LIVE adapter: policies come from JEV_ENDPOINT server-side; ` +
+        "results are not reproducible (wall-clock arrival)"
+      );
+  }
 }
 
 /** Optional confidence floor from the environment; the adapter owns the default. */
@@ -417,7 +490,7 @@ export function describeJevStatus(controllers: readonly JevController[]): string
   let expiries = 0;
   let fallbackMs = 0;
   let policyMs = 0;
-  const modes = new Set<string>();
+  const adapters = new Set<string>();
   const errors = new Set<string>();
   for (const controller of controllers) {
     const status = controller.status();
@@ -427,13 +500,14 @@ export function describeJevStatus(controllers: readonly JevController[]): string
     expiries += status.expiries;
     fallbackMs += status.fallbackMs;
     policyMs += status.liveMs + status.replayMs;
-    modes.add(status.mode);
+    adapters.add(provenanceLabel(controller.meta().adapter));
     if (status.lastRejection !== null) {
       errors.add(`${status.lastRejection.kind}: ${status.lastRejection.detail}`);
     }
   }
   const lines = [
-    `jev adapter [${[...modes].join(",")}]: ${refreshes} policy refreshes, ` +
+    `jev adapter [${[...adapters].join(", ")}]: ` +
+      `${refreshes} policy refreshes, ` +
       `${accepted} accepted, ${rejected} rejected, ${expiries} expired`,
     `  governed simulated time: ${(policyMs / 1000).toFixed(1)}s by Jev policy, ` +
       `${(fallbackMs / 1000).toFixed(1)}s by the Adaptive fallback`,
@@ -587,25 +661,14 @@ async function main(argv: readonly string[]): Promise<number> {
     : {};
   const describeController: ControllerDescriber["describeController"] = (choice) =>
     choice === "jev" && currentJev !== null
-      ? (currentJev.meta() as unknown as Record<string, unknown>)
+      ? jevProvenance(currentJev.meta(), replayTrace)
       : undefined;
 
   const startedAt = Date.now();
   const model = loadBenchmarkModel();
   process.stdout.write(`benchmark: ${describeMatrix(matrix)}\n`);
   if (wantsJev) {
-    const adapterLabel =
-      options.jevAdapter === "mock"
-        ? "jev: MOCK adapter — deterministic stand-in, NOT the Jev service\n"
-        : options.jevAdapter === "replay"
-          ? `jev: REPLAY adapter — ${replayTrace?.events.length ?? 0} recorded policies from ` +
-            `${options.tracePath}; zero network calls\n`
-          : options.jevAdapter === "gateway"
-          ? `jev: GATEWAY adapter — ${process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL} via the ` +
-            "Vercel AI Gateway; results are not reproducible (wall-clock arrival)\n"
-          : "jev: LIVE adapter — policies come from JEV_ENDPOINT server-side; " +
-            "results are not reproducible (wall-clock arrival)\n";
-    process.stdout.write(adapterLabel);
+    process.stdout.write(`${adapterBanner(options, replayTrace)}\n`);
   }
   process.stdout.write(
     `city: ${model.city.roads.length} roads, ${model.city.intersections.length} intersections\n`,
@@ -616,10 +679,11 @@ async function main(argv: readonly string[]): Promise<number> {
       return;
     }
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
+    const source = progress.controller === "jev" ? ` [${jevLabel(options)}]` : "";
     process.stdout.write(
       `[${String(progress.index).padStart(3)}/${progress.total}] ` +
         `${progress.scenario.tripId} ${progress.scenario.trafficLevel} ` +
-        `seed=${progress.scenario.seed} ${progress.scenario.driver} ${progress.controller} ` +
+        `seed=${progress.scenario.seed} ${progress.scenario.driver} ${progress.controller}${source} ` +
         `(${elapsed}s)\n`,
     );
   };
@@ -635,7 +699,7 @@ async function main(argv: readonly string[]): Promise<number> {
         describeController,
       });
 
-  const output = buildDocument(matrix, runs);
+  const output = buildDocument(matrix, runs, options.jevAdapter);
 
   const outPath = options.outPath ?? "benchmark/results/benchmark.json";
   mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
@@ -650,11 +714,33 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     const tracePath = path.resolve(options.traceOutPath);
     mkdirSync(path.dirname(tracePath), { recursive: true });
-    writeFileSync(tracePath, serializeTrace(jevControllers[0].trace()));
+    const controller = jevControllers[0];
+    const meta = controller.meta();
+    // The recorded run's own history travels WITH the trace: without it a replay
+    // would present the original's refusals and fallback time as a clean run.
+    writeFileSync(
+      tracePath,
+      serializeTrace({
+        ...controller.trace(),
+        recorded: {
+          adapter: meta.adapter,
+          accepted: meta.accepted,
+          rejected: meta.rejected,
+          refreshes: meta.refreshes,
+          expiries: meta.expiries,
+          liveMs: meta.liveMs,
+          fallbackMs: meta.fallbackMs,
+        },
+      }),
+    );
   }
 
   process.stdout.write(`\n${formatSummary(output.groups)}\n`);
   if (wantsJev) {
+    const provenance = jevControllers.length > 0 ? jevProvenance(jevControllers[0].meta(), replayTrace) : null;
+    if (provenance !== null) {
+      process.stdout.write(`\nprovenance: ${provenanceLine(provenance)}\n`);
+    }
     process.stdout.write(`\n${describeJevStatus(jevControllers)}\n`);
     if (options.traceOutPath !== null) {
       process.stdout.write(
@@ -666,7 +752,9 @@ async function main(argv: readonly string[]): Promise<number> {
   process.stdout.write(
     `\n${runs.length} runs, ${output.groups.length} compatible groups, ` +
       `${((Date.now() - startedAt) / 1000).toFixed(0)}s wall time\n` +
-      `wrote ${path.resolve(outPath)}\n`,
+      `wrote ${path.resolve(outPath)}` +
+      (wantsJev ? `  [${jevLabel(options)}]` : "") +
+      "\n",
   );
   return 0;
 }

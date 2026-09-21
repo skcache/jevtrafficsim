@@ -22,6 +22,7 @@ import {
 } from "@/worker/challenge-compare";
 import type { ChallengeCityResult, ChallengeResult, ChallengeTripResult } from "@/worker/challenge-result";
 import type { ControllerChoice } from "@/worker/protocol";
+import type { JevProvenance } from "@/jev/provenance";
 import { expandMatrix, type BenchmarkMatrix, type BenchmarkScenario } from "./scenarios";
 
 /** Everything one run produced. This is the per-run JSON contract. */
@@ -48,12 +49,13 @@ export interface BenchmarkRunRecord {
   /** CHICAGO. */
   readonly city: ChallengeCityResult;
   /**
-   * Optional runtime metadata about the controller (Issue #14). Present only
-   * when the caller supplies a describer — it exists so a Jev run can say
-   * whether it ran on live policies, on a replay, or on the Adaptive fallback,
-   * and for how much simulated time.
+   * What produced this record's policies (Issue #38). Required for a Jev run
+   * whenever a describer is supplied, and typed — never a loose bag — so a
+   * `controller: "jev"` line can always be read against the adapter, mode and
+   * governed time that actually produced it. Absent for Fixed/Adaptive, which
+   * have no external policy source.
    */
-  readonly controllerMeta?: Record<string, unknown>;
+  readonly provenance?: JevProvenance;
 }
 
 function recordFrom(
@@ -61,7 +63,7 @@ function recordFrom(
   scenario: BenchmarkScenario,
   controller: ControllerChoice,
   result: ChallengeResult,
-  meta?: Record<string, unknown>,
+  provenance?: JevProvenance,
 ): BenchmarkRunRecord {
   return {
     fingerprint: run.fingerprint,
@@ -75,7 +77,7 @@ function recordFrom(
     },
     trip: result.trip,
     city: result.city,
-    ...(meta === undefined ? {} : { controllerMeta: meta }),
+    ...(provenance === undefined ? {} : { provenance }),
   };
 }
 
@@ -88,11 +90,11 @@ function recordFrom(
  * here, the HTTP client in a live smoke run). The world is built once either
  * way, so adding a controller never changes what the others were handed.
  */
-/** Optional per-run runtime metadata about a controller (Issue #14). */
+/** Per-run provenance about a controller (Issue #38). */
 export interface ControllerDescriber {
   readonly describeController?: (
     controller: ControllerChoice,
-  ) => Record<string, unknown> | undefined;
+  ) => JevProvenance | undefined;
 }
 
 export function runBenchmarkScenario(

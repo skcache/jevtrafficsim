@@ -22,6 +22,7 @@ import type { TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
 import type { ChallengeCityResult, ChallengeTripResult } from "@/worker/challenge-result";
 import type { ControllerChoice } from "@/worker/protocol";
+import type { JevAdapter, JevProvenance } from "@/jev/provenance";
 import type { BenchmarkRunRecord } from "./runner";
 
 /**
@@ -76,9 +77,36 @@ export function groupIdOf(key: ExperimentGroupKey): string {
   return `${key.tripId}|${key.trafficLevel}|${key.driver}`;
 }
 
+/**
+ * Provenance of one summary (Issue #38). Runs with different provenance are not
+ * merged: a mock Jev run and a gateway Jev run of the same scenario appear as
+ * separate entries, because averaging them would hide exactly the fact a reader
+ * needs. `label` is the primary token ("jev-mock", "jev-gateway", ...); it is
+ * "unknown" only for records written before #38.
+ */
+export interface GroupProvenance {
+  readonly label: string;
+  readonly adapter: JevAdapter | "unknown";
+  readonly mode: "live" | "replay" | "unknown";
+  readonly modelInvolved: boolean;
+  /** Sums over the entry's runs; for a replay these describe the replay itself. */
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly liveMs: number;
+  readonly replayMs: number;
+  readonly fallbackMs: number;
+  readonly traceEvents: number;
+  /** What a replay's trace came from, or null when not a replay / not recorded. */
+  readonly recordedAdapter: JevAdapter | null;
+}
+
 /** One controller's summary inside one compatible group. */
 export interface ControllerGroupSummary {
   readonly controller: ControllerChoice;
+  /** Unique within a group: controller + provenance label. */
+  readonly id: string;
+  /** What produced these runs. Present for Jev; null for Fixed/Adaptive. */
+  readonly provenance: GroupProvenance | null;
   readonly runs: number;
   /** Completed runs / all runs, in [0, 1]. */
   readonly completionRate: number;
@@ -112,6 +140,28 @@ export interface ExperimentGroup {
   readonly controllers: readonly ControllerGroupSummary[];
 }
 
+function provenanceOf(runs: readonly BenchmarkRunRecord[]): GroupProvenance | null {
+  const jev = runs.find((run) => run.provenance !== undefined)?.provenance;
+  if (jev === undefined) {
+    return null;
+  }
+  const total = (pick: (provenance: JevProvenance) => number): number =>
+    runs.reduce((sum, run) => sum + (run.provenance === undefined ? 0 : pick(run.provenance)), 0);
+  return {
+    label: jev.label,
+    adapter: jev.adapter,
+    mode: jev.mode,
+    modelInvolved: jev.modelInvolved,
+    accepted: total((provenance) => provenance.accepted),
+    rejected: total((provenance) => provenance.rejected),
+    liveMs: total((provenance) => provenance.liveMs),
+    replayMs: total((provenance) => provenance.replayMs),
+    fallbackMs: total((provenance) => provenance.fallbackMs),
+    traceEvents: total((provenance) => provenance.traceEvents),
+    recordedAdapter: jev.recorded?.adapter ?? null,
+  };
+}
+
 function summarizeController(
   controller: ControllerChoice,
   runs: readonly BenchmarkRunRecord[],
@@ -123,6 +173,8 @@ function summarizeController(
   const completedValues = (pick: (run: BenchmarkRunRecord) => number) => completed.map(pick);
   return {
     controller,
+    id: `${controller}#${provenanceOf(ordered)?.label ?? "none"}`,
+    provenance: provenanceOf(ordered),
     runs: ordered.length,
     completionRate: ordered.length === 0 ? 0 : completedRuns / ordered.length,
     tripTimeMs: describe(completedValues((run) => run.trip.tripTimeMs)),
@@ -162,17 +214,23 @@ export function aggregateRuns(runs: readonly BenchmarkRunRecord[]): ExperimentGr
   return [...groups.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, group]) => {
-      const controllers = [...new Set(group.runs.map((run) => run.controller))].sort();
+      // Runs are keyed by controller AND provenance: two Jev runs that used
+      // different sources are different experiments and never share a summary.
+      const cells = new Map<string, { controller: ControllerChoice; runs: BenchmarkRunRecord[] }>();
+      for (const run of group.runs) {
+        const label = run.provenance?.label ?? "none";
+        const cellId = `${run.controller}#${label}`;
+        const cell = cells.get(cellId) ?? { controller: run.controller, runs: [] };
+        cell.runs.push(run);
+        cells.set(cellId, cell);
+      }
       return {
         key: group.key,
         id,
         seeds: [...new Set(group.runs.map((run) => run.scenario.seed))].sort((a, b) => a - b),
-        controllers: controllers.map((controller) =>
-          summarizeController(
-            controller,
-            group.runs.filter((run) => run.controller === controller),
-          ),
-        ),
+        controllers: [...cells.entries()]
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([, cell]) => summarizeController(cell.controller, cell.runs)),
       };
     });
 }
