@@ -25,6 +25,7 @@ import {
   type ChallengeScenario,
 } from "@/worker/challenge-scenario";
 import { buildChallengeResult } from "@/worker/challenge-result";
+import { fingerprintForRun } from "@/worker/challenge-scenario";
 import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
@@ -121,11 +122,14 @@ function post(event: WorkerEvent): void {
   scope.postMessage(event);
 }
 
-function makeController(choice: ControllerChoice) {
+function makeController(choice: ControllerChoice, identity: string) {
   if (choice === "jev") {
     // Browser path: the relay client asks our own route, which is the only
     // place the service credential lives. Nothing secret reaches this worker.
-    return createJevController({ client: createRelayJevClient() });
+    return createJevController({
+      client: createRelayJevClient(),
+      scenarioFingerprint: identity,
+    });
   }
   return choice === "adaptive" ? createAdaptiveController() : createFixedController();
 }
@@ -232,7 +236,8 @@ async function buildRun(config: RunConfig): Promise<void> {
   });
   const engine = createEngine({
     city,
-    controller: makeController(config.controller),
+    // Bound to the real identity of the scenario built just above.
+    controller: makeController(config.controller, fingerprintForRun(config)),
     spawns,
     driver: config.driver,
     incidents: {
@@ -421,9 +426,15 @@ function handleCommand(command: WorkerCommand): void {
         return;
       }
       // In-place switch: traffic, incidents, metrics, seed and simulation time
-      // are untouched; policy changes from the next tick.
-      setEngineController(state.engine, makeController(command.controller));
-      state.config = { ...state.config, controller: command.controller };
+      // are untouched; policy changes from the next tick. Switching controller
+      // mid-run must not change the scenario identity: the new Jev controller is
+      // bound to the run that is already in progress.
+      const runningConfig = state.config;
+      setEngineController(
+        state.engine,
+        makeController(command.controller, fingerprintForRun(runningConfig)),
+      );
+      state.config = { ...runningConfig, controller: command.controller };
       postSnapshot(); // controller id visible immediately
       return;
     }

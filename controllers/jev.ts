@@ -195,8 +195,12 @@ export interface JevController extends TrafficController {
 export interface JevControllerOptions {
   /** null = unconfigured: the controller runs the Adaptive fallback forever. */
   readonly client: JevClient | null;
-  /** Identifies the scenario this controller serves; guards stale responses. */
-  readonly scenarioFingerprint?: string;
+  /**
+   * Identifies the scenario this controller serves; guards stale responses and
+   * labels the trace. Required on purpose: a placeholder would let a policy
+   * accepted for one scenario be applied to another.
+   */
+  readonly scenarioFingerprint: string;
   readonly refreshMs?: number;
   readonly ttlMs?: number;
   readonly minHoldMs?: number;
@@ -221,7 +225,7 @@ function countActiveVehicles(traffic: TrafficState): number {
 export function createJevController(options: JevControllerOptions): JevController {
   const runtime: JevRuntime = createJevPolicyRuntime({
     client: options.mode === "replay" ? null : options.client,
-    scenarioFingerprint: options.scenarioFingerprint ?? "live",
+    scenarioFingerprint: options.scenarioFingerprint,
     refreshMs: options.refreshMs,
     ttlMs: options.ttlMs,
     minHoldMs: options.minHoldMs,

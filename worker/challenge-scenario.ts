@@ -54,6 +54,21 @@ export interface ScenarioWorld {
   readonly durationMs: number;
 }
 
+/**
+ * The scenario fingerprint for a run configuration (Issue #14 closeout).
+ *
+ * A live policy controller must be bound to the identity of the scenario it
+ * serves — the runtime uses it to decide which responses are still valid, and
+ * the trace it records carries it. This is the one way to get that value from a
+ * run config, so no caller can invent a placeholder: the value is derived from
+ * the same scenario the challenge harness would build.
+ */
+export function fingerprintForRun(
+  input: Parameters<typeof buildChallengeScenario>[0],
+): string {
+  return scenarioFingerprint(buildChallengeScenario(input));
+}
+
 export function resolveScenarioWorld(
   model: MapModel,
   trip: MaterializedCuratedTrip,
