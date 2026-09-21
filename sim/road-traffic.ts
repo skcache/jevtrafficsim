@@ -24,6 +24,7 @@
  * and the previous factor. No randomness, no wall-clock, no iteration-order
  * dependence (roads are visited in ascending id order).
  */
+import { MIN_TRAFFIC_SPEED_FACTOR } from "./config";
 import type { City, RoadId } from "./types";
 import type { TrafficState } from "./traffic";
 
@@ -32,7 +33,7 @@ export type TrafficSeverity = "free" | "slower" | "severe";
 /** One place where the meaning of "slow" is defined. */
 export const ROAD_TRAFFIC = {
   /** A fully jammed road still creeps; it never becomes a wall. */
-  minSpeedFactor: 0.12,
+  minSpeedFactor: MIN_TRAFFIC_SPEED_FACTOR,
   /** Occupancy ratio below which traffic is free. */
   freeOccupancyRatio: 0.45,
   /** Occupancy ratio at which traffic is treated as fully jammed. */

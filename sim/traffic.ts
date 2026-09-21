@@ -75,7 +75,14 @@ import {
   validateVehicleRoute,
   vehicleFootprint,
 } from "./vehicle";
-import { createRoadTraffic, stepRoadTraffic, type RoadTraffic } from "./road-traffic";
+import {
+  approachSpeed,
+  brakingLimitSpeed,
+  createRoadTraffic,
+  roadSpeedFactor,
+  stepRoadTraffic,
+  type RoadTraffic,
+} from "./road-traffic";
 
 export interface TrafficState {
   /** Simulation clock in milliseconds; advanced by stepTraffic. */
@@ -200,7 +207,14 @@ function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {
   addOccupancy(state, road.id, vehicleFootprint(vehicle.type));
   vehicle.roadId = road.id;
   vehicle.progress = 0;
-  vehicle.speed = effectiveSpeed(road, vehicle.type);
+  // An abstract ORIGIN injects a vehicle already travelling at the road's
+  // speed (Task 05: origins are not junctions). A vehicle TRANSFERRING into
+  // this road keeps its momentum, capped by the new road's limit — it never
+  // gains speed by crossing a junction. From here the per-tick longitudinal
+  // model owns the speed: congestion slows it, a blocked control brakes it.
+  const enteringFromOrigin = vehicle.roadId === null;
+  const freeFlow = effectiveSpeed(road, vehicle.type);
+  vehicle.speed = enteringFromOrigin ? freeFlow : Math.min(vehicle.speed, freeFlow);
   vehicle.state = "moving";
   vehicle.queuedSinceMs = null;
 }
@@ -278,16 +292,43 @@ function advance(
   context: IntersectionStepContext,
   onApproachArrival?: (roadId: RoadId) => void,
 ): void {
-  // NOTE (architectural realism pass): the longitudinal model that couples
-  // THIS state into vehicle speed — bounded acceleration plus braking to the
-  // physical stop line — is written and measured in sim/road-traffic.ts
-  // (approachSpeed / brakingLimitSpeed). It is deliberately NOT wired here yet:
-  // coupling it re-baselines 17 pinned behavioural tests (arrival-by-horizon and
-  // throughput assertions across adaptive-engine, approach-stats, capacity and
-  // queueing suites) because the whole simulation legitimately gets slower
-  // under load. That re-baseline is its own deliberate pass, not a tail-end
-  // edit. Until then speed stays as it was; the shared state drives colours and
-  // routing, which is where the three implementations disagreed most.
+  // ---- Longitudinal model ------------------------------------------------
+  // Target speed for THIS tick, approached with bounded acceleration:
+  //
+  //   target = road free-flow speed x vehicle multiplier x road speedFactor
+  //
+  // and, when the next control or road will not admit this vehicle, capped by
+  // what the brakes can achieve over the distance that is left — so a vehicle
+  // brakes to ~0 AT the physical stop line and holds there, instead of running
+  // to the end at full speed and stopping dead. Release is the same model in
+  // reverse: target returns to the traffic speed and the vehicle accelerates.
+  const startRoadId = vehicle.roadId;
+  const startRoad = startRoadId === null ? undefined : city.roads[startRoadId];
+  if (startRoad && startRoadId !== null) {
+    const trafficSpeed =
+      effectiveSpeed(startRoad, vehicle.type) * roadSpeedFactor(state.roadTraffic, startRoadId);
+    const nextRoadId = vehicle.route[vehicle.routeIndex + 1];
+    let blockedAhead = false;
+    if (nextRoadId !== undefined) {
+      const next = city.roads[nextRoadId];
+      blockedAhead =
+        !next ||
+        next.closed ||
+        !hasCapacity(state, next, vehicleFootprint(vehicle.type)) ||
+        evaluateIntersectionControl(
+          city,
+          state,
+          startRoadId,
+          nextRoadId,
+          vehicle.queuedSinceMs,
+          context,
+        ) !== "granted";
+    }
+    const target = blockedAhead
+      ? Math.min(trafficSpeed, brakingLimitSpeed(Math.max(0, startRoad.length - vehicle.progress)))
+      : trafficSpeed;
+    vehicle.speed = approachSpeed(vehicle.speed, target, dtSeconds);
+  }
 
   let remaining = vehicle.speed * dtSeconds;
   let guard = 0;

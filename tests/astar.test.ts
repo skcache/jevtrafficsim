@@ -1,3 +1,4 @@
+import { MIN_TRAFFIC_SPEED_FACTOR } from "@/sim/config";
 import { describe, expect, it } from "vitest";
 import { computePathCost, findRoute, routeHeuristic } from "@/sim/astar";
 import type { City, Intersection, Road } from "@/sim/types";
@@ -192,89 +193,74 @@ describe("closures", () => {
   });
 });
 
-describe("congestion-aware routing", () => {
-  it("reproduces free-flow routing at zero occupancy for any weight", () => {
+describe("traffic-aware routing", () => {
+  // Cost is travel time at the AUTHORITATIVE traffic speed — the same factor
+  // that slows vehicles and paints the map. There is no separate occupancy
+  // pricing any more: pricing a road by a proxy let the router disagree with
+  // the physics it was supposed to reflect.
+  it("reproduces free-flow routing when every factor is free", () => {
     const city = makeDiamondCity();
     const base = findRoute(city, 0, 3);
-    const weighted = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(),
-    });
-    expect(base.found && weighted.found).toBe(true);
-    if (!base.found || !weighted.found) return;
-    expect(weighted.roadIds).toEqual(base.roadIds);
+    const allFree = findRoute(city, 0, 3, { speedFactor: new Map() });
+    expect(base.found && allFree.found).toBe(true);
+    if (!base.found || !allFree.found) return;
+    expect(allFree.roadIds).toEqual(base.roadIds);
+    expect(allFree.cost).toBeCloseTo(base.cost, 9);
   });
 
-  it("switches routes when the fast path is congested enough", () => {
+  it("switches routes when the fast path is actually slow", () => {
     const city = makeDiamondCity();
-    const occupancy = new Map(FAST_EDGES.map((id) => [id, 4])); // ratio 1.0
-    const route = findRoute(city, 0, 3, { congestionWeight: 10, occupancy });
+    // The fast path is jammed: 0.2 of free-flow speed.
+    const speedFactor = new Map(FAST_EDGES.map((id) => [id, 0.2]));
+    const route = findRoute(city, 0, 3, { speedFactor });
     expect(route.found).toBe(true);
     if (!route.found) return;
     expect(route.roadIds).toEqual([...MEDIUM_PATH]);
-    expect(route.cost).toBe(computePathCost(city, route.roadIds, { congestionWeight: 10, occupancy }));
+    expect(route.cost).toBe(computePathCost(city, route.roadIds, { speedFactor }));
   });
 
-  it("accepts an occupancy callback exactly like a read-only map", () => {
+  it("accepts a speed-factor callback exactly like a read-only map", () => {
     const city = makeDiamondCity();
-    const asMap = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(FAST_EDGES.map((id) => [id, 4])),
-    });
+    const map = new Map(FAST_EDGES.map((id) => [id, 0.3]));
+    const asMap = findRoute(city, 0, 3, { speedFactor: map });
     const asCallback = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: (roadId) => (FAST_EDGES.includes(roadId as 0 | 2) ? 4 : 0),
+      speedFactor: (roadId) => (FAST_EDGES.includes(roadId as 0 | 2) ? 0.3 : 1),
     });
     expect(asMap).toEqual(asCallback);
   });
 
-  it("clamps occupancy: negatives count as zero, huge counts saturate", () => {
+  it("clamps factors, and never prices a road below what it can physically be", () => {
     const city = makeDiamondCity();
-    const free = findRoute(city, 0, 3, { congestionWeight: 10 });
-    const negative = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(FAST_EDGES.map((id) => [id, -5])),
-    });
-    expect(negative).toEqual(free);
+    const free = findRoute(city, 0, 3);
+    const missing = findRoute(city, 0, 3, { speedFactor: new Map() });
+    expect(missing).toEqual(free);
 
-    const huge = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(FAST_EDGES.map((id) => [id, 1_000_000])),
-    });
-    const atCapacity = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(FAST_EDGES.map((id) => [id, 4])),
-    });
-    expect(huge).toEqual(atCapacity);
+    // A nonsense factor reads as free, never as a jam.
+    for (const bad of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      const route = findRoute(city, 0, 3, {
+        speedFactor: new Map(FAST_EDGES.map((id) => [id, bad])),
+      });
+      expect(route).toEqual(free);
+    }
 
-    const nan = findRoute(city, 0, 3, {
-      congestionWeight: 10,
-      occupancy: new Map(FAST_EDGES.map((id) => [id, Number.NaN])),
+    // Below the floor saturates at the floor rather than going slower.
+    const floor = findRoute(city, 0, 3, {
+      speedFactor: new Map(FAST_EDGES.map((id) => [id, MIN_TRAFFIC_SPEED_FACTOR])),
     });
-    expect(nan).toEqual(free);
-  });
-
-  it("rejects negative or non-finite congestion weights", () => {
-    const city = makeDiamondCity();
-    expect(() => findRoute(city, 0, 3, { congestionWeight: -1 })).toThrow(RangeError);
-    expect(() =>
-      findRoute(city, 0, 3, { congestionWeight: Number.NaN }),
-    ).toThrow(RangeError);
-    expect(() =>
-      findRoute(city, 0, 3, { congestionWeight: Number.POSITIVE_INFINITY }),
-    ).toThrow(RangeError);
+    const absurd = findRoute(city, 0, 3, {
+      speedFactor: new Map(FAST_EDGES.map((id) => [id, 0.000001])),
+    });
+    expect(absurd).toEqual(floor);
   });
 });
 
 describe("determinism", () => {
   it("returns identical directed road ids across repeated calls", () => {
     const city = makeDiamondCity();
-    const occupancy = new Map(FAST_EDGES.map((id) => [id, 4]));
-    const first = findRoute(city, 0, 3, { congestionWeight: 10, occupancy });
+    const speedFactor = new Map(FAST_EDGES.map((id) => [id, 0.25]));
+    const first = findRoute(city, 0, 3, { speedFactor });
     for (let i = 0; i < 25; i += 1) {
-      expect(findRoute(city, 0, 3, { congestionWeight: 10, occupancy })).toEqual(
-        first,
-      );
+      expect(findRoute(city, 0, 3, { speedFactor })).toEqual(first);
     }
   });
 });

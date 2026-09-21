@@ -82,6 +82,7 @@
  */
 import { createApproachStats, updateApproachStats, type ApproachStats } from "./approach-stats";
 import { findRoute } from "./astar";
+import { roadSpeedFactor } from "./road-traffic";
 import {
   createDriverState,
   decideReplan,
@@ -335,7 +336,7 @@ function spawnDueVehicles(engine: EngineState): void {
     const spawn = engine.spawnQueue[engine.nextSpawnIndex];
     engine.nextSpawnIndex += 1;
     const route = findRoute(city, spawn.origin, spawn.destination, {
-      occupancy: traffic.occupancy,
+      speedFactor: (roadId) => roadSpeedFactor(traffic.roadTraffic, roadId),
     });
     if (!route.found) {
       engine.metrics.failedSpawns += 1;
@@ -386,7 +387,7 @@ function maybeReplanEgo(engine: EngineState): void {
     return;
   }
   const candidate = findRoute(engine.city, road.to, ego.destination, {
-    occupancy: engine.traffic.occupancy,
+    speedFactor: (roadId) => roadSpeedFactor(engine.traffic.roadTraffic, roadId),
   });
   if (!candidate.found) {
     return;
@@ -730,7 +731,7 @@ function attemptReroute(engine: EngineState, vehicleId: number, force: boolean):
     return true;
   }
   const route = findRoute(engine.city, from, vehicle.destination, {
-    occupancy: engine.traffic.occupancy,
+    speedFactor: (roadId) => roadSpeedFactor(engine.traffic.roadTraffic, roadId),
   });
   if (!route.found) {
     book.failed = true;

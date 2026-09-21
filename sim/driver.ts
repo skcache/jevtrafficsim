@@ -19,6 +19,7 @@
  * No model, no randomness, no wall clock: every input is simulation state and
  * every threshold is a named constant.
  */
+import { roadSpeedFactor } from "./road-traffic";
 import type { City, RoadId } from "./types";
 import type { TrafficState } from "./traffic";
 
@@ -121,24 +122,11 @@ export function remainingRouteSeconds(
       continue;
     }
     const lengthM = index === routeIndex ? Math.max(0, road.length - progressM) : road.length;
-    seconds += lengthM / road.speedLimit / congestionFactor(road, traffic);
+    // The SAME authoritative speed factor that drives vehicle motion and the
+    // map's colours: a driver's estimate of a route is the traffic they can
+    // actually see, with no second slowdown model in between.
+    seconds += lengthM / (road.speedLimit * roadSpeedFactor(traffic.roadTraffic, road.id));
   }
   return seconds;
 }
 
-/**
- * How much current occupancy slows this road down: 1 when empty, floored at
- * 0.2 so a jam reads as slow rather than infinite. A closed road is treated as
- * near-blocked.
- */
-export function congestionFactor(
-  road: { readonly id: RoadId; readonly capacity: number; readonly closed: boolean },
-  traffic: TrafficState,
-): number {
-  if (road.closed) {
-    return 0.08;
-  }
-  const ratio =
-    road.capacity > 0 ? Math.min(1, (traffic.occupancy.get(road.id) ?? 0) / road.capacity) : 0;
-  return Math.max(0.2, 1 - 0.8 * ratio);
-}
