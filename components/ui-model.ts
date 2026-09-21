@@ -4,8 +4,10 @@
  */
 import type { CitySize, TrafficLevel } from "@/sim/types";
 import type { ControllerChoice } from "@/worker/protocol";
+import { DRIVER_DESCRIPTIONS, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIPS } from "@/cities/chicago-trips";
 import type { PresentationTripProgress } from "@/worker/presentation-snapshot";
+import type { ChallengeResult } from "@/worker/challenge-result";
 
 export interface ScaleOption {
   readonly value: CitySize;
@@ -31,6 +33,12 @@ export const TRAFFIC_OPTIONS: readonly { value: TrafficLevel; label: string }[] 
 export const CONTROLLER_OPTIONS: readonly { value: ControllerChoice; label: string }[] = [
   { value: "fixed", label: "Fixed" },
   { value: "adaptive", label: "Adaptive" },
+];
+
+/** Driver choices for the setup control (issue #28). */
+export const DRIVER_OPTIONS: readonly { value: DriverStrategy; label: string }[] = [
+  { value: "tourist", label: "Tourist" },
+  { value: "local", label: "Local" },
 ];
 
 export function citySizeLabel(value: CitySize): string {
@@ -210,4 +218,47 @@ export function tripHudView(input: TripHudInput): TripHudView | null {
       },
     ],
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Comparison (Issue #28)                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ComparisonRow {
+  readonly label: string;
+  readonly fixed: string;
+  readonly adaptive: string;
+}
+
+/**
+ * The compact comparison table: your trip first, then Chicago. Every value is
+ * a field of the two results, formatted — the panel never computes anything the
+ * runs did not produce.
+ */
+/** A run that never arrived did not have a trip time. */
+function tripTime(result: ChallengeResult): string {
+  return result.trip.completed ? formatDuration(result.trip.tripTimeMs) : "—";
+}
+
+export function comparisonRows(
+  fixed: ChallengeResult,
+  adaptive: ChallengeResult,
+): readonly ComparisonRow[] {
+  return [
+    {
+      label: "Trip time",
+      fixed: tripTime(fixed),
+      adaptive: tripTime(adaptive),
+    },
+    { label: "Stopped", fixed: formatDuration(fixed.trip.stoppedMs), adaptive: formatDuration(adaptive.trip.stoppedMs) },
+    { label: "Reroutes", fixed: String(fixed.trip.rerouteCount), adaptive: String(adaptive.trip.rerouteCount) },
+    { label: "Avg wait", fixed: formatDuration(fixed.city.averageWaitMs), adaptive: formatDuration(adaptive.city.averageWaitMs) },
+    { label: "P95 wait", fixed: formatDuration(fixed.city.p95WaitMs), adaptive: formatDuration(adaptive.city.p95WaitMs) },
+    { label: "Trips done", fixed: fixed.city.completedTrips.toLocaleString("en-US"), adaptive: adaptive.city.completedTrips.toLocaleString("en-US") },
+    { label: "Gridlock", fixed: formatPercent(fixed.city.gridlockRatio), adaptive: formatPercent(adaptive.city.gridlockRatio) },
+  ];
+}
+
+export function driverDescription(driver: DriverStrategy): string {
+  return DRIVER_DESCRIPTIONS[driver];
 }

@@ -14,6 +14,16 @@ import type {
   PresentationTripProgress,
 } from "@/worker/presentation-snapshot";
 import type { ControllerChoice, RunConfig } from "@/worker/protocol";
+import type { DriverStrategy } from "@/sim/driver";
+import type { ChallengeResult, ComparisonVerdict } from "@/worker/challenge-result";
+
+/** A finished headless comparison of the current scenario (Issue #28). */
+export interface ComparisonState {
+  readonly fixed: ChallengeResult;
+  readonly adaptive: ChallengeResult;
+  readonly verdict: ComparisonVerdict;
+  readonly fingerprint: string;
+}
 
 export type UiPhase = "landing" | "config" | "entering" | "city";
 
@@ -26,6 +36,11 @@ export interface UiState {
   trafficLevel: TrafficLevel;
   tripId: CuratedTripId;
   controller: ControllerChoice;
+  /** Driver behaviour profile (Issue #28) — independent of the controller. */
+  driver: DriverStrategy;
+  /** Headless Fixed-vs-Adaptive run of the current scenario, when one exists. */
+  comparison: ComparisonState | null;
+  comparing: boolean;
   seed: number;
   ready: boolean;
   running: boolean;
@@ -52,6 +67,9 @@ export interface UiState {
   setTrafficLevel: (trafficLevel: TrafficLevel) => void;
   setTripId: (tripId: CuratedTripId) => void;
   setController: (controller: ControllerChoice) => void;
+  setDriver: (driver: DriverStrategy) => void;
+  setComparison: (comparison: ComparisonState | null) => void;
+  setComparing: (comparing: boolean) => void;
   setSeed: (seed: number) => void;
   setScenarioOpen: (open: boolean) => void;
   applyReady: (config: RunConfig, scaleLabel: string) => void;
@@ -78,6 +96,9 @@ export const useUiStore = create<UiState>()((set) => ({
   trafficLevel: "everyday",
   tripId: "united-center-to-navy-pier",
   controller: "adaptive",
+  driver: "tourist",
+  comparison: null,
+  comparing: false,
   seed: 42,
   ready: false,
   running: false,
@@ -100,6 +121,9 @@ export const useUiStore = create<UiState>()((set) => ({
   setTrafficLevel: (trafficLevel) => set({ trafficLevel }),
   setTripId: (tripId) => set({ tripId, citySize: "large" }),
   setController: (controller) => set({ controller }),
+  setDriver: (driver) => set({ driver }),
+  setComparison: (comparison) => set({ comparison }),
+  setComparing: (comparing) => set({ comparing }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
   applyReady: (config, scaleLabel) =>

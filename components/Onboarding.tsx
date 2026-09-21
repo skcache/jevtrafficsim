@@ -9,15 +9,15 @@
  * controller and seed, with a deliberate "Enter City" moment.
  */
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
 import { useUiStore } from "@/store/ui-store";
-import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
+import { DiscreteSlider, Segmented, TickRow } from "./controls";
+import { DRIVER_OPTIONS, driverDescription } from "./ui-model";
+import { ComparisonPanel } from "./ComparisonPanel";
 import { CURATED_TRIPS, curatedTrip } from "@/cities/chicago-trips";
 import {
   CONTROLLER_OPTIONS,
   TRAFFIC_OPTIONS,
   diceSeed,
-  normalizeSeed,
   trafficLabel,
 } from "./ui-model";
 
@@ -28,32 +28,31 @@ const fieldVariants = {
   shown: { opacity: 1, y: 0 },
 };
 
-export function Onboarding({ onEnterCity, onPreviewSetup }: { onEnterCity: () => void; onPreviewSetup: () => void }) {
+export function Onboarding({
+  onEnterCity,
+  onPreviewSetup,
+  onCompare,
+}: {
+  onEnterCity: () => void;
+  onPreviewSetup: () => void;
+  onCompare: () => void;
+}) {
   const phase = useUiStore((state) => state.phase);
   const trafficLevel = useUiStore((state) => state.trafficLevel);
   const tripId = useUiStore((state) => state.tripId);
   const controller = useUiStore((state) => state.controller);
-  const seed = useUiStore((state) => state.seed);
   const setPhase = useUiStore((state) => state.setPhase);
   const setTrafficLevel = useUiStore((state) => state.setTrafficLevel);
   const setTripId = useUiStore((state) => state.setTripId);
   const setController = useUiStore((state) => state.setController);
   const setSeed = useUiStore((state) => state.setSeed);
-  const [seedText, setSeedText] = useState(String(seed));
-  const [rotation, setRotation] = useState(0);
-
-  const rollDice = () => {
-    const next = diceSeed();
-    setSeed(next);
-    setSeedText(String(next));
-    setRotation((degrees) => degrees + 540);
-    onPreviewSetup();
-  };
-
-  const commitSeed = () => {
-    const normalized = normalizeSeed(seedText, seed);
-    setSeed(normalized);
-    setSeedText(String(normalized));
+  const driver = useUiStore((state) => state.driver);
+  const setDriver = useUiStore((state) => state.setDriver);
+  const comparison = useUiStore((state) => state.comparison);
+  const comparing = useUiStore((state) => state.comparing);
+  /** A new scenario is a new seed — deterministic, just not user-facing. */
+  const newScenario = () => {
+    setSeed(diceSeed());
     onPreviewSetup();
   };
 
@@ -175,15 +174,48 @@ export function Onboarding({ onEnterCity, onPreviewSetup }: { onEnterCity: () =>
               </motion.div>
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                <SeedField
-                  text={seedText}
-                  onText={setSeedText}
-                  onCommit={commitSeed}
-                  onRoll={rollDice}
-                  rotation={rotation}
-                  label={<span className="label-micro">Seed</span>}
-                />
+                <span className="label-micro">Driver</span>
+                <div className="mt-2.5">
+                  <Segmented
+                    options={DRIVER_OPTIONS}
+                    value={driver}
+                    onChange={(nextDriver) => {
+                      setDriver(nextDriver);
+                      onPreviewSetup();
+                    }}
+                    layoutId="driver-pill-config"
+                    height={36}
+                    ariaLabel="Driver"
+                  />
+                </div>
+                <p className="mt-2 text-meta leading-relaxed text-ink-52">{driverDescription(driver)}</p>
               </motion.div>
+
+              <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={newScenario}
+                    className="text-meta text-ink-52 transition-colors duration-150 hover:text-ink"
+                  >
+                    New scenario
+                  </button>
+                  <button
+                    type="button"
+                    disabled={comparing}
+                    onClick={onCompare}
+                    className="text-meta text-ink-52 transition-colors duration-150 hover:text-ink disabled:opacity-60"
+                  >
+                    {comparing ? "Running both…" : "Compare Fixed vs Adaptive"}
+                  </button>
+                </div>
+              </motion.div>
+
+              {comparison !== null && (
+                <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
+                  <ComparisonPanel comparison={comparison} />
+                </motion.div>
+              )}
 
               <motion.div
                 variants={fieldVariants}
