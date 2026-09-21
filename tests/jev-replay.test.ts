@@ -21,6 +21,7 @@ import { loadBenchmarkModel } from "@/benchmark/model";
 import { runBenchmarkScenario } from "@/benchmark/runner";
 import type { BenchmarkScenario } from "@/benchmark/scenarios";
 import { createJevController, type JevController } from "@/controllers/jev";
+import { jevProvenance } from "@/jev/provenance";
 import { createMockJevClient, type JevClient } from "@/jev/client";
 import { paceDelayMs } from "@/worker/challenge-compare";
 import { buildScenarioRun } from "@/worker/challenge-compare";
@@ -263,17 +264,20 @@ describe("benchmark seam carries replay metadata", () => {
           return current;
         },
       },
-      describeController: () => (current === null ? undefined : (current.meta() as unknown as Record<string, unknown>)),
+      describeController: () => (current === null ? undefined : jevProvenance(current.meta(), live.trace)),
     });
     expect(records).toHaveLength(1);
-    const meta = records[0].controllerMeta as Record<string, number | string>;
-    expect(meta.kind).toBe("jev");
-    expect(meta.mode).toBe("replay");
-    expect(meta.source).toBe("replay");
-    expect(meta.accepted).toBe(live.trace.events.length);
-    expect(meta.refreshes).toBe(0);
-    expect(meta.liveMs).toBe(0);
-    expect(Number(meta.replayMs)).toBeGreaterThan(0);
+    const provenance = records[0].provenance!;
+    expect(provenance.controller).toBe("jev");
+    expect(provenance.mode).toBe("replay");
+    expect(provenance.adapter).toBe("replay");
+    expect(provenance.label).toBe("jev-replay");
+    expect(provenance.accepted).toBe(live.trace.events.length);
+    expect(provenance.refreshes).toBe(0);
+    expect(provenance.liveMs).toBe(0);
+    expect(provenance.trace?.client).toBe("mock");
+    expect(provenance.trace?.events).toBe(live.trace.events.length);
+    expect(provenance.replayMs).toBeGreaterThan(0);
   });
 
   it("marks a mocked live run as live, and a fallback run as fallback", () => {
@@ -290,9 +294,12 @@ describe("benchmark seam carries replay metadata", () => {
         },
       },
       describeController: () =>
-        liveController === null ? undefined : (liveController.meta() as unknown as Record<string, unknown>),
+        liveController === null ? undefined : jevProvenance(liveController.meta()),
     });
-    expect((liveRecords[0].controllerMeta as Record<string, unknown>).source).toBe("live");
+    expect(liveRecords[0].provenance?.mode).toBe("live");
+    expect(liveRecords[0].provenance?.adapter).toBe("mock");
+    expect(liveRecords[0].provenance?.label).toBe("jev-mock");
+    expect(liveRecords[0].provenance?.modelInvolved).toBe(false);
 
     let fallbackController: JevController | null = null;
     const fallbackRecords = runBenchmarkScenario(model, SCENARIO, ["jev"], {
@@ -306,14 +313,12 @@ describe("benchmark seam carries replay metadata", () => {
         },
       },
       describeController: () =>
-        fallbackController === null
-          ? undefined
-          : (fallbackController.meta() as unknown as Record<string, unknown>),
+        fallbackController === null ? undefined : jevProvenance(fallbackController.meta()),
     });
-    const fallbackMeta = fallbackRecords[0].controllerMeta as Record<string, number | string>;
-    expect(fallbackMeta.source).toBe("fallback");
-    expect(fallbackMeta.accepted).toBe(0);
-    expect(Number(fallbackMeta.fallbackMs)).toBeGreaterThan(0);
+    const fallbackProvenance = fallbackRecords[0].provenance;
+    expect(fallbackProvenance?.adapter).toBe("unconfigured");
+    expect(fallbackProvenance?.accepted).toBe(0);
+    expect(fallbackProvenance?.fallbackMs).toBeGreaterThan(0);
   });
 });
 

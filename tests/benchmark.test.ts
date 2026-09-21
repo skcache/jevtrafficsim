@@ -278,8 +278,11 @@ describe("benchmark output contract", () => {
     const matrix = smokeMatrix();
     const runs = runBenchmarkMatrix(model, matrix);
     const document = buildDocument(matrix, runs);
-    expect(Object.keys(document)).toEqual(["version", "matrix", "runs", "groups"]);
+    expect(Object.keys(document)).toEqual(["version", "jevAdapter", "matrix", "runs", "groups"]);
     expect(document.version).toBe(1);
+    // The document names the policy source of its jev rows (Issue #38); a
+    // Fixed/Adaptive-only matrix has none to name.
+    expect(document.jevAdapter).toBeNull();
     expect(Object.keys(document.matrix)).toEqual([
       "trips",
       "trafficLevels",
@@ -310,6 +313,10 @@ describe("benchmark output contract", () => {
     expect(Object.keys(document.groups[0])).toEqual(["key", "id", "seeds", "controllers"]);
     expect(Object.keys(document.groups[0].controllers[0])).toEqual([
       "controller",
+      // Provenance is part of the contract now (Issue #38): every summary entry
+      // says which policy source produced its runs, and Fixed/Adaptive say null.
+      "id",
+      "provenance",
       "runs",
       "completionRate",
       "tripTimeMs",
