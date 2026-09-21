@@ -27,6 +27,95 @@ import { parseJevPolicy, validateJevPolicyRequest } from "@/jev/schema";
 /** Requests are bounded by construction; refuse anything wildly larger. */
 const MAX_BODY_BYTES = 512 * 1024;
 
+/**
+ * Abuse guard for the public relay (Issue #15).
+ *
+ * Two things keep this endpoint from being a free model proxy: the request must
+ * be first-party, and each caller gets a budget. Neither is a security boundary
+ * on its own — a scripted client can forge headers, and this counter lives in
+ * one serverless instance — so both are deliberately small and dependency-free
+ * rather than pretending to be more than they are. The real bound is the
+ * contract: only the Jev question set is ever forwarded (see jev/gateway.ts),
+ * so a caller cannot turn this into a general completion endpoint.
+ *
+ * A caller that trips the budget gets 429, the runtime falls back to Adaptive,
+ * and the run continues. Nothing is retried or queued server-side.
+ */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 180;
+/** Hard cap on tracked callers, so the counter cannot grow without bound. */
+const RATE_LIMIT_MAX_KEYS = 4_096;
+
+interface RateWindow {
+  count: number;
+  resetAtMs: number;
+}
+
+const rateWindows = new Map<string, RateWindow>();
+
+/** The caller's identity for rate limiting: the platform's client IP. */
+export function callerKey(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) {
+      return first;
+    }
+  }
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
+}
+
+/**
+ * True when the caller may spend one request. Fixed window, per instance: the
+ * point is to bound a runaway client, not to account for every caller on earth.
+ */
+export function allowRequest(key: string, nowMs: number): boolean {
+  for (const [existing, window] of rateWindows) {
+    if (window.resetAtMs <= nowMs) {
+      rateWindows.delete(existing);
+    }
+  }
+  const window = rateWindows.get(key);
+  if (window === undefined) {
+    if (rateWindows.size >= RATE_LIMIT_MAX_KEYS) {
+      return false;
+    }
+    rateWindows.set(key, { count: 1, resetAtMs: nowMs + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (window.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return false;
+  }
+  window.count += 1;
+  return true;
+}
+
+/**
+ * First-party only, when the request says where it came from.
+ *
+ * Browsers attach provenance to a cross-site POST, and this route is for our own
+ * worker: an `Origin` that is not us is refused, and a `Sec-Fetch-Site` that
+ * says another site is refused even without an Origin. A request with neither
+ * (a script, a health check, the deployed smoke) is allowed through to the rate
+ * limit — refusing it would only break legitimate server-side callers, since
+ * headers are trivially forged anyway.
+ */
+export function firstParty(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== "" && origin !== "null") {
+    try {
+      return new URL(origin).host === new URL(request.url).host;
+    } catch {
+      return false;
+    }
+  }
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin" && site !== "same-site" && site !== "none") {
+    return false;
+  }
+  return true;
+}
+
 export interface JevEnvironment {
   readonly token: string;
   readonly timeoutMs: number;
@@ -118,14 +207,33 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "jev is not configured" }, { status: 503 });
   }
 
+  if (!firstParty(request)) {
+    return Response.json({ error: "cross-origin requests are not allowed" }, { status: 403 });
+  }
+
+  if (!allowRequest(callerKey(request), Date.now())) {
+    return Response.json({ error: "too many policy requests" }, { status: 429 });
+  }
+
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
     return Response.json({ error: "request body is too large" }, { status: 413 });
   }
 
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    return Response.json({ error: "request body could not be read" }, { status: 400 });
+  }
+  // The declared length is a claim; this is the actual size.
+  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
+    return Response.json({ error: "request body is too large" }, { status: 413 });
+  }
+
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(text) as unknown;
   } catch {
     return Response.json({ error: "request body must be JSON" }, { status: 400 });
   }
