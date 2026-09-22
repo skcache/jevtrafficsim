@@ -139,6 +139,26 @@ describe("follow camera", () => {
     expect(Math.max(...steps)).toBeLessThan(1e-9);
   });
 
+  it("crosses the dead-zone boundary without a stick-slip jump", () => {
+    let state = createFollowState();
+    state = advanceFollow(state, sample([0, 0]), FRAME_MS).state;
+    const justInside = advanceFollow(
+      state,
+      sample([FOLLOW_SCALE.deadZoneM - 0.01, 0]),
+      FRAME_MS,
+    );
+    const justOutside = advanceFollow(
+      justInside.state,
+      sample([FOLLOW_SCALE.deadZoneM + 0.01, 0]),
+      FRAME_MS,
+    );
+    const before = justInside.target!;
+    const after = justOutside.target!;
+    // Crossing the threshold by two centimetres should produce a tiny continuous
+    // correction, not suddenly smooth the whole ~2.5 m accumulated error.
+    expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeLessThan(0.005);
+  });
+
   it("does not oscillate when the car is stopped", () => {
     const path: [number, number][] = Array.from({ length: 60 }, () => [12, 7] as [number, number]);
     const { targets } = drive(path);

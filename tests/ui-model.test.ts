@@ -197,7 +197,7 @@ describe("comparison panel (Issue #28, three columns since #15)", () => {
     expect(byLabel.get("Stopped")?.adaptive).toBe("1m 38s");
     expect(byLabel.get("Stopped")?.jev).toBe("2m 10s");
     expect(byLabel.get("Trips done")?.fixed).toBe("1,084");
-    expect(byLabel.get("Gridlock")?.adaptive).toBe("16%");
+    expect(byLabel.get("Queued time")?.adaptive).toBe("16%");
     expect(byLabel.get("Reroutes")?.fixed).toBe("2");
     // Every row is a field of a real run, so no column is ever blank.
     for (const row of rows) {

@@ -40,11 +40,12 @@ const laneOffsets = model.city.roads.map((road) =>
 
 /** A snapshot carrying exactly the road counts a test wants to see. */
 function snapshotWith(
-  rows: readonly { roadId: number; vehicleCount: number; queuedCount: number }[],
+  rows: readonly { roadId: number; vehicleCount: number; queuedCount: number; speedFactor?: number }[],
+  timeMs = 0,
 ): PresentationSnapshot {
   return {
     sequence: 0,
-    timeMs: 0,
+    timeMs,
     controller: "adaptive",
     governance: { modified: false, manualIncidents: 0 },
     policy: null,
@@ -56,7 +57,7 @@ function snapshotWith(
       vehicleCount: row.vehicleCount,
       queuedCount: row.queuedCount,
       maxBlockedWaitMs: 0,
-      speedFactor: 1,
+      speedFactor: row.speedFactor ?? 1,
       severity: "free" as const,
     })),
     routeControls: [],
@@ -225,8 +226,67 @@ describe("background traffic: sprites obey the road, not the open map", () => {
       expect(sprite.progress).toBeGreaterThan(0);
       expect(sprite.progress).toBeLessThan(road.length);
     }
-    const order = sprites.map((sprite) => sprite.progress);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Stable per-slot phases intentionally do not sort by slot number: changing
+    // the road's count must not re-space every existing car. They only need to
+    // occupy distinct valid positions on the road.
+    const positions = sprites.map((sprite) => sprite.progress.toFixed(3));
+    expect(new Set(positions).size).toBe(positions.length);
+  });
+});
+
+describe("background traffic: aggregate sprites have stable forward motion", () => {
+  it("does not relocate existing moving slots when the road count changes", () => {
+    const road = someRoad(400);
+    const four = synthesizeRoadTraffic(
+      snapshotWith([{ roadId: road.id, vehicleCount: 4, queuedCount: 0 }], 12_000),
+      { city: model.city, laneOffsets, egoRoadId: null },
+    );
+    const five = synthesizeRoadTraffic(
+      snapshotWith([{ roadId: road.id, vehicleCount: 5, queuedCount: 0 }], 12_000),
+      { city: model.city, laneOffsets, egoRoadId: null },
+    );
+    const fiveByKey = new Map(five.map((sprite) => [sprite.key, sprite]));
+    for (const sprite of four) {
+      const same = fiveByKey.get(sprite.key);
+      expect(same).toBeDefined();
+      expect(same!.progress).toBeCloseTo(sprite.progress, 9);
+      expect(same!.laneOffset).toBeCloseTo(sprite.laneOffset, 9);
+    }
+  });
+
+  it("actually moves when simulation time advances even if the count is unchanged", () => {
+    const road = someRoad(400);
+    const atZero = synthesizeRoadTraffic(
+      snapshotWith([{ roadId: road.id, vehicleCount: 6, queuedCount: 0, speedFactor: 0.7 }], 0),
+      { city: model.city, laneOffsets, egoRoadId: null },
+    );
+    const later = synthesizeRoadTraffic(
+      snapshotWith([{ roadId: road.id, vehicleCount: 6, queuedCount: 0, speedFactor: 0.7 }], 1_000),
+      { city: model.city, laneOffsets, egoRoadId: null },
+    );
+    const laterByKey = new Map(later.map((sprite) => [sprite.key, sprite]));
+    const moved = atZero.filter((sprite) => {
+      const next = laterByKey.get(sprite.key);
+      return next !== undefined && Math.abs(next.progress - sprite.progress) > 0.1;
+    });
+    expect(moved.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("does not animate a wrapped moving slot backwards across the whole road", () => {
+    const road = someRoad(400);
+    const base = synthesizeRoadTraffic(
+      snapshotWith([{ roadId: road.id, vehicleCount: 1, queuedCount: 0 }]),
+      { city: model.city, laneOffsets, egoRoadId: null },
+    )[0];
+    expect(base).toBeDefined();
+    const previous = [{ ...base!, progress: road.length - 2 }];
+    const current = [{ ...base!, progress: 2 }];
+    const halfway = renderBackgroundVehicles(previous, current, 0.5, { indexes });
+    const atEnd = renderBackgroundVehicles([], current, 1, { indexes });
+    expect(halfway).toHaveLength(1);
+    expect(atEnd).toHaveLength(1);
+    expect(halfway[0].x).toBeCloseTo(atEnd[0].x, 9);
+    expect(halfway[0].y).toBeCloseTo(atEnd[0].y, 9);
   });
 });
 
