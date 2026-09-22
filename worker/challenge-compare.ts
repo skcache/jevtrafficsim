@@ -15,7 +15,7 @@ import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import type { TrafficController } from "@/controllers/contract";
-import { generateDemand } from "@/sim/demand";
+import { productionDemand } from "@/sim/demand-profile";
 import { createEngine, runEngine, stepEngine, type EngineState, type ScheduledSpawn } from "@/sim/engine";
 import type { IncidentConfig } from "@/sim/incidents";
 import type { DriverStrategy } from "@/sim/driver";
@@ -127,7 +127,9 @@ export function buildScenarioRun(
   // ONE spawn list and ONE incident script, shared by every controller.
   const spawns: ScheduledSpawn[] = [
     challenge.spawn,
-    ...generateDemand({
+    // The production profile, so the baselines and the benchmark play the SAME
+    // city the visible run does. One helper, one multiplier, no second knob.
+    ...productionDemand({
       city: model.city,
       level: request.trafficLevel,
       seed: world.demandSeed,

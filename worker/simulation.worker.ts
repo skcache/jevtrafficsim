@@ -31,7 +31,7 @@ import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
-import { generateDemand } from "@/sim/demand";
+import { productionDemand } from "@/sim/demand-profile";
 import { TRAFFIC_LEVELS } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
 import {
@@ -330,7 +330,7 @@ async function buildRun(config: RunConfig): Promise<void> {
   }
   const city = model.city;
   // Background demand is exactly what it always was: the whole city stays alive.
-  const background = generateDemand({
+  const background = productionDemand({
     city,
     level: config.trafficLevel,
     seed: config.seed,
@@ -630,7 +630,7 @@ function handleCommand(command: WorkerCommand): void {
       if (horizonMs > 0) {
         const levelIndex = Math.max(0, TRAFFIC_LEVELS.indexOf(command.trafficLevel));
         const derivedSeed = (config.seed + 0x9e37 + levelIndex * 7919 + Math.floor(nowMs / 1000)) >>> 0;
-        const extra = generateDemand({
+        const extra = productionDemand({
           city: engine.baseCity,
           level: command.trafficLevel,
           seed: derivedSeed,

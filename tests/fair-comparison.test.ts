@@ -7,6 +7,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { demandProfileFor } from "@/sim/demand-profile";
 import { createEngine, runEngine, stepEngine, type ScheduledSpawn } from "@/sim/engine";
 import { createFixedController } from "@/controllers/fixed";
 import { createAdaptiveController } from "@/controllers/adaptive";
@@ -238,8 +239,13 @@ describe("challenge scenario", () => {
       durationMs: 600_000,
     });
     expect(Object.keys(scenario).sort()).toEqual(
-      ["driver", "durationMs", "seed", "trafficLevel", "tripId"].sort(),
+      ["demandProfile", "driver", "durationMs", "seed", "trafficLevel", "tripId"].sort(),
     );
+    // Demand semantics are part of scenario identity: a baseline or trace built
+    // against a different demand profile must not compare as this scenario.
+    expect(scenario.demandProfile).toBe(demandProfileFor(scenario.trafficLevel).label);
+    const otherProfile = { ...scenario, demandProfile: "some-other-world" };
+    expect(scenarioFingerprint(otherProfile)).not.toBe(scenarioFingerprint(scenario));
     expect(scenarioFingerprint(scenario)).toMatch(/^[0-9a-f]{8}$/);
     expect(scenarioFingerprint(scenario)).toBe(scenarioFingerprint({ ...scenario }));
     // A different driver is a different scenario; so is a different seed.

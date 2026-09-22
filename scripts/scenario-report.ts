@@ -34,6 +34,7 @@ import { resolveScenarioWorld, buildChallengeScenario, scenarioFingerprint } fro
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { JEV_LIMITS } from "@/jev/schema";
 import { DEMAND_SHAPES, type DemandShapeName } from "@/sim/demand-shape";
+import { demandProfileFor, productionDemand } from "@/sim/demand-profile";
 import type { CuratedTripId } from "@/cities/chicago-trips";
 
 const TRIP_ID: CuratedTripId = "soldier-field-to-navy-pier";
@@ -181,6 +182,9 @@ function main(): void {
     durationMs: horizonMs,
   });
   const world = resolveScenarioWorld(model, challenge.trip, scenario);
+  // --profile runs the SHIPPING demand (sim/demand-profile.ts); the raw flags
+  // stay available for calibration sweeps.
+  const useProduction = process.argv.includes("--profile");
   const demandOptions = {
     city: model.city,
     level: trafficLevel,
@@ -189,7 +193,11 @@ function main(): void {
     shape,
     multiplier: demandMultiplier,
   };
-  const spawns: ScheduledSpawn[] = [challenge.spawn, ...generateDemand(demandOptions)];
+  const profile = demandProfileFor(trafficLevel);
+  const demand = useProduction
+    ? productionDemand({ city: model.city, level: trafficLevel, seed: world.demandSeed, durationMs: horizonMs })
+    : generateDemand(demandOptions);
+  const spawns: ScheduledSpawn[] = [challenge.spawn, ...demand];
 
   const build = (controller: TrafficController): EngineState =>
     createEngine({
@@ -272,7 +280,9 @@ function main(): void {
     }
   }
 
-  const label = `${trafficLevel}${shape === "uniform" ? "" : `/${shape}`}${demandMultiplier === 1 ? "" : `×${demandMultiplier}`}`;
+  const label = useProduction
+    ? `${trafficLevel} · PRODUCTION ${profile.label}`
+    : `${trafficLevel}${shape === "uniform" ? "" : `/${shape}`}${demandMultiplier === 1 ? "" : `×${demandMultiplier}`}`;
   console.log(`\n=== ${label} · ${TRIP_ID} · ${minutes} min · ${ticks} ticks · ${model.city.roads.length} roads ===`);
   console.log(
     "t(min)  active spawned arrived  occ p50/p90/max   red%  amber%  free%  queued  wait avg/p95   thru/min  ego   minG maxG starv",

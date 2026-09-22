@@ -16,6 +16,7 @@
  */
 import type { MapModel } from "@/cities/map-model";
 import type { CuratedTripId, MaterializedCuratedTrip } from "@/cities/chicago-trips";
+import { demandProfileFor } from "@/sim/demand-profile";
 import type { TrafficLevel } from "@/sim/types";
 import type { DriverStrategy } from "@/sim/driver";
 import {
@@ -30,6 +31,13 @@ export interface ChallengeScenario {
   /** Deterministic world seed. Internal: never presented as a primary control. */
   readonly seed: number;
   readonly durationMs: number;
+  /**
+   * Identity of the demand profile this level plays (see sim/demand-profile.ts).
+   * Part of the fingerprint on purpose: the shipping pass changed demand
+   * semantics, so a baseline, trace or saved result built against the old world
+   * must not compare as if it were this one.
+   */
+  readonly demandProfile: string;
 }
 
 /**
@@ -38,13 +46,16 @@ export interface ChallengeScenario {
  * prove Fixed and Adaptive are handed the same city.
  */
 /** Build the scenario from its inputs. Pure: no model, no controller. */
-export function buildChallengeScenario(input: ChallengeScenario): ChallengeScenario {
+export function buildChallengeScenario(
+  input: Omit<ChallengeScenario, "demandProfile">,
+): ChallengeScenario {
   return {
     tripId: input.tripId,
     trafficLevel: input.trafficLevel,
     driver: input.driver,
     seed: input.seed >>> 0,
     durationMs: input.durationMs,
+    demandProfile: demandProfileFor(input.trafficLevel).label,
   };
 }
 
@@ -93,6 +104,7 @@ export function scenarioFingerprint(scenario: ChallengeScenario): string {
     scenario.driver,
     scenario.seed >>> 0,
     scenario.durationMs,
+    scenario.demandProfile,
   ]);
   let hash = 0x811c9dc5;
   for (let index = 0; index < canonical.length; index += 1) {

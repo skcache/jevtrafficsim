@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { demandProfileFor } from "@/sim/demand-profile";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createJevController } from "@/controllers/jev";
 import { createEngine, stepEngine } from "@/sim/engine";
@@ -44,7 +45,7 @@ import {
 import { comparisonVerdictAll, type ChallengeResult } from "@/worker/challenge-result";
 import { buildPresentationSnapshot, fallbackShare, type PresentationPolicy } from "@/worker/presentation-snapshot";
 import { LIVE_RUN_HORIZON_MS, parseBaselinesCommand } from "@/worker/protocol";
-import { generateDemand } from "@/sim/demand";
+import { productionDemand } from "@/sim/demand-profile";
 import { buildChallengeIncidentPlan } from "@/worker/challenge-incidents";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
 import { chicagoModel } from "./chicago-support";
@@ -143,16 +144,19 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
     const challenge = materializeChallengeTrip(model, SCENARIO.tripId, SCENARIO.seed);
     const world = resolveScenarioWorld(model, challenge.trip, scenario);
 
-    // What the LIVE run builds (worker/simulation.worker.ts buildRun).
+    // What the LIVE run builds (worker/simulation.worker.ts buildRun) — the
+    // production demand profile, which is the only profile any of these paths
+    // may use.
     const liveSpawns = [
       challenge.spawn,
-      ...generateDemand({
+      ...productionDemand({
         city: model.city,
         level: SCENARIO.trafficLevel,
         seed: SCENARIO.seed,
         durationMs: SCENARIO.durationMs,
       }),
     ];
+    expect(scenario.demandProfile).toBe(demandProfileFor(SCENARIO.trafficLevel).label);
     const liveIncidents = buildChallengeIncidentPlan(
       model,
       challenge.trip,
