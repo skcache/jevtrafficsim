@@ -36,7 +36,9 @@ export function ComparisonPanel({
   const rows = comparisonRows(baselines.fixed, baselines.adaptive, live);
   const verdict = comparisonVerdictAll([baselines.fixed, baselines.adaptive, live]);
   const visible = policyLabel(live.controller, policy);
-  const liveLabel = visible?.text ?? live.controller;
+  const liveLabel = live.controller === "jev"
+    ? visible?.text ?? "Checking Jev"
+    : `Watched ${visible?.text ?? live.controller}`;
 
   if (!verdict.comparable) {
     return (
