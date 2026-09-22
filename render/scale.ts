@@ -43,14 +43,31 @@ export const DESTINATION_SCALE = {
  * single noisy sample (a junction turn, a reroute) cannot swing the camera.
  */
 export const FOLLOW_SCALE = {
-  /** How far ahead of the car the camera centre sits, in metres. */
-  lookAheadM: 85,
+  /**
+   * How far ahead of the car the camera centre sits, in metres. Pulled in from
+   * 85 m for the wider follow framing: at zoom ~15.4 the same metres cover far
+   * more screen, and 85 m pushed the car uncomfortably low in the frame.
+   */
+  lookAheadM: 55,
   /** Time constant for the smoothed travel direction. */
   directionHalfLifeMs: 420,
   /** Below this speed the car has no meaningful direction: keep the last one. */
   minSpeedMps: 0.4,
   /** One-shot ease when the user presses Follow/Recenter. */
   recenterEaseMs: 650,
+  /**
+   * Time constants for the camera's own state. Both are deliberately slower than
+   * the direction: the camera must feel HEAVIER than the car, so it absorbs the
+   * car's small position changes instead of reproducing them.
+   */
+  centreHalfLifeMs: 520,
+  lookAheadHalfLifeMs: 900,
+  /**
+   * Target changes below this distance do not move the camera at all. A car
+   * creeping in a queue, or a worker frame landing a few ms late, must not
+   * produce visible motion — and a stopped car must be perfectly still.
+   */
+  deadZoneM: 2.5,
 } as const;
 
 /**
