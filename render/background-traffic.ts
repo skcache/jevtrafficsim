@@ -17,10 +17,10 @@
  *
  *  - the COUNT is the simulation's. A road with 12 vehicles draws twelve sprites;
  *    a free road draws none. Nothing is invented that the world does not have.
- *  - positions are geometry, not noise: queued sprites pack bumper to bumper
- *    behind the stop line, moving sprites are spaced along the road, and every
- *    sprite sits on its road's path in a stable lane with the road's own tangent
- *    as its heading (the same rule the ego obeys).
+ *  - background positions are presentation, not hidden simulation truth: queued
+ *    sprites pack behind the stop line and moving slots advance deterministically
+ *    using the road's authoritative speed factor. Every sprite remains on-path,
+ *    in a stable lane, with the road tangent as its heading.
  *  - the car being watched is never covered: its own road draws one sprite fewer,
  *    and the display pass additionally drops whichever sprite sits closest to it.
  *  - it is a pure function of (snapshot, city, indexes), so the same frame always
@@ -88,6 +88,41 @@ function typeFor(roadId: number, slot: number): VehicleType {
 }
 
 /**
+ * Stable presentation trajectory for a moving aggregate sprite.
+ *
+ * Counts are simulation truth, but snapshots intentionally do not ship every
+ * background vehicle's exact progress. The old renderer compensated by spacing
+ * sprites at `(slot + 1) / (moving + 1)`, which made the entire fleet STATIC
+ * while the count stayed constant and made every existing car jump whenever the
+ * count changed. That is the worst possible fake traffic: parked cars that
+ * teleport when another car enters the road.
+ *
+ * Instead each slot gets a deterministic phase and advances forward using the
+ * road's real speed limit scaled by the simulation's authoritative road
+ * `speedFactor`. Changing the count only adds/removes slots; it never relocates
+ * the slots that already existed.
+ */
+function movingProgress(
+  roadLength: number,
+  start: number,
+  end: number,
+  timeMs: number,
+  speedMps: number,
+  roadId: number,
+  slot: number,
+): number {
+  const lo = Math.max(0, Math.min(roadLength, start));
+  const hi = Math.max(lo, Math.min(roadLength, end));
+  const span = hi - lo;
+  if (span <= 1e-6) {
+    return lo;
+  }
+  const phase = hashToUnit(roadId + 101, slot + 211) * span;
+  const travelled = Math.max(0, timeMs) * Math.max(0, speedMps) / 1000;
+  return lo + ((phase + travelled) % span);
+}
+
+/**
  * Every background sprite the frame's own numbers justify, in road-id order.
  *
  * The ego is drawn separately by the caller, so it is subtracted from its road's
@@ -139,33 +174,39 @@ export function synthesizeRoadTraffic(
         roadId: traffic.roadId,
         type,
         progress: Math.max(0, centre),
-        laneOffset: vehicleLaneOffsetMetres(
-          city,
-          laneOffsets,
-          traffic.roadId * KEY_STRIDE + laneSlotFor(key, laneKey, lanes),
-          traffic.roadId,
-        ),
+        laneOffset: vehicleLaneOffsetMetres(city, laneOffsets, key, traffic.roadId),
         queueRank: slot,
       });
       cursor = centre - length / 2 - QUEUE_GAP_M;
     }
 
+    // Moving traffic uses a stable phase per slot and advances with the road's
+    // simulated speed factor. Keep it out of the packed queue at the downstream
+    // end; if the queue grows, that simply shortens the moving presentation span.
+    const movingStart = Math.min(6, road.length * 0.08);
+    const movingEnd = Math.max(
+      movingStart,
+      Math.min(road.length, cursor - STOP_LINE_CLEARANCE_M),
+    );
+    const presentationSpeedMps =
+      Math.max(0.05, Math.min(1, traffic.speedFactor)) * Math.max(0, road.speedLimit);
     for (let slot = 0; slot < moving; slot += 1) {
       const type = typeFor(traffic.roadId, slot + SLOTS_PER_KIND);
       const key = traffic.roadId * KEY_STRIDE + SLOTS_PER_KIND + slot;
-      // Spaced inside the block, never on the stop line and never off the start:
-      // moving traffic belongs between junctions.
       sprites.push({
         key,
         roadId: traffic.roadId,
         type,
-        progress: (road.length * (slot + 1)) / (moving + 1),
-        laneOffset: vehicleLaneOffsetMetres(
-          city,
-          laneOffsets,
-          traffic.roadId * KEY_STRIDE + laneSlotFor(key, laneKey, lanes),
+        progress: movingProgress(
+          road.length,
+          movingStart,
+          movingEnd,
+          snapshot.timeMs,
+          presentationSpeedMps,
           traffic.roadId,
+          slot,
         ),
+        laneOffset: vehicleLaneOffsetMetres(city, laneOffsets, key, traffic.roadId),
         queueRank: -1,
       });
     }
@@ -255,8 +296,21 @@ export function renderBackgroundVehicles(
       continue;
     }
     const earlier = before.get(sprite.key);
+    // A moving slot wraps from the end of its road back to the beginning when
+    // its deterministic presentation trajectory completes a lap. Never lerp
+    // across that discontinuity: doing so draws a car driving backwards through
+    // the entire block for one frame. Treat the wrapped slot as a fresh visual
+    // sample at the road entrance instead.
+    const wrappedForward =
+      earlier !== undefined &&
+      earlier.queueRank < 0 &&
+      sprite.queueRank < 0 &&
+      earlier.progress > sprite.progress &&
+      earlier.progress - sprite.progress > index.total * 0.5;
     const progress =
-      earlier === undefined ? sprite.progress : earlier.progress + (sprite.progress - earlier.progress) * t;
+      earlier === undefined || wrappedForward
+        ? sprite.progress
+        : earlier.progress + (sprite.progress - earlier.progress) * t;
     const laneOffset =
       earlier === undefined ? sprite.laneOffset : earlier.laneOffset + (sprite.laneOffset - earlier.laneOffset) * t;
     const sample = samplePathIndex(index, progress);
