@@ -26,6 +26,7 @@ import type {
   WorkerCommand,
   WorkerEvent,
 } from "@/worker/protocol";
+import { LIVE_RUN_HORIZON_MS } from "@/worker/protocol";
 import { CityMap, type MapHandle } from "./CityMap";
 import { createFrameBuffer, pushFrame, setFrameModel, type FrameBuffer } from "./frame-buffer";
 import { IncidentBar } from "./IncidentBar";
@@ -265,7 +266,7 @@ export function TrafficSimulator() {
           const entering = store.phase === "entering";
           const scaleChanged = lastScaleRef.current !== null && lastScaleRef.current !== data.scaleIndex;
           lastScaleRef.current = data.scaleIndex;
-          store.applyReady(data.config, data.scaleLabel);
+          store.applyReady(data.config, data.scaleLabel, data.scenarioFingerprint);
           store.setPhase("city");
           if (entering || scaleChanged) {
             // The press owns the transition: the camera flies into Central
@@ -300,6 +301,32 @@ export function TrafficSimulator() {
         case "RUN_COMPLETE": {
           store.setRunning(false);
           store.setRunComplete(true);
+          // Remember WHICH world finished, so a READY for that same world cannot
+          // erase the outcome (see applyReady).
+          store.setCompletedFingerprint(store.scenarioFingerprint);
+          // The payoff needs the same-scenario baselines, and the only place they
+          // are normally requested is a READY that belongs to the live run. A run
+          // entered without onboarding (or via ?debug) never sees that READY, so
+          // the request is (re)issued here when this scenario has not asked yet.
+          if (baselinesAskedRef.current?.fingerprint !== store.scenarioFingerprint) {
+            const request: BaselinesCommand = {
+              type: "BASELINES",
+              tripId: store.config?.tripId ?? store.tripId,
+              trafficLevel: store.config?.trafficLevel ?? store.trafficLevel,
+              driver: store.config?.driver ?? store.driver,
+              seed: store.config?.seed ?? store.seed,
+              durationMs: store.config?.durationMs ?? LIVE_RUN_HORIZON_MS,
+            };
+            baselinesRef.current?.postMessage(request);
+            baselinesAskedRef.current = {
+              fingerprint: store.scenarioFingerprint ?? "",
+              request,
+              at: Date.now(),
+            };
+            store.setBaselines(null);
+            store.setBaselinesFailed(null);
+            store.setBaselinesRunning(true);
+          }
           // The visible run's own outcome: it becomes the Jev column.
           store.setLiveResult(data.result);
           store.setPolicy(data.policy);

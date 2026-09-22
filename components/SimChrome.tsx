@@ -261,7 +261,10 @@ export function SimChrome(props: SimChromeProps) {
   const pendingDiscard = useUiStore((state) => state.pendingDiscard);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
-  const live = phase === "city";
+  // "Live" means the city is the surface the user is looking at. A completed run
+  // always is: the payoff panel is the whole point of finishing, and a run entered
+  // without onboarding (or through ?debug) never flips the phase on its own.
+  const live = phase === "city" || runComplete;
   const activeTrip = curatedTrip(tripId);
   const panel = baselinePanelState({
     runComplete,

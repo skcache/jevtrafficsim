@@ -61,6 +61,8 @@ export interface UiState {
   ready: boolean;
   running: boolean;
   runComplete: boolean;
+  /** Fingerprint of the world whose run finished; null until one has. */
+  completedFingerprint: string | null;
   error: string | null;
   metrics: PresentationMetrics | null;
   metricsHistory: number[];
@@ -116,9 +118,10 @@ export interface UiState {
   setDebug: (debug: boolean) => void;
   setSeed: (seed: number) => void;
   setScenarioOpen: (open: boolean) => void;
-  applyReady: (config: RunConfig, scaleLabel: string) => void;
+  applyReady: (config: RunConfig, scaleLabel: string, fingerprint?: string) => void;
   setRunning: (running: boolean) => void;
   setRunComplete: (runComplete: boolean) => void;
+  setCompletedFingerprint: (fingerprint: string | null) => void;
   setError: (error: string | null) => void;
   setMetrics: (metrics: PresentationMetrics) => void;
   setTripFrame: (frame: {
@@ -132,6 +135,23 @@ export interface UiState {
   showSurge: () => void;
   hideSurge: () => void;
   resetMetrics: () => void;
+}
+
+/**
+ * True when a READY describes the run whose outcome is already in the store.
+ *
+ * Compared on the fields that define the world — trip, traffic level, driver,
+ * seed — because those are exactly the ones a scenario change moves. Controller
+ * is deliberately excluded: switching controller mid-run is a live switch, not a
+ * new scenario.
+ */
+function sameWorldFinished(state: UiState, fingerprint: string | undefined): boolean {
+  return (
+    state.runComplete &&
+    state.liveResult !== null &&
+    state.completedFingerprint !== null &&
+    state.completedFingerprint === fingerprint
+  );
 }
 
 export const useUiStore = create<UiState>()((set) => ({
@@ -158,6 +178,7 @@ export const useUiStore = create<UiState>()((set) => ({
   ready: false,
   running: false,
   runComplete: false,
+  completedFingerprint: null,
   error: null,
   metrics: null,
   metricsHistory: [],
@@ -191,8 +212,8 @@ export const useUiStore = create<UiState>()((set) => ({
   setDebug: (debug) => set({ debug }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
-  applyReady: (config, scaleLabel) =>
-    set({
+  applyReady: (config, scaleLabel, fingerprint) =>
+    set((state) => ({
       config,
       seed: config.seed,
       controller: config.controller,
@@ -200,7 +221,16 @@ export const useUiStore = create<UiState>()((set) => ({
       scaleLabel,
       ready: true,
       error: null,
-      runComplete: false,
+      /**
+       * A READY that describes the SAME scenario as the run that just finished
+       * must not erase its outcome. A run entered without onboarding (?debug, or
+       * the city the app opens on) gets its READY from a prewarm build, and that
+       * build can land after RUN_COMPLETE — which used to wipe the completion
+       * state and hide the payoff, along with the baselines request that belongs
+       * to it. Only a genuinely different scenario invalidates a finished run.
+       */
+      runComplete: sameWorldFinished(state, fingerprint) ? state.runComplete : false,
+      liveResult: sameWorldFinished(state, fingerprint) ? state.liveResult : null,
       running: true,
       metrics: null,
       metricsHistory: [],
@@ -209,10 +239,9 @@ export const useUiStore = create<UiState>()((set) => ({
       egoSpeedMps: 0,
       feedback: null,
       surgeVisible: false,
-      // A new run invalidates the previous run's outcome and provenance. The
-      // baselines are dispatched separately and are matched by fingerprint.
-      liveResult: null,
-      policy: null,
+      // A new run invalidates the previous run's provenance; the baselines are
+      // dispatched separately and are matched by fingerprint.
+      policy: sameWorldFinished(state, fingerprint) ? state.policy : null,
       // A fresh run starts clean: nothing has been modified yet, and the first
       // comparability-destroying action gets its warning back.
       modified: false,
@@ -220,9 +249,10 @@ export const useUiStore = create<UiState>()((set) => ({
       cleanRunWarningShown: false,
       baselinesFailed: null,
       pendingDiscard: null,
-    }),
+    })),
   setRunning: (running) => set({ running }),
   setRunComplete: (runComplete) => set({ runComplete }),
+  setCompletedFingerprint: (completedFingerprint) => set({ completedFingerprint }),
   setError: (error) => set({ error }),
   setMetrics: (metrics) =>
     set((state) => ({
