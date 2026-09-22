@@ -162,13 +162,27 @@ export function advanceFollow(
   } else {
     const offsetX = desired[0] - centre[0];
     const offsetY = desired[1] - centre[1];
-    if (Math.hypot(offsetX, offsetY) <= FOLLOW.deadZoneM) {
+    const distance = Math.hypot(offsetX, offsetY);
+    if (distance <= FOLLOW.deadZoneM) {
       // Inside the dead zone the camera does not move at all: this is what makes
       // a stopped or crawling car produce a perfectly still view.
       nextCentre = [centre[0], centre[1]];
     } else {
+      // Soft dead zone: smooth only the error OUTSIDE the dead-zone radius.
+      //
+      // The old branch smoothed the full offset as soon as it crossed the
+      // threshold. That creates a stick-slip discontinuity: the camera is frozen
+      // at 2.49 m of error, then suddenly gets a full 2.51 m correction one frame
+      // later. It is numerically small but visually obvious when the entire map
+      // is moving under one followed car. Removing the radius before smoothing
+      // makes the velocity continuous at the boundary.
+      const movable = distance - FOLLOW.deadZoneM;
+      const scale = movable / distance;
       const alpha = smoothingAlpha(dtMs, FOLLOW.centreHalfLifeMs);
-      nextCentre = [centre[0] + offsetX * alpha, centre[1] + offsetY * alpha];
+      nextCentre = [
+        centre[0] + offsetX * scale * alpha,
+        centre[1] + offsetY * scale * alpha,
+      ];
     }
   }
 
