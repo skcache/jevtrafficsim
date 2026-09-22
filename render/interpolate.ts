@@ -239,9 +239,14 @@ export function interpolateVehicles(
       if (transition) {
         x = transition.x;
         y = transition.y;
-        // Rotate the short way between the two roads' headings while crossing,
-        // instead of snapping at the junction.
-        heading = lerpAngle(transition.fromHeading, transition.toHeading, t);
+        // Heading comes from the path the position is ACTUALLY on, never from a
+        // frame-wide blend between the two roads. The old lerp rotated the
+        // sprite toward the next road while it was still driving down this one,
+        // which is exactly the "car crabbing sideways" artefact: position on the
+        // current lane, nose already pointed at the junction exit. The turn now
+        // happens where the turn happens — at the junction — and everywhere else
+        // the nose is the road's own tangent.
+        heading = transition.heading;
       }
     } else if (before && before.roadId !== null && before.roadId === vehicle.roadId) {
       // Same-road motion interpolates scalar progress and resamples the
@@ -290,7 +295,7 @@ function transitionPosition(
   current: PresentationEgoVehicle,
   t: number,
   options: InterpolateOptions,
-): (WorldPosition & { fromHeading: number; toHeading: number }) | null {
+): WorldPosition | null {
   if (before.roadId === null || current.roadId === null) {
     return null;
   }
@@ -319,8 +324,10 @@ function transitionPosition(
   const distance = clamp01(t) * total;
   const previousOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, before.id, before.roadId);
   const currentOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, current.id, current.roadId);
-  const fromHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
-  const toHeading = samplePathIndex(currentIndex, 0).heading;
+  // The two tangents that meet at the shared node: this road's end, and the next
+  // road's start.
+  const incomingHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
+  const outgoingHeading = samplePathIndex(currentIndex, 0).heading;
 
   // Lane centres on two roads generally do not meet at exactly the same
   // coordinate. Taper each lane offset into the junction centre, then back out
@@ -335,7 +342,13 @@ function transitionPosition(
       samplePathIndex(previousIndex, progress),
       previousOffset * taper,
     );
-    return { ...position, fromHeading, toHeading };
+    // The nose follows THIS road's tangent, and only starts rotating inside the
+    // junction window — the last few metres before the node, eased so a 90 degree
+    // turn is distributed over a handful of frames instead of snapping. Half a
+    // block early is a bug; rotating after the node is a different bug; both are
+    // excluded by construction here.
+    const blend = smoothstep(clamp01(1 - distanceToJunction / TURN_WINDOW_M));
+    return { ...position, heading: lerpAngle(incomingHeading, outgoingHeading, blend) };
   }
 
   const outgoingProgress = Math.min(currentIndex.total, distance - remaining);
@@ -344,5 +357,14 @@ function transitionPosition(
     samplePathIndex(currentIndex, outgoingProgress),
     currentOffset * taper,
   );
-  return { ...position, fromHeading, toHeading };
+  // Past the node the turn is done: the nose is exactly the new road's tangent.
+  return position;
+}
+
+/** Metres before the junction where the sprite begins rotating into the turn. */
+const TURN_WINDOW_M = 8;
+
+/** 0..1 with zero slope at both ends, so the turn eases in and out. */
+function smoothstep(value: number): number {
+  return value * value * (3 - 2 * value);
 }
