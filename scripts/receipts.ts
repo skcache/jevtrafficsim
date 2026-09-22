@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import { loadBenchmarkModel } from "@/benchmark/model";
-import { generateDemand } from "@/sim/demand";
+import { productionDemand } from "@/sim/demand-profile";
 import { createEngine, runEngine, type EngineState, type ScheduledSpawn } from "@/sim/engine";
 import type { ControllerChoice } from "@/worker/protocol";
 import { buildChallengeResult } from "@/worker/challenge-result";
@@ -83,7 +83,9 @@ export function runReceiptCase(testCase: ReceiptCase): Receipt {
   const world = resolveScenarioWorld(model, challenge.trip, scenario);
   const spawns: ScheduledSpawn[] = [
     challenge.spawn,
-    ...generateDemand({
+    // The SHIPPING demand profile, not the raw uniform sampler: a receipt that
+    // pins a world nobody plays is a receipt for the wrong city.
+    ...productionDemand({
       city: model.city,
       level: testCase.trafficLevel,
       seed: world.demandSeed,

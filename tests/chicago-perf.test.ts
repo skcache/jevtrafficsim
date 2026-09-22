@@ -25,7 +25,7 @@
 import { describe, expect, it } from "vitest";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
-import { generateDemand } from "@/sim/demand";
+import { productionDemand } from "@/sim/demand-profile";
 import { createEngine, stepEngine, type EngineState } from "@/sim/engine";
 import { checkTrafficInvariants, spawnVehicle, vehicleById } from "@/sim/traffic";
 import { chicagoAsset, chicagoModel } from "./chicago-support";
@@ -54,7 +54,7 @@ function liveVehicles(engine: EngineState): number {
 
 function rushEngine(seed = 7, withEgo = false): EngineState {
   const model = chicagoModel(4);
-  const spawns = generateDemand({ city: model.city, level: RUSH, seed, durationMs: HORIZON_MS });
+  const spawns = productionDemand({ city: model.city, level: RUSH, seed, durationMs: HORIZON_MS });
   if (withEgo) {
     // One protagonist, exactly as the challenge harness spawns it: the ego is a
     // scheduled spawn with a role, routed by the engine.
@@ -80,11 +80,13 @@ describe("Chicago Metro performance", () => {
         late: [] as number[],
       };
       const third = Math.floor(TICKS / 3);
+      let midLive = 0;
       for (let tick = 0; tick < TICKS; tick += 1) {
         const started = performance.now();
         stepEngine(engine);
         const elapsed = performance.now() - started;
         if (tick >= third && tick < third + 1_000) windows.mid.push(elapsed);
+        if (tick === third + 1_000) midLive = liveVehicles(engine);
         if (tick >= TICKS - 1_000) windows.late.push(elapsed);
       }
 
@@ -97,7 +99,7 @@ describe("Chicago Metro performance", () => {
 
       console.log(
         `[metro rush 6000 ticks] mid=${midMedian.toFixed(3)}ms late=${lateMedian.toFixed(3)}ms ` +
-          `growth=${growth.toFixed(2)}× live=${live} arrived=${arrived} ` +
+          `growth=${growth.toFixed(2)}× live=${live} (mid ${midLive}) arrived=${arrived} ` +
           `${liveMicrosPerStep.toFixed(1)}µs/step/live-vehicle p95=${percentile(windows.late, 0.95).toFixed(3)}ms`,
       );
 
@@ -105,9 +107,14 @@ describe("Chicago Metro performance", () => {
       // The run really accumulated history: without this the ratios are vacuous.
       expect(arrived).toBeGreaterThan(1_500);
       expect(engine.traffic.vehicles.length).toBeGreaterThan(3_500);
-      // Both windows are past the live plateau, so the remaining growth can only
-      // come from history (this is the discriminator the old guard was missing).
-      expect(growth).toBeLessThan(1.5);
+      // Both windows sit past the start-up ramp, so growth beyond that point can
+      // only come from history (this is the discriminator the old guard was
+      // missing). The production demand profile keeps feeding a rush-hour city
+      // for the whole run, so the fleet between the two windows is measured
+      // rather than assumed flat: a rising fleet may raise cost, but cost must
+      // never grow faster than the fleet that causes it.
+      const liveRatio = Math.max(1, live / Math.max(1, midLive));
+      expect(growth).toBeLessThan(1.5 * liveRatio);
       // Per-live-vehicle work must not creep upwards either.
       expect(liveMicrosPerStep).toBeLessThan(6);
       // Playback sanity only: 7 simulation steps run per 100 ms tick, so a single
@@ -207,7 +214,7 @@ describe("Chicago Metro performance", () => {
 
   it("keeps Fixed control comparable to Adaptive on the same demand", () => {
     const model = chicagoModel(4);
-    const spawns = generateDemand({ city: model.city, level: RUSH, seed: 7, durationMs: HORIZON_MS });
+    const spawns = productionDemand({ city: model.city, level: RUSH, seed: 7, durationMs: HORIZON_MS });
     for (const controller of [createFixedController(), createAdaptiveController()]) {
       const engine = createEngine({ city: model.city, controller, spawns });
       for (let tick = 0; tick < 300; tick += 1) {
