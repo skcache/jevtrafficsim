@@ -135,8 +135,13 @@ describe("subtraction at city zoom", () => {
     expect(minzoom("roads-local")).toBe(minzoom("roads-local-casing"));
   });
 
-  it("hides individual vehicles at city zoom", () => {
-    expect(VEHICLE_MINZOOM).toBeGreaterThan(13);
+  it("starts individual vehicles at the framing the product opens on", () => {
+    // The title city view sits at ~14.1. The floor used to be 14.4 — above it —
+    // so the first screen of the product showed a city with empty roads. The
+    // floor must stay below the opening framing while still keeping true city
+    // zoom (whole metro, ~11-12) free of per-vehicle detail.
+    expect(VEHICLE_MINZOOM).toBeGreaterThan(12);
+    expect(VEHICLE_MINZOOM).toBeLessThan(14.1);
   });
 });
 

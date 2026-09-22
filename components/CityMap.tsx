@@ -581,6 +581,19 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           { indexes: buffer.paths },
         );
         const fleet = background.length === 0 ? settled : [...settled, ...background];
+        // Debug-only readout of what the renderer is actually working with:
+        // how many sprites the fleet synthesised, and what the zoom grammar is
+        // allowing through. `?debug` is the product's own debug path.
+        if (window.location.search.includes("debug")) {
+          (window as unknown as { __cityDebug?: unknown }).__cityDebug = {
+            zoom: Number(zoomRef.current.toFixed(2)),
+            live: liveRef.current,
+            trafficHidden: trafficHiddenRef.current,
+            egoRoad: buffer.current?.ego?.roadId ?? null,
+            occupiedRoads: buffer.current?.roadTraffic.length ?? 0,
+            fleet: fleet.length,
+          };
+        }
         if (window.location.search.includes("debug")) {
           frameRef.current = settled.map((vehicle) => ({
             id: vehicle.id,
@@ -706,17 +719,27 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             ? []
             : [
                 ...buildDestinationLayers(projection, destination, destSpritesRef.current),
-                ...buildVehicleLayers(
-                  projection,
-                  fleet,
-                  iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
-                  zoomRef.current,
-                  buffer.current?.ego?.id ?? null,
-                ),
                 // Contextual controls take over from the tiny network marker as
                 // the ego approaches, then retire back to network scale.
                 ...buildControlLayers(projection, controls, controlSpritesRef.current),
               ];
+
+        // City traffic is NOT challenge chrome. The vehicles belong to the city
+        // whether or not a challenge is running, so they are drawn from the
+        // moment a frame exists — the title screen is the first look anybody gets
+        // at this product, and it used to show a city with nothing on its roads.
+        // Only ?notraffic=1 removes them. The zoom grammar still decides whether
+        // individual vehicles are the right instrument at the current framing.
+        const cityVehicleLayers: Layer[] =
+          trafficHiddenRef.current || !buffer.current
+            ? []
+            : buildVehicleLayers(
+                projection,
+                fleet,
+                iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
+                zoomRef.current,
+                buffer.current.ego?.id ?? null,
+              );
 
         // Layer order is intentional. Traffic + hazards sit on the road network;
         // the blue route sits above that system; tiny citywide signal
@@ -726,6 +749,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           ...networkTrafficLayers,
           ...routeLayers,
           ...networkSignalLayers,
+          ...cityVehicleLayers,
           ...challengeTopLayers,
         ];
         overlayRef.current?.setProps({ layers });

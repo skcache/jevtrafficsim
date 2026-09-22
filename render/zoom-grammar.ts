@@ -27,11 +27,16 @@ export const MID_TIER_MINZOOM = 11.8;
 /** Crosswalk hints only appear at the closest zoom. */
 /** Wait-heat halos are a close-zoom instrument; further out they are confetti. */
 /**
- * Individual vehicles start here. At city zoom they are noise: the road-level
- * congestion overlay carries the same information without the confetti, which
- * is the whole point of the far band.
+ * Individual vehicles start here.
+ *
+ * This used to sit at 14.4, just above the framing the app opens on (the title
+ * city view is ~14.1) — so the first thing any visitor saw was a city with no
+ * traffic on it at all, and the follow view only came alive after clicking
+ * through onboarding. The map is not decoration: it is the product. Vehicles now
+ * start at the zoom the product actually opens at, and the road-level congestion
+ * overlay keeps carrying the far band beyond that.
  */
-export const VEHICLE_MINZOOM = 14.4;
+export const VEHICLE_MINZOOM = 13.0;
 
 export function detailTier(zoom: number): DetailTier {
   if (zoom >= CLOSE_TIER_MINZOOM) {
