@@ -60,7 +60,7 @@ export function ComparisonPanel({
   const columns = ["Fixed", "Adaptive", liveLabel] as const;
 
   return (
-    <div>
+    <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="label-micro">Who got there first</span>
         <span className="value-num text-micro text-ink-38">{live.fingerprint}</span>

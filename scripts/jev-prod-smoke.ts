@@ -17,8 +17,8 @@ import { productionDemand } from "@/sim/demand-profile";
 import { buildCityPartition } from "@/sim/regions";
 import { buildObservationFrame } from "@/sim/observations";
 import { buildJevPolicyRequest } from "@/jev/request";
-import { JEV_SCHEMA_VERSION } from "@/jev/schema";
 import { loadBenchmarkModel } from "@/benchmark/model";
+import { checkOversizedAnswer, checkRelayAnswer, checkSmokeRequest } from "./jev-smoke-checks";
 
 const BASE = process.argv[2] ?? "https://jevtrafficsim.vercel.app";
 const HORIZON_MS = 600_000;
@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     activeVehicles: engine.traffic.vehicles.length,
   });
   const body = JSON.stringify(request);
+  checkSmokeRequest(request, body);
   console.log(`request: ${(body.length / 1024).toFixed(1)} KB · ${request.corridors.length} corridors · ${request.regions.length} regions · schema ${request.schemaVersion}`);
 
   const started = Date.now();
@@ -47,31 +48,11 @@ async function main(): Promise<void> {
     body,
   });
   const elapsed = Date.now() - started;
-  const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const payload = (await res.json().catch(() => null)) as unknown;
 
   console.log(`relay: HTTP ${res.status} in ${elapsed} ms`);
-  if (!payload) {
-    console.log("relay: no JSON body");
-    return;
-  }
-  const policy = payload.policy as Record<string, unknown> | undefined;
-  console.log(`answer: ${policy ? `schema v${String(policy.schemaVersion)}` : "none"}`);
-  if (policy) {
-    console.log(
-      `policy: pressureScale=${String(policy.pressureScale)} corridorWeights=${Array.isArray(policy.corridorWeights) ? policy.corridorWeights.length : "?"} ` +
-        `regionWeights=${Array.isArray(policy.regionWeights) ? policy.regionWeights.length : "?"} ` +
-        `regionIntents=${Array.isArray(policy.regionIntents) ? policy.regionIntents.length : "?"} hint=${String(policy.hint ?? "-")}`,
-    );
-  }
-  // The relay's contract is `{ policy, clamped }`: provenance is assembled by the
-  // client from the transport it used (adapter, runtime mode, timings, accepted and
-  // rejected counts), and is asserted in the browser - see the HUD's policy line.
-  const text = JSON.stringify(payload);
-  console.log(`clamped: ${JSON.stringify(payload.clamped ?? null)}`);
-  console.log(
-    `answer is a model answer, not a stub: ${policy && JEV_SCHEMA_VERSION === policy.schemaVersion ? "schema-match" : "CHECK"} · ` +
-      `body free of any credential-looking token: ${/sk-|Bearer [A-Za-z0-9]{12}/.test(text) ? "NO" : "yes"}`,
-  );
+  checkRelayAnswer(res.status, payload, request);
+  console.log("relay: schema-valid bounded policy; no credential-shaped value");
 
   // The ceiling: a body far past the limit must be refused before the model runs.
   const oversized = await fetch(`${BASE}/api/jev/policy`, {
@@ -79,7 +60,16 @@ async function main(): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...request, pad: "x".repeat(200_000) }),
   });
-  console.log(`oversized body: HTTP ${oversized.status} (expect a refusal, not a model call)`);
+  checkOversizedAnswer(oversized.status);
+  console.log("oversized body: HTTP 413");
 }
 
-void main();
+void main().catch((error: unknown) => {
+  // Only our own fixed, bounded assertion messages are reported. Fetch/runtime
+  // exceptions may contain URLs or credentials and are never echoed.
+  const reason = error instanceof Error && /^(generated request|relay HTTP|relay returned|relay response|oversized request HTTP)/.test(error.message)
+    ? error.message
+    : "network or runtime failure";
+  console.error(`Jev production smoke FAILED: ${reason}`);
+  process.exitCode = 1;
+});
