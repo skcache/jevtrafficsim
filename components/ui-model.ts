@@ -346,7 +346,7 @@ export function comparisonRows(
       jev: formatThroughput(jev.city.throughputPerMinute),
     },
     {
-      label: "Gridlock",
+      label: "Queued time",
       fixed: formatPercent(fixed.city.gridlockRatio),
       adaptive: formatPercent(adaptive.city.gridlockRatio),
       jev: formatPercent(jev.city.gridlockRatio),
