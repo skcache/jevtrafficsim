@@ -690,15 +690,8 @@ export function unavailableIncidentHint(availability: IncidentAvailability): str
 /* Provenance (Issue #15)                                              */
 /* ------------------------------------------------------------------ */
 
-/**
- * Past this share of the run, the adaptive fallback is not a rounding error and
- * the result MUST stop calling itself pure live Jev. One named constant, so the
- * threshold cannot drift between the chrome and the comparison.
- */
-export const JEV_FALLBACK_NOTICE_SHARE = 0.05;
-
 export interface PolicyLabel {
-  /** The state word: "Jev", "Jev · fallback used", "Adaptive fallback", "Replay". */
+  /** The state word; plain Jev requires proven, exclusively live governance. */
   readonly text: string;
   /** One compact line of public truth, or null when there is nothing to add. */
   readonly detail: string | null;
@@ -707,8 +700,9 @@ export interface PolicyLabel {
 /**
  * Who governed the signals, in the fewest words that stay true.
  *
- *   Jev                 the model's policy told the city what to do, start to end
- *   Jev · fallback used part of the run was the adaptive safety net
+ *   Checking Jev        no runtime provenance has arrived yet
+ *   Jev                 the model's policy governed all observed time
+ *   Jev · fallback used any observed time was on the adaptive safety net
  *   Adaptive fallback   no live policy ever arrived: this was not a Jev run
  *   Replay              a recorded policy run, applied offline
  *
@@ -728,20 +722,21 @@ export function policyLabel(
     return null;
   }
   if (policy === null) {
-    return { text: "Jev", detail: null };
+    return { text: "Checking Jev", detail: "waiting for run provenance" };
   }
   const policies = `${policy.accepted} live ${policy.accepted === 1 ? "policy" : "policies"}`;
   if (policy.source === "replay") {
     return { text: "Replay", detail: `${policy.replayMs > 0 ? formatDuration(policy.replayMs) : "recorded"} replayed` };
   }
-  if (policy.accepted === 0) {
-    return { text: "Adaptive fallback", detail: "no live policy arrived" };
+  if (policy.accepted === 0 || policy.liveMs <= 0) {
+    return { text: "Adaptive fallback", detail: "no live policy governed this run" };
   }
   const share = fallbackShare(policy);
-  if (share > JEV_FALLBACK_NOTICE_SHARE) {
+  if (policy.fallbackMs > 0) {
+    const percent = share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
     return {
       text: "Jev · fallback used",
-      detail: `${Math.round(share * 100)}% of the run on the adaptive fallback · ${policies}`,
+      detail: `${percent} of the run on the adaptive fallback · ${policies}`,
     };
   }
   return { text: "Jev", detail: policies };

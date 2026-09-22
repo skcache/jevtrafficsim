@@ -4,7 +4,7 @@
  * Frame buffer (Task 11 visual correction): high-frequency presentation
  * frames and the compiled showcase geometry live in a plain mutable ref
  * shared between the worker client and the map surface — deliberately NOT in
- * React state, so 5 Hz frames never rerender the tree.
+ * React state, so worker frames never rerender the tree.
  */
 import type { MapModel } from "@/cities/map-model";
 import type { DirectedPathIndexes } from "@/render/map-geometry";

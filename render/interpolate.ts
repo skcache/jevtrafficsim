@@ -1,5 +1,5 @@
 /**
- * Frame interpolation between worker snapshots (~10 Hz) at display rate.
+ * Frame interpolation between worker snapshots (one per real tick) at display rate.
  *
  * Two things here are physical rather than cosmetic:
  *
@@ -145,7 +145,7 @@ export interface RenderedVehicle {
 /**
  * Display-time ego road progress.
  *
- * The map runs at rAF while worker snapshots arrive at 5 Hz. Route trimming
+ * The map runs at rAF while worker snapshots arrive at the worker tick cadence. Route trimming
  * and contextual-control distance must follow the same interpolated progress as
  * the visible car or the band/light visibly step every 200 ms. Across a road
  * transition the current road wins; same-road motion is a scalar lerp.

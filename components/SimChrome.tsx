@@ -336,13 +336,13 @@ export function SimChrome(props: SimChromeProps) {
         {live && (
           <motion.div
             key="utilities"
-            className="absolute left-1/2 top-4 z-20 -translate-x-1/2"
+            className="absolute left-4 right-4 top-[180px] z-20 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 lg:top-4"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.34, delay: 0.06, ease: EASE }}
           >
-            <div className="surface flex items-center gap-[3px] p-[3px]">
+            <div className="surface flex w-fit max-w-full items-center gap-[3px] overflow-x-auto p-[3px]">
               {/*
                 The visible run is Jev. Choosing another controller by hand is a
                 developer control, so the picker only exists behind ?debug — a

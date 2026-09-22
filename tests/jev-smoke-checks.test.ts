@@ -58,8 +58,8 @@ describe("completed-run Jev participation gate", () => {
     accepted: 3, rejected: 1, refreshes: 4,
   };
   it("passes an internally consistent live run with the public label", () => {
-    expect(() => checkLiveJevParticipation(live, "Jev", 600_000)).not.toThrow();
-    expect(() => checkLiveJevParticipation(live, "Jev", 600_100)).not.toThrow();
+    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 600_000)).not.toThrow();
+    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 600_100)).not.toThrow();
   });
   it("keeps fallback functional and visibly named, but fails the release gate", () => {
     const fallback: PresentationPolicy = {
@@ -71,8 +71,8 @@ describe("completed-run Jev participation gate", () => {
     expect(() => checkLiveJevParticipation(fallback, "Jev", 600_000)).toThrow("public label");
   });
   it("rejects inconsistent policy and time accounting", () => {
-    expect(() => checkLiveJevParticipation({ ...live, refreshes: 2 }, "Jev", 600_000))
+    expect(() => checkLiveJevParticipation({ ...live, refreshes: 2 }, "Jev · fallback used", 600_000))
       .toThrow("outcomes exceed");
-    expect(() => checkLiveJevParticipation(live, "Jev", 599_000)).toThrow("governed time");
+    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 599_000)).toThrow("governed time");
   });
 });

@@ -18,8 +18,9 @@ the comparison, not a scoreboard.
 | **Adaptive** | Signals that react to local queue pressure and waits, with the same min/max green, yellow, all-red and starvation protection as everything else. |
 | **Jev** | A citywide policy from an external evaluation model (TypeSafe AI's `jev` through the Vercel AI Gateway). It sees ONLY citywide traffic state and answers bounded, typed questions; its answer becomes corridor/region weights and a small pressure modifier. |
 
-The visible run is **Jev**. Fixed and Adaptive play the *same* scenario headlessly, in a
-worker of their own, so the trip you are watching never stalls.
+The visible run asks Jev for citywide policy. Fixed and Adaptive play the *same* scenario
+headlessly, in a worker of their own, so the trip you are watching never stalls. The label
+reports what actually governed the visible run, not merely which controller was requested.
 
 **Nothing about the driver changes the scenario.** Tourist and Local are two ways of driving
 the same trip in the same city: the tourist follows the shortest route and sits through
@@ -54,8 +55,9 @@ No winner score is computed. Every number in the panel is a field of a real run.
   out of range is rejected (or clamped and reported) and the previous policy stays.
 - **No fabricated answers.** If Jev is unconfigured, slow, unavailable, malformed or expired,
   the run continues on the Adaptive fallback and says so. A run that spent real time on the
-  fallback is labelled `Jev · fallback used`; a run that never had a live answer is labelled
-  `Adaptive fallback`.
+  fallback is labelled `Jev · fallback used` even for a small nonzero share; a run that never
+  spent simulated time under a live policy is labelled `Adaptive fallback`. Before the first
+  provenance snapshot, the UI says `Checking Jev`, never an unproven plain `Jev`.
 
 ## Lifecycle: nothing is lost by surprise
 
@@ -77,8 +79,9 @@ mid-run, is marked `modified` and will not sit beside untouched baselines.
 ## Deterministic replay
 
 Every accepted policy is recorded with the simulated time it was accepted at. A trace can be
-replayed offline — **zero network calls** — and reproduces the same policy sequence and the
-same result for the same scenario:
+replayed offline — **zero network calls** — and reproduces the same policy sequence and
+result for the same scenario with compatible code and Chicago assets. Traces do not yet
+bind a code or geography version, so an old trace is not a cross-version replay guarantee:
 
 ```bash
 pnpm benchmark --controllers jev --jev replay --trace path/to/trace.json
@@ -140,10 +143,18 @@ JEV_TIMEOUT_MS=12000   # the free evaluation tier is variable; a tight
 `JEV_ENDPOINT` is the alternative backend: a service that speaks the Jev policy schema
 directly. The two are never mixed — `JEV_MODEL` selects the gateway.
 
+For a public deployment, configure a matching Vercel Firewall rate-limit rule and set
+`JEV_RATE_LIMIT_ID` to its id. The route's in-memory budget is per serverless instance,
+not a production-wide cost limit. Verify the dashboard rule separately; repository tests
+cannot prove it exists. `/api/build` exposes the deployed commit SHA (or `unknown` when
+the platform provides no build identity). The manual Jev production smoke is separate
+from routine CI and must prove a completed run used live policy before calling a release
+live-Jev verified.
+
 ## Developer flags
 
 `?debug` (or `?debug=1`) reveals the controls the public flow deliberately hides: the
-controller picker, the raw seed, and the city scale. Previews on the landing and setup
+controller picker and raw seed. Previews on the landing and setup
 screens always run the Adaptive controller, so an idle visit never spends live model calls.
 
 ## Benchmarks
@@ -202,6 +213,7 @@ pnpm lint         # eslint
 pnpm typecheck    # tsc --noEmit
 pnpm test         # vitest
 pnpm build        # production build
+pnpm test:browser # production-mode browser journey with mocked relay, no live quota
 pnpm benchmark    # headless benchmark harness
 ```
 

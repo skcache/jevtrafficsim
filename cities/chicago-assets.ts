@@ -53,8 +53,14 @@ export function loadChicagoBundle(scaleIndex: number): Promise<ChicagoBundle> {
     ]);
     return { asset, metadata, features: { buildings, water, parks, landmarks, blocks } };
   })();
-  bundleCache.set(scaleIndex, promise);
-  return promise;
+  // A transient fetch failure must not cache a rejected promise for the whole
+  // browser session. Only evict the promise that failed, never a later retry.
+  const tracked: Promise<ChicagoBundle> = promise.catch((error: unknown) => {
+    if (bundleCache.get(scaleIndex) === tracked) bundleCache.delete(scaleIndex);
+    throw error;
+  });
+  bundleCache.set(scaleIndex, tracked);
+  return tracked;
 }
 
 /** Loads and compiles one scale into the presentation model. */

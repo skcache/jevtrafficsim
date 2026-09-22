@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { aggregateRuns } from "@/benchmark/aggregate";
 import { adapterBanner, buildDocument, jevLabel } from "@/benchmark/cli";
 import { loadBenchmarkModel } from "@/benchmark/model";
-import { runBenchmarkScenario } from "@/benchmark/runner";
+import { runBenchmarkScenario, type BenchmarkRunRecord } from "@/benchmark/runner";
 import type { BenchmarkMatrix } from "@/benchmark/scenarios";
 import { createJevController, type JevController } from "@/controllers/jev";
 import { createMockJevClient } from "@/jev/client";
@@ -43,7 +43,7 @@ function jevRecord(options: {
   readonly trace?: JevTrace | null;
   readonly replay?: boolean;
   readonly client?: "mock" | null;
-}): { record: ReturnType<typeof runBenchmarkScenario>[number]; controller: JevController } {
+}): { record: Extract<BenchmarkRunRecord, { controller: "jev" }>; controller: JevController } {
   let controller: JevController | null = null;
   const records = runBenchmarkScenario(model, SCENARIO, ["jev"], {
     controllers: {
@@ -60,6 +60,7 @@ function jevRecord(options: {
     },
     describeController: () => (controller === null ? undefined : jevProvenance(controller.meta(), options.trace ?? null)),
   });
+  if (records[0].controller !== "jev") throw new Error("expected Jev record");
   return { record: records[0], controller: controller! };
 }
 
@@ -318,6 +319,18 @@ describe("aggregation never erases provenance", () => {
 });
 
 describe("hardening changed no experimental semantics", () => {
+  it("refuses to emit a Jev artifact whose run lost its provenance", () => {
+    const { record } = jevRecord({});
+    const { provenance: _omitted, ...missing } = record;
+    void _omitted;
+    const matrix: BenchmarkMatrix = {
+      trips: [SCENARIO.tripId], trafficLevels: [SCENARIO.trafficLevel],
+      seeds: [SCENARIO.seed], drivers: [SCENARIO.driver],
+      controllers: ["jev"], durationMs: HORIZON_MS,
+    };
+    expect(() => buildDocument(matrix, [missing as BenchmarkRunRecord])).toThrow(/without provenance/);
+  });
+
   it("produces byte-identical Fixed/Adaptive records to a run without any jev metadata", () => {
     const matrix: BenchmarkMatrix = {
       trips: [SCENARIO.tripId],

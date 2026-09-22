@@ -35,8 +35,8 @@ export function ComparisonPanel({
   const [open, setOpen] = useState(false);
   const rows = comparisonRows(baselines.fixed, baselines.adaptive, live);
   const verdict = comparisonVerdictAll([baselines.fixed, baselines.adaptive, live]);
-  const visible = policyLabel("jev", policy);
-  const liveLabel = visible?.text ?? "Jev";
+  const visible = policyLabel(live.controller, policy);
+  const liveLabel = visible?.text ?? live.controller;
 
   if (!verdict.comparable) {
     return (

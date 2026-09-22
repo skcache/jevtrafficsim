@@ -26,7 +26,7 @@ import type { JevProvenance } from "@/jev/provenance";
 import { expandMatrix, type BenchmarkMatrix, type BenchmarkScenario } from "./scenarios";
 
 /** Everything one run produced. This is the per-run JSON contract. */
-export interface BenchmarkRunRecord {
+interface BenchmarkRunBase {
   /** Scenario identity: equal for every controller that ran this world. */
   readonly fingerprint: string;
   readonly scenario: {
@@ -36,7 +36,6 @@ export interface BenchmarkRunRecord {
     readonly driver: DriverStrategy;
     readonly durationMs: number;
   };
-  readonly controller: ControllerChoice;
   /** Receipt of the shared world: identical across controllers of one scenario. */
   readonly world: {
     readonly demandSeed: number;
@@ -48,15 +47,13 @@ export interface BenchmarkRunRecord {
   readonly trip: ChallengeTripResult;
   /** CHICAGO. */
   readonly city: ChallengeCityResult;
-  /**
-   * What produced this record's policies (Issue #38). Required for a Jev run
-   * whenever a describer is supplied, and typed — never a loose bag — so a
-   * `controller: "jev"` line can always be read against the adapter, mode and
-   * governed time that actually produced it. Absent for Fixed/Adaptive, which
-   * have no external policy source.
-   */
-  readonly provenance?: JevProvenance;
 }
+
+/** Jev cannot exist as a machine-readable record without its provenance. */
+export type BenchmarkRunRecord = BenchmarkRunBase & (
+  | { readonly controller: "jev"; readonly provenance: JevProvenance }
+  | { readonly controller: "fixed" | "adaptive"; readonly provenance?: never }
+);
 
 function recordFrom(
   run: ReturnType<typeof buildScenarioRun>,
@@ -65,7 +62,7 @@ function recordFrom(
   result: ChallengeResult,
   provenance?: JevProvenance,
 ): BenchmarkRunRecord {
-  return {
+  const common: BenchmarkRunBase & { readonly controller: ControllerChoice } = {
     fingerprint: run.fingerprint,
     scenario: { ...scenario },
     controller,
@@ -77,8 +74,17 @@ function recordFrom(
     },
     trip: result.trip,
     city: result.city,
-    ...(provenance === undefined ? {} : { provenance }),
   };
+  if (controller === "jev") {
+    if (provenance?.controller !== "jev") {
+      throw new Error("Jev benchmark run requires authoritative provenance");
+    }
+    return { ...common, controller, provenance };
+  }
+  if (provenance !== undefined) {
+    throw new Error("baseline benchmark run cannot carry Jev provenance");
+  }
+  return { ...common, controller };
 }
 
 /**
