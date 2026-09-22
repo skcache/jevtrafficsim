@@ -498,11 +498,6 @@ function runTick(): void {
   // is exactly what made the car stutter.
   postSnapshot();
   postMetrics();
-  if (engine.traffic.timeMs % 30_000 < 100) {
-    console.log(
-      `[tick] sim=${Math.round(engine.traffic.timeMs)} horizon=${config.durationMs} running=${state.running} complete=${state.complete} active=${engine.traffic.activeVehicles.size}`,
-    );
-  }
   if (engine.traffic.timeMs >= config.durationMs) {
     state.running = false;
     state.complete = true;
