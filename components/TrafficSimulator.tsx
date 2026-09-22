@@ -268,9 +268,15 @@ export function TrafficSimulator() {
           lastScaleRef.current = data.scaleIndex;
           store.applyReady(data.config, data.scaleLabel, data.scenarioFingerprint);
           store.setPhase("city");
-          if (entering || scaleChanged) {
-            // The press owns the transition: the camera flies into Central
-            // while the onboarding surface fades away.
+          // The press owns the transition: the camera flies into Central while
+          // the onboarding surface fades away. Framing is tracked by RUN, not by
+          // the transient `entering` flag: measured, a prewarm READY arriving
+          // after the press claimed that flag, so the real READY saw
+          // `entering === false` and the whole trip played at the landing zoom
+          // (14.1) instead of the street preset (15.4) whenever any setup control
+          // had been touched.
+          if (entering || scaleChanged || store.cameraFramedFor !== data.scenarioFingerprint) {
+            store.markCameraFramed(data.scenarioFingerprint);
             mapHandleRef.current?.flyToCentral();
           }
           break;
@@ -562,6 +568,7 @@ export function TrafficSimulator() {
     baselinesRef.current?.postMessage(asked.request);
     baselinesAskedRef.current = { ...asked, at: Date.now() };
   }, []);
+
 
   const onIncident = useCallback(
     (kind: IncidentKind) => {

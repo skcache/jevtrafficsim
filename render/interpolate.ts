@@ -15,8 +15,14 @@ import type { PathIndex } from "@/cities/paths";
 import { samplePathIndex } from "@/cities/paths";
 import type { DirectedPathIndexes } from "@/render/map-geometry";
 import { applyLaneOffset } from "@/render/map-geometry";
-import { vehicleLaneOffsetMetres } from "@/render/road-presentation";
-import type { City } from "@/sim/types";
+import {
+  STOP_LINE_CLEARANCE_M,
+  VEHICLE_LENGTH_M,
+  stopLineSetbackMetres,
+  vehicleLaneOffsetMetres,
+} from "@/render/road-presentation";
+import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
+import type { City, RoadId } from "@/sim/types";
 import type {
   PresentationEgoVehicle,
   PresentationSnapshot,
@@ -235,7 +241,7 @@ export function interpolateVehicles(
     let y = currentPosition.y;
     let heading = currentPosition.heading;
     if (before && before.roadId !== null && before.roadId !== vehicle.roadId) {
-      const transition = transitionPosition(indexes, before, vehicle, t, options);
+      const transition = transitionPosition(indexes, previous, before, vehicle, t, options);
       if (transition) {
         x = transition.x;
         y = transition.y;
@@ -251,7 +257,9 @@ export function interpolateVehicles(
     } else if (before && before.roadId !== null && before.roadId === vehicle.roadId) {
       // Same-road motion interpolates scalar progress and resamples the
       // authoritative polyline. x/y lerp cuts across curves between snapshots.
-      const progress = before.progress + (vehicle.progress - before.progress) * t;
+      const from = heldProgress(previous, before, vehicle.roadId, before.progress, options.city);
+      const to = heldProgress(current, vehicle, vehicle.roadId, vehicle.progress, options.city);
+      const progress = from + (to - from) * t;
       const laneOffset = vehicleLaneOffsetMetres(
         options.city,
         options.laneOffsets,
@@ -282,6 +290,72 @@ export function interpolateVehicles(
 }
 
 /**
+ * The furthest along its road the rendered car may sit when the simulation says
+ * it is held at the stop line.
+ *
+ * The simulation's control point is the graph node, but the map draws a physical
+ * stop line several metres upstream. Presentation used to apply that correction
+ * to the INTERPOLATED result (clamp/pack after interpolation), so the frame where
+ * a car became queued yanked it backwards onto the stop line in one step —
+ * measured at 8-10 m on the followed car, i.e. the hero visibly sliding backwards
+ * at every red light. Correcting each SNAPSHOT's own progress instead lets the
+ * interpolation carry the car the last few metres up to the stop line, which is
+ * what a car actually does.
+ */
+function heldProgress(
+  snapshot: PresentationSnapshot | null,
+  ego: PresentationEgoVehicle | null,
+  roadId: RoadId,
+  progress: number,
+  city: City,
+): number {
+  if (!snapshot || !ego || ego.roadId !== roadId) {
+    return progress;
+  }
+  const road = city.roads[roadId];
+  if (!road) {
+    return progress;
+  }
+  const signal = snapshot.routeControls.find((control) => control.intersectionId === road.to);
+  if (!signal) {
+    return progress;
+  }
+  // Same question the renderer's stop-line clamp asks, asked every frame instead
+  // of only once the simulation has already moved the car to the node. Holding by
+  // PERMISSION means the car drives up to the stop line and waits there: the cap
+  // engages as the car reaches the line, so it never has to be pulled back. Doing
+  // it off the queue state instead meant the car was already ~9 m past the painted
+  // line (the simulation's control point is the junction node) and every stop
+  // included a visible slide backwards.
+  const groups = deriveApproachGroups(city, road.to);
+  if (groups.length === 0) {
+    return progress;
+  }
+  const permitted = canApproachProceedForPhase(
+    groups,
+    signal.stage,
+    ((signal.phaseIndex % groups.length) + groups.length) % groups.length,
+    roadId,
+  );
+  if (permitted) {
+    return progress;
+  }
+  // A car that has already committed and is crossing on the change of phase is
+  // left alone: holding it would pull a moving car back into the junction it has
+  // just entered. Only a car still arriving at the line is held, which is the
+  // case the stop line exists for.
+  if (ego.speed > CROSSING_SPEED_FLOOR_MPS) {
+    return progress;
+  }
+  const bodyLength = VEHICLE_LENGTH_M[ego.type] ?? VEHICLE_LENGTH_M.car;
+  const stop = Math.max(
+    0,
+    road.length - stopLineSetbackMetres(road.lanes) - bodyLength / 2 - STOP_LINE_CLEARANCE_M,
+  );
+  return Math.min(progress, stop);
+}
+
+/**
  * Position and heading while crossing from one road to the next.
  *
  * Position is constrained to one of the two authoritative road paths at every
@@ -291,6 +365,7 @@ export function interpolateVehicles(
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
+  previousSnapshot: PresentationSnapshot | null,
   before: PresentationEgoVehicle,
   current: PresentationEgoVehicle,
   t: number,
@@ -310,7 +385,11 @@ function transitionPosition(
     return null;
   }
 
-  const remaining = Math.max(0, previousIndex.total - before.progress);
+  const remaining = Math.max(
+    0,
+    previousIndex.total -
+      heldProgress(previousSnapshot, before, before.roadId, before.progress, options.city),
+  );
   const travelled = Math.max(0, current.progress);
   const total = remaining + travelled;
   if (total <= 0) {
@@ -363,6 +442,9 @@ function transitionPosition(
 
 /** Metres before the junction where the sprite begins rotating into the turn. */
 const TURN_WINDOW_M = 8;
+
+/** Above this the car is crossing, not arriving: the stop line must not hold it. */
+const CROSSING_SPEED_FLOOR_MPS = 3;
 
 /** 0..1 with zero slope at both ends, so the turn eases in and out. */
 function smoothstep(value: number): number {

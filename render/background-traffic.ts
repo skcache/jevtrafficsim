@@ -21,6 +21,8 @@
  *    behind the stop line, moving sprites are spaced along the road, and every
  *    sprite sits on its road's path in a stable lane with the road's own tangent
  *    as its heading (the same rule the ego obeys).
+ *  - the car being watched is never covered: its own road draws one sprite fewer,
+ *    and the display pass additionally drops whichever sprite sits closest to it.
  *  - it is a pure function of (snapshot, city, indexes), so the same frame always
  *    produces the same sprites, and it never feeds anything back into the engine.
  *
@@ -153,12 +155,11 @@ export function synthesizeRoadTraffic(
       const key = traffic.roadId * KEY_STRIDE + SLOTS_PER_KIND + slot;
       // Spaced inside the block, never on the stop line and never off the start:
       // moving traffic belongs between junctions.
-      const progress = (road.length * (slot + 1)) / (moving + 1);
       sprites.push({
         key,
         roadId: traffic.roadId,
         type,
-        progress,
+        progress: (road.length * (slot + 1)) / (moving + 1),
         laneOffset: vehicleLaneOffsetMetres(
           city,
           laneOffsets,
@@ -203,12 +204,22 @@ export function synthesizeRoadTrafficCached(
  * snapshots moves smoothly along its own road (progress is interpolated and the
  * path is re-sampled, exactly like the ego), and a sprite that only exists in one
  * of them simply appears or disappears.
+ *
+ * The hero's spot is reserved here rather than in the synthesis: the followed car
+ * is not queue-packed (its position is the simulation's own), so the nearest
+ * sprite on its road is dropped at draw time to keep the map from parking a car
+ * on top of the car being watched. Doing it at display rate keeps the synthesis
+ * cacheable, which one moving progress value would otherwise destroy.
  */
 export function renderBackgroundVehicles(
   previous: readonly SyntheticVehicle[],
   current: readonly SyntheticVehicle[],
   alpha: number,
-  options: { readonly indexes: DirectedPathIndexes },
+  options: {
+    readonly indexes: DirectedPathIndexes;
+    readonly egoRoadId?: RoadId | null;
+    readonly egoProgress?: number | null;
+  },
 ): RenderedVehicle[] {
   if (current.length === 0) {
     return [];
@@ -218,8 +229,27 @@ export function renderBackgroundVehicles(
   for (const sprite of previous) {
     before.set(sprite.key, sprite);
   }
+
+  let reservedKey: number | null = null;
+  if (options.egoRoadId != null && options.egoProgress != null) {
+    let best = Infinity;
+    for (const sprite of current) {
+      if (sprite.roadId !== options.egoRoadId) {
+        continue;
+      }
+      const distance = Math.abs(sprite.progress - options.egoProgress);
+      if (distance < best) {
+        best = distance;
+        reservedKey = sprite.key;
+      }
+    }
+  }
+
   const rendered: RenderedVehicle[] = [];
   for (const sprite of current) {
+    if (sprite.key === reservedKey) {
+      continue;
+    }
     const index = options.indexes[sprite.roadId];
     if (!index) {
       continue;

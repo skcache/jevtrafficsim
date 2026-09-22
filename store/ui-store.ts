@@ -99,6 +99,15 @@ export interface UiState {
   /** Transient line shown above the incident dock ("Crash queued"). */
   feedback: string | null;
   setPhase: (phase: UiPhase) => void;
+  /**
+   * The scenario fingerprint the camera has already been framed for. A run in
+   * flight must not be re-framed by a later READY for the same world (the payoff
+   * would be yanked back to the street preset), and a READY that arrives before
+   * the press - a prewarm world - must not count as the framing either, which is
+   * what a transient phase flag got wrong.
+   */
+  cameraFramedFor: string | null;
+  markCameraFramed: (fingerprint: string) => void;
   setCitySize: (citySize: CitySize) => void;
   setTrafficLevel: (trafficLevel: TrafficLevel) => void;
   setTripId: (tripId: CuratedTripId) => void;
@@ -156,6 +165,7 @@ function sameWorldFinished(state: UiState, fingerprint: string | undefined): boo
 
 export const useUiStore = create<UiState>()((set) => ({
   phase: "landing",
+  cameraFramedFor: null,
   citySize: "large",
   trafficLevel: "everyday",
   tripId: "soldier-field-to-navy-pier",
@@ -192,7 +202,12 @@ export const useUiStore = create<UiState>()((set) => ({
   surgeFlash: 0,
   surgeVisible: false,
   feedback: null,
-  setPhase: (phase) => set({ phase }),
+  setPhase: (phase) =>
+    set({
+      phase,
+      // Leaving the city puts the camera back in play for the next run.
+      ...(phase === "config" || phase === "landing" ? { cameraFramedFor: null } : {}),
+    }),
   setCitySize: (citySize) => set({ citySize }),
   setTrafficLevel: (trafficLevel) => set({ trafficLevel }),
   setTripId: (tripId) => set({ tripId, citySize: "large" }),
@@ -212,6 +227,7 @@ export const useUiStore = create<UiState>()((set) => ({
   setDebug: (debug) => set({ debug }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
+  markCameraFramed: (fingerprint) => set({ cameraFramedFor: fingerprint }),
   applyReady: (config, scaleLabel, fingerprint) =>
     set((state) => ({
       config,

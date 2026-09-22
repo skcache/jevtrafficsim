@@ -36,7 +36,7 @@ import {
   interpolateVehicles,
   smoothRenderClock,
 } from "@/render/interpolate";
-import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
+import { clampVehiclesAtSignals } from "@/render/queue-packing";
 import {
   renderBackgroundVehicles,
   synthesizeRoadTrafficCached,
@@ -328,6 +328,23 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     };
     map.on("zoom", onZoom);
 
+    /**
+     * Hand the camera to an animation for its own duration.
+     *
+     * Per-frame follow tracking uses `jumpTo`, and `jumpTo` stops whatever
+     * animation is running. Without this, the Enter City flight was cut off
+     * part-way (measured: it landed at zoom 14.86 instead of the street preset's
+     * 15.4, and stayed there for the whole trip), and a user's zoom-out while
+     * following was cancelled on the next frame. Extending by `Math.max` means a
+     * later, shorter request can never shorten an earlier, longer one.
+     */
+    const ownCameraFor = (durationMs: number) => {
+      easeGuardUntilRef.current = Math.max(
+        easeGuardUntilRef.current,
+        performance.now() + durationMs + 120,
+      );
+    };
+
     const handle: MapHandle = {
       flyToCentral: (options) => {
         // Enter City should immediately demonstrate the PRODUCT: roughly
@@ -335,10 +352,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // generic downtown fit was technically geographic but too zoomed out
         // to explain why this is a traffic simulator.
         const street = presetPose("street");
+        const duration = options?.immediate ? 0 : 1350;
+        ownCameraFor(duration);
         map.easeTo({
           center: [street.center[0], street.center[1]],
           zoom: street.zoom,
-          duration: options?.immediate ? 0 : 1350,
+          duration,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
@@ -346,17 +365,21 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // The active road network, not every polygon and label anchor: the old
         // bounds reached east across the empty lake and left Chicago small in
         // the frame.
+        const duration = options?.immediate ? 0 : 1400;
+        ownCameraFor(duration);
         map.fitBounds(cameraBoundsLngLat(initialModel, networkBounds(initialModel)), {
           padding: FIT_PADDING,
-          duration: options?.immediate ? 0 : 1400,
+          duration,
           maxZoom: 17.4,
           easing: (t) => 1 - Math.pow(1 - t, 3),
         });
       },
       zoomIn: () => {
+        ownCameraFor(320);
         map.zoomTo(map.getZoom() + 1, { duration: 320 });
       },
       zoomOut: () => {
+        ownCameraFor(320);
         map.zoomTo(map.getZoom() - 1, { duration: 320 });
       },
       getZoom: () => map.getZoom(),
@@ -367,7 +390,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         followRef.current = enableFollow(followRef.current);
         useUiStore.getState().setFollowing(true);
         const ego = lastEgoMetricRef.current;
-        easeGuardUntilRef.current = performance.now() + FOLLOW_SCALE.recenterEaseMs;
+        ownCameraFor(FOLLOW_SCALE.recenterEaseMs);
         if (ego) {
           map.easeTo({
             center: metricToLngLat(projection, ego.x, ego.y),
@@ -547,15 +570,18 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               buffer.current.routeControls,
             )
           : [];
-        const vehicles = buffer.current
-          ? packQueues(
-              buffer.model.city,
-              buffer.paths,
-              laneOffsets,
-              signalClamped,
-              (id) => progress.get(id) ?? 0,
-            )
-          : [];
+        // The followed car is NOT queue-packed.
+        //
+        // Packing exists to make a queue read as one object: it re-places each
+        // queued vehicle on its packed slot. Applied to the hero, that is a hop
+        // of several metres the moment it becomes queued — measured at 8-10 m in
+        // a single frame, i.e. the car the user is watching jumps at every red
+        // light. The protagonist is the one vehicle whose position must be the
+        // simulation's own, so it keeps the authoritative progress (already
+        // corrected to the rendered stop line by the interpolation) and only the
+        // bounded signal clamp, which never moves it more than a fraction of a
+        // metre.
+        const vehicles = signalClamped;
         // Every rendered position now comes directly from a road path, a bounded
         // junction turn, or queue packing on that same road. Do not "settle"
         // positions with a free-space x/y lerp: that smoothing can leave the
@@ -578,7 +604,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             egoRoadId: buffer.current?.ego?.roadId ?? null,
           }),
           alpha,
-          { indexes: buffer.paths },
+          {
+            indexes: buffer.paths,
+            egoRoadId: buffer.current?.ego?.roadId ?? null,
+            egoProgress: displayEgoProgress?.progress ?? null,
+          },
         );
         const fleet = background.length === 0 ? settled : [...settled, ...background];
         // Debug-only readout of what the renderer is actually working with:
@@ -678,14 +708,33 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         lastRenderAtRef.current = now;
         const follow = advanceFollow(followRef.current, lastEgoMetricRef.current, dtMs);
         followRef.current = follow.state;
-        if (follow.target && followRef.current.following && now >= easeGuardUntilRef.current) {
+        // Never fight an animation. The guard covers the request's nominal
+        // duration, but the main thread can be blocked for seconds while the
+        // city model loads, which would let the guard expire while the ease is
+        // still mid-flight — and jumpTo cancels eases, so the camera would freeze
+        // wherever the interruption caught it (measured: Enter City landing at
+        // zoom 14.76 instead of the street preset's 15.4, for the whole trip).
+        if (
+          follow.target &&
+          followRef.current.following &&
+          now >= easeGuardUntilRef.current &&
+          // An animation in flight counts as "moving" in MapLibre, and while we
+          // are following the only thing that can move the map is an animation we
+          // started (a drag turns following off), so this is exactly the check we
+          // need. It has to be `isMoving`: this build declares `isEasing` in its
+          // types but does not expose it at runtime, so the guard silently did
+          // nothing when it used that.
+          !activeMap.isMoving()
+        ) {
+          if (window.location.search.includes("debug") && !(window as unknown as { __followOn?: boolean }).__followOn) {
+            (window as unknown as { __followOn?: boolean }).__followOn = true;
+          }
           activeMap.jumpTo({
             center: metricToLngLat(projection, follow.target[0], follow.target[1]),
             bearing: 0,
             pitch: 0,
           });
         }
-
         const incidents = buildIncidentLayers(buffer.current, buffer.model);
         // `?notraffic=1` hides every traffic primitive so the basemap can be
         // reviewed on its own. Dev-only, never rendered, like the camera hook.
@@ -855,8 +904,11 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
     useUiStore.getState().setFollowing(live);
     if (map) {
       // Enter City's flight owns the camera for a moment; following takes over
-      // when it lands rather than cutting it off mid-ease.
-      easeGuardUntilRef.current = live ? performance.now() + 1_600 : 0;
+      // when it lands rather than cutting it off mid-ease. `Math.max` keeps a
+      // real flight's longer guard intact.
+      easeGuardUntilRef.current = live
+        ? Math.max(easeGuardUntilRef.current, performance.now() + 400)
+        : 0;
       const apply = () => applyRoadFocus(map, live);
       if (map.isStyleLoaded()) {
         apply();
