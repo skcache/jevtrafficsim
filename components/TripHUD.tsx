@@ -1,10 +1,13 @@
 "use client";
 
 /**
- * TripHUD (Issue #25): the trip is the product, so the primary instrument is
- * the trip's own state — name, elapsed, remaining, speed, stopped time,
- * intersections cleared, estimate. Citywide health stays readable in one
- * secondary line; it is context, not the headline.
+ * TripHUD (Issue #25, decluttered in the shipping pass).
+ *
+ * The live view answers four questions and nothing else: where am I going, how
+ * long have I been going, how far is left, and how fast am I moving. Stopped
+ * time, intersections cleared, the estimate and the citywide health block were
+ * a monitoring dashboard sitting on top of a race — they are still computed and
+ * still shown, but behind ?debug where they belong.
  *
  * Every value is a field the worker computed (see tripHudView in ui-model), so
  * the HUD can never disagree with the map or the simulation.
@@ -28,8 +31,11 @@ export function TripHUD() {
   const egoState = useUiStore((state) => state.egoState);
   const egoSpeedMps = useUiStore((state) => state.egoSpeedMps);
   const metrics = useUiStore((state) => state.metrics);
+  const debug = useUiStore((state) => state.debug);
   const live = phase === "city";
   const view = tripHudView({ trip, egoState, egoSpeedMps });
+  // The four facts a visitor reads mid-race; everything else waits for ?debug.
+  const PRIMARY_ROWS = ["Elapsed", "Remaining", "Speed"];
 
   return (
     <motion.div
@@ -52,7 +58,9 @@ export function TripHUD() {
         </div>
         <div className="flex flex-col gap-[6px]">
           {view ? (
-            view.rows.map((row) => <Row key={row.label} label={row.label} value={row.value} />)
+            view.rows
+              .filter((row) => debug || PRIMARY_ROWS.includes(row.label))
+              .map((row) => <Row key={row.label} label={row.label} value={row.value} />)
           ) : (
             Array.from({ length: 5 }, (_, index) => (
               <div key={index} className="grid grid-cols-[1fr_auto] items-baseline gap-4">
@@ -62,17 +70,19 @@ export function TripHUD() {
             ))
           )}
         </div>
-        <div className="mt-0.5 border-t border-hair pt-2">
-          <div className="mb-1 label-micro text-ink-38">City traffic</div>
-          <div className="value-num flex items-baseline justify-between text-micro text-ink-38">
-            <span>{formatDuration(metrics?.averageWaitTimeMs ?? 0)} avg wait</span>
-            <span>{formatPercent(metrics?.gridlockRatio ?? 0)} gridlock</span>
+        {debug && (
+          <div className="mt-0.5 border-t border-hair pt-2">
+            <div className="mb-1 label-micro text-ink-38">City traffic · debug</div>
+            <div className="value-num flex items-baseline justify-between text-micro text-ink-38">
+              <span>{formatDuration(metrics?.averageWaitTimeMs ?? 0)} avg wait</span>
+              <span>{formatPercent(metrics?.gridlockRatio ?? 0)} gridlock</span>
+            </div>
+            <div className="value-num mt-[3px] flex items-baseline justify-between text-micro text-ink-38">
+              <span>{(metrics?.activeVehicles ?? 0).toLocaleString("en-US")} active</span>
+              <span>{(metrics?.completedTrips ?? 0).toLocaleString("en-US")} trips</span>
+            </div>
           </div>
-          <div className="value-num mt-[3px] flex items-baseline justify-between text-micro text-ink-38">
-            <span>{(metrics?.activeVehicles ?? 0).toLocaleString("en-US")} active</span>
-            <span>{(metrics?.completedTrips ?? 0).toLocaleString("en-US")} trips</span>
-          </div>
-        </div>
+        )}
       </div>
     </motion.div>
   );

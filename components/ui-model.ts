@@ -396,6 +396,128 @@ export function shouldReaskBaselines(wait: BaselineWait): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/* The race (shipping pass)                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One competitor's headline: the time the trip took.
+ *
+ * A visitor wants one answer — who got there faster — so the payoff leads with
+ * three of these and one factual sentence, and keeps the engineering underneath
+ * a disclosure. No score, no winner ranking, no claim that any controller is
+ * universally better: only what this run measured.
+ */
+export interface RaceEntry {
+  readonly key: "jev" | "adaptive" | "fixed";
+  readonly label: string;
+  readonly tripTimeMs: number;
+  readonly formatted: string;
+  /** True for the run the user actually watched. */
+  readonly live: boolean;
+  /** The car never arrived within the horizon. */
+  readonly incomplete: boolean;
+}
+
+export function raceEntries(
+  fixed: ChallengeResult,
+  adaptive: ChallengeResult,
+  live: ChallengeResult,
+  liveLabel: string,
+): readonly RaceEntry[] {
+  return [
+    {
+      key: "jev",
+      label: liveLabel,
+      tripTimeMs: live.trip.tripTimeMs,
+      formatted: formatRaceTime(live.trip.tripTimeMs),
+      live: true,
+      incomplete: !live.trip.completed,
+    },
+    {
+      key: "adaptive",
+      label: "Adaptive",
+      tripTimeMs: adaptive.trip.tripTimeMs,
+      formatted: formatRaceTime(adaptive.trip.tripTimeMs),
+      live: false,
+      incomplete: !adaptive.trip.completed,
+    },
+    {
+      key: "fixed",
+      label: "Fixed",
+      tripTimeMs: fixed.trip.tripTimeMs,
+      formatted: formatRaceTime(fixed.trip.tripTimeMs),
+      live: false,
+      incomplete: !fixed.trip.completed,
+    },
+  ];
+}
+
+/** m:ss, the unit a visitor reads a race in. */
+export function formatRaceTime(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+export interface RaceDelta {
+  /** One factual sentence about the measured difference, never a judgement. */
+  readonly text: string;
+  /** Positive when the watched run was quicker than the yardstick. */
+  readonly deltaMs: number;
+  readonly comparedWith: "Adaptive" | "Fixed" | null;
+}
+
+/**
+ * The single sentence under the times. The yardstick is Adaptive — the strong
+ * local baseline — so the comparison says the most it can say: how this run did
+ * against the controller it is supposed to be different from.
+ */
+export function raceDelta(
+  entries: readonly RaceEntry[],
+  liveLabel: string,
+): RaceDelta | null {
+  const live = entries.find((entry) => entry.live);
+  const adaptive = entries.find((entry) => entry.key === "adaptive");
+  const fixed = entries.find((entry) => entry.key === "fixed");
+  const yardstick = adaptive ?? fixed;
+  if (live === undefined || yardstick === undefined) {
+    return null;
+  }
+  if (live.incomplete) {
+    return {
+      text: `${liveLabel} did not finish the trip within the run.`,
+      deltaMs: 0,
+      comparedWith: null,
+    };
+  }
+  if (yardstick.incomplete) {
+    return {
+      text: `${yardstick.label} did not finish the trip within the run.`,
+      deltaMs: 0,
+      comparedWith: null,
+    };
+  }
+  const deltaMs = yardstick.tripTimeMs - live.tripTimeMs;
+  const seconds = Math.abs(Math.round(deltaMs / 1000));
+  if (seconds === 0) {
+    return {
+      text: `${liveLabel} and ${yardstick.label} arrived within a second of each other.`,
+      deltaMs,
+      comparedWith: yardstick.key === "adaptive" ? "Adaptive" : "Fixed",
+    };
+  }
+  const faster = deltaMs > 0;
+  return {
+    text:
+      `${liveLabel} finished ${seconds}s ${faster ? "faster" : "slower"} than ` +
+      `${yardstick.label}.`,
+    deltaMs,
+    comparedWith: yardstick.key === "adaptive" ? "Adaptive" : "Fixed",
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Lifecycle (Issue #39)                                               */
 /* ------------------------------------------------------------------ */
 
