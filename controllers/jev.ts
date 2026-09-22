@@ -48,6 +48,7 @@ import {
   JEV_LIMITS,
   clampWeight,
   neutralJevPolicy,
+  type JevIntentEntry,
   type JevPolicy,
 } from "@/jev/schema";
 import { adapterFromId, type JevAdapter, type JevPolicySource, type JevTrace, type JevTraceEvent, type JevTraceRecordedRun } from "@/jev/trace";
@@ -75,6 +76,9 @@ export interface JevWeights {
   readonly marginScale: number;
   readonly corridorWeight: ReadonlyMap<number, number>;
   readonly regionWeight: ReadonlyMap<number, number>;
+  /** Coordinated zone intents: id -> {intent, strength}, already bounded. */
+  readonly corridorIntent: ReadonlyMap<number, JevIntentEntry>;
+  readonly regionIntent: ReadonlyMap<number, JevIntentEntry>;
 }
 
 export function resolveJevWeights(policy: JevPolicy): JevWeights {
@@ -83,7 +87,52 @@ export function resolveJevWeights(policy: JevPolicy): JevWeights {
     marginScale: JEV_HINT_MARGIN_SCALE[policy.hint],
     corridorWeight: new Map(policy.corridorWeights.map((entry) => [entry.id, entry.weight])),
     regionWeight: new Map(policy.regionWeights.map((entry) => [entry.id, entry.weight])),
+    corridorIntent: new Map(policy.corridorIntents.map((entry) => [entry.id, entry])),
+    regionIntent: new Map(policy.regionIntents.map((entry) => [entry.id, entry])),
   };
+}
+
+/**
+ * The switch-margin multiplier a COORDINATED zone intent applies at one signal.
+ *
+ * This is the smallest useful extension of Jev's surface: one bounded entry about
+ * a corridor or region moves every intersection that serves it in the same
+ * direction, which is exactly the citywide trade-off a local controller cannot
+ * represent — Adaptive sees only its own approaches, so it can neither drain a
+ * region nor meter one.
+ *
+ * "drain" pulls the margin down (switch sooner, release the zone); "meter" pushes
+ * it up (hold longer, throttle entry). The product of applicable intents is
+ * clamped to the declared bounds, so no combination can turn a signal into a
+ * different machine: min green, max green, yellow, all-red and starvation
+ * protection stay the signal mechanics' business, and a directive is still only
+ * hold or advance.
+ */
+export function zoneMargin(
+  intersectionId: IntersectionId,
+  phase: PhaseObservation | undefined,
+  partition: CityPartition,
+  weights: JevWeights,
+): number {
+  let margin = 1;
+  if (phase !== undefined) {
+    for (const roadId of phase.roads) {
+      for (const corridorId of partition.roadCorridors.get(roadId as RoadId) ?? []) {
+        const entry = weights.corridorIntent.get(corridorId);
+        if (entry !== undefined) {
+          margin *= entry.strength;
+        }
+      }
+    }
+  }
+  const regionId = partition.intersectionRegion.get(intersectionId);
+  if (regionId !== undefined) {
+    const entry = weights.regionIntent.get(regionId);
+    if (entry !== undefined) {
+      margin *= entry.strength;
+    }
+  }
+  return clampWeight(margin, JEV_LIMITS.INTENT_STRENGTH_MIN, JEV_LIMITS.INTENT_STRENGTH_MAX);
 }
 
 const NEUTRAL_WEIGHTS = resolveJevWeights(neutralJevPolicy());
@@ -315,6 +364,15 @@ export function createJevController(options: JevControllerOptions): JevControlle
         if (!observation) {
           continue;
         }
+        // The margin a signal uses is the policy's global hint scaled by any
+        // coordinated zone intent that applies here: this is where one citywide
+        // strategy becomes many local decisions at once.
+        const intentMargin = zoneMargin(
+          intersectionId,
+          observation.phases[signal.phaseIndex],
+          context.partition,
+          weights,
+        );
         const directive = jevDirective(
           signal,
           observation,
@@ -325,7 +383,7 @@ export function createJevController(options: JevControllerOptions): JevControlle
               context.partition,
               weights,
             ),
-          weights.marginScale,
+          weights.marginScale * intentMargin,
         );
         if (directive !== undefined) {
           directives.set(intersectionId, directive);

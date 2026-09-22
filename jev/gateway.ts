@@ -30,7 +30,16 @@
  * about quiet streets.
  */
 import type { JevPolicyRequest } from "./schema";
-import { JEV_HINTS, JEV_SCHEMA_VERSION, type JevHint, type JevPolicy } from "./schema";
+import {
+  JEV_HINTS,
+  JEV_LIMITS,
+  JEV_SCHEMA_VERSION,
+  clampWeight,
+  type JevHint,
+  type JevIntent,
+  type JevIntentEntry,
+  type JevPolicy,
+} from "./schema";
 import type { JevClient } from "./client";
 
 /** Verified against the live gateway (see the file header). */
@@ -55,6 +64,19 @@ export const JEV_WEIGHT_BUCKETS = {
   high: 1.5,
   top: 2,
 } as const;
+
+/**
+ * Coordinated zone intents (shipping pass). These are the questions that let the
+ * model ask for a CITYWIDE move instead of only re-weighting what it can see:
+ * "drain" releases a corridor/region, "meter" throttles entry to it. The answer
+ * is a choice, the strength comes from the weight bucket already asked for the
+ * same zone, and both ends are clamped by the schema.
+ */
+export const JEV_INTENT_MEANINGS: Record<"none" | JevIntent, string> = {
+  none: "no coordinated action: let each intersection decide locally",
+  drain: "release this zone: intersections serving it should switch sooner so traffic can leave",
+  meter: "throttle this zone: intersections serving it should hold longer so upstream absorbs demand",
+};
 
 const PRESSURE_MEANINGS: Record<keyof typeof JEV_PRESSURE_BUCKETS, string> = {
   relaxed: "ease off: let the city settle, accept longer waits",
@@ -180,6 +202,12 @@ export function buildEvaluationsBody(
     },
   };
 
+  const intentQuestion = (label: string, zone: string): EvaluationsQuestion => ({
+    type: "choice",
+    question: `${label} ${zone}: should the city coordinate it as a whole, and how?`,
+    criteria: JEV_INTENT_MEANINGS,
+  });
+
   for (const corridor of busiest(
     request.corridors,
     options.corridorQuestions ?? JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS,
@@ -192,6 +220,10 @@ export function buildEvaluationsBody(
         `and a worst wait of ${Math.round(corridor.maxWaitMs / 1000)}s. How should it be weighted?`,
       criteria: WEIGHT_MEANINGS,
     };
+    questions[`corridor-intent:${corridor.corridorId}`] = intentQuestion(
+      "Corridor",
+      String(corridor.corridorId),
+    );
   }
 
   for (const region of busiest(
@@ -206,6 +238,10 @@ export function buildEvaluationsBody(
         `${region.signalizedIntersections} signals. How should it be weighted?`,
       criteria: WEIGHT_MEANINGS,
     };
+    questions[`region-intent:${region.regionId}`] = intentQuestion(
+      "Region",
+      String(region.regionId),
+    );
   }
 
   return {
@@ -270,6 +306,8 @@ export function policyFromEvaluations(
 
   const corridorWeights: { id: number; weight: number }[] = [];
   const regionWeights: { id: number; weight: number }[] = [];
+  const corridorIntents: JevIntentEntry[] = [];
+  const regionIntents: JevIntentEntry[] = [];
   for (const questionId of Object.keys(body.questions)) {
     const [kind, rawId] = questionId.split(":");
     if (rawId === undefined) {
@@ -289,6 +327,30 @@ export function policyFromEvaluations(
       regionWeights.push({ id, weight });
     }
   }
+  // Coordinated intents: a named choice per zone, strength from the same zone's
+  // weight bucket. Unanswered -> no intent -> the controller stays neutral here.
+  for (const [field, bucketMap, into] of [
+    ["corridor-intent", corridorWeights, corridorIntents],
+    ["region-intent", regionWeights, regionIntents],
+  ] as const) {
+    for (const entry of bucketMap) {
+      const answer = chosen(`${field}:${entry.id}`);
+      if (answer !== "drain" && answer !== "meter") {
+        continue;
+      }
+      into.push({
+        id: entry.id,
+        intent: answer as JevIntent,
+        strength: clampWeight(
+          entry.weight,
+          JEV_LIMITS.INTENT_STRENGTH_MIN,
+          JEV_LIMITS.INTENT_STRENGTH_MAX,
+        ),
+      });
+    }
+  }
+  corridorIntents.sort((a, b) => a.id - b.id);
+  regionIntents.sort((a, b) => a.id - b.id);
   corridorWeights.sort((a, b) => a.id - b.id);
   regionWeights.sort((a, b) => a.id - b.id);
 
@@ -301,6 +363,8 @@ export function policyFromEvaluations(
     hint: hint !== null && (JEV_HINTS as readonly string[]).includes(hint) ? (hint as JevHint) : "neutral",
     corridorWeights,
     regionWeights,
+    corridorIntents,
+    regionIntents,
   };
 }
 

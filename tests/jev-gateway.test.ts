@@ -95,12 +95,19 @@ describe("gateway evaluation request", () => {
   it("asks the two citywide questions plus the busiest corridors and regions", () => {
     const body = buildEvaluationsBody(request(), { corridorQuestions: 3, regionQuestions: 1 });
     expect(body.model).toBe(JEV_GATEWAY_MODEL);
+    // Every zone that gets a weight question also gets the coordinated-intent
+    // question: that is what lets the model ask for a citywide move, not just a
+    // re-weighting.
     expect(Object.keys(body.questions).sort()).toEqual([
+      "corridor-intent:1",
+      "corridor-intent:2",
+      "corridor-intent:3",
       "corridor:1",
       "corridor:2",
       "corridor:3",
       "hint",
       "pressure",
+      "region-intent:1",
       "region:1",
     ]);
   });

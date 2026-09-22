@@ -226,6 +226,8 @@ describe("replay refuses the wrong trace", () => {
             hint: "hold-longer",
             corridorWeights: [],
             regionWeights: [],
+            corridorIntents: [],
+            regionIntents: [],
           },
           source: "live",
         },

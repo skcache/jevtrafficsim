@@ -58,6 +58,14 @@ export const JEV_LIMITS = {
   /** Bounds of one corridor / region weight. */
   WEIGHT_MIN: 0.5,
   WEIGHT_MAX: 2,
+  /**
+   * Bounds of one zone intent's strength (shipping pass). An intent is a
+   * COORDINATED instruction about a whole corridor or region, so its effect on a
+   * single signal is deliberately narrower than a weight: drain can pull the
+   * switch margin down to 0.6x, meter can push it up to 1.6x, and never further.
+   */
+  INTENT_STRENGTH_MIN: 0.6,
+  INTENT_STRENGTH_MAX: 1.6,
   /** Bounds of the combined weight applied to one phase. */
   COMBINED_WEIGHT_MIN: 0.25,
   COMBINED_WEIGHT_MAX: 2,
@@ -235,12 +243,39 @@ export interface JevWeightEntry {
   readonly weight: number;
 }
 
+/**
+ * A coordinated instruction about a whole zone (shipping pass).
+ *
+ *   drain  release the zone: signals serving it switch sooner, so the traffic
+ *          already inside can get out and the zone stops being a sink.
+ *   meter  throttle entry: signals serving it hold longer, so upstream queues
+ *          absorb demand instead of pushing it into a saturated area.
+ *
+ * One entry moves MANY intersections coherently, which is the whole point: it is
+ * the smallest surface that lets a citywide policy express a trade-off a purely
+ * local controller cannot even represent. It still only biases the switch margin
+ * — min green, max green, yellow, all-red and starvation protection remain the
+ * signal mechanics' business, and no lamp is ever named.
+ */
+export const JEV_INTENTS = ["drain", "meter"] as const;
+export type JevIntent = (typeof JEV_INTENTS)[number];
+
+export interface JevIntentEntry {
+  readonly id: number;
+  readonly intent: JevIntent;
+  readonly strength: number;
+}
+
 export interface JevPolicy {
   readonly schemaVersion: typeof JEV_SCHEMA_VERSION;
   readonly pressureScale: number;
   readonly hint: JevHint;
   readonly corridorWeights: readonly JevWeightEntry[];
   readonly regionWeights: readonly JevWeightEntry[];
+  /** Coordinated per-corridor intents, bounded in count and strength. */
+  readonly corridorIntents: readonly JevIntentEntry[];
+  /** Coordinated per-region intents, bounded in count and strength. */
+  readonly regionIntents: readonly JevIntentEntry[];
 }
 
 /** The neutral policy: every weight 1, no hint. Used before a policy arrives. */
@@ -251,6 +286,8 @@ export function neutralJevPolicy(): JevPolicy {
     hint: "neutral",
     corridorWeights: [],
     regionWeights: [],
+    corridorIntents: [],
+    regionIntents: [],
   };
 }
 
@@ -691,6 +728,63 @@ export function parseJevPolicy(
     }
   }
 
+  const intents: {
+    corridorIntents: JevIntentEntry[];
+    regionIntents: JevIntentEntry[];
+  } = { corridorIntents: [], regionIntents: [] };
+  for (const [field, known] of [
+    ["corridorIntents", context.corridorIds],
+    ["regionIntents", context.regionIds],
+  ] as const) {
+    const list = value[field];
+    if (list === undefined) {
+      continue;
+    }
+    if (!Array.isArray(list)) {
+      return { ok: false, error: `${field} must be an array` };
+    }
+    if (list.length > JEV_LIMITS.POLICY_ENTRIES) {
+      return { ok: false, error: `${field} exceeds the ${JEV_LIMITS.POLICY_ENTRIES}-entry limit` };
+    }
+    const knownIds = known === undefined ? null : new Set(known);
+    const seen = new Set<number>();
+    for (const entry of list) {
+      if (!isPlainObject(entry)) {
+        return { ok: false, error: `${field} entries must be objects` };
+      }
+      const id = nonNegativeInteger(entry.id);
+      if (id === null) {
+        return { ok: false, error: `${field} entries need a non-negative integer id` };
+      }
+      if (knownIds !== null && !knownIds.has(id)) {
+        return { ok: false, error: `${field} references id ${id}, which was not in the request` };
+      }
+      if (seen.has(id)) {
+        return { ok: false, error: `${field} repeats id ${id}` };
+      }
+      seen.add(id);
+      if (typeof entry.intent !== "string" || !JEV_INTENTS.includes(entry.intent as JevIntent)) {
+        return {
+          ok: false,
+          error: `${field} intent must be one of ${JEV_INTENTS.join(", ")}`,
+        };
+      }
+      const raw = finiteNumber(entry.strength);
+      if (raw === null) {
+        return { ok: false, error: `${field} strength for id ${id} must be a finite number` };
+      }
+      const bounded = clampWeight(
+        raw,
+        JEV_LIMITS.INTENT_STRENGTH_MIN,
+        JEV_LIMITS.INTENT_STRENGTH_MAX,
+      );
+      if (bounded !== raw) {
+        clamped.push(`${field}[${id}] ${raw} -> ${bounded}`);
+      }
+      intents[field].push({ id, intent: entry.intent as JevIntent, strength: bounded });
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -700,6 +794,8 @@ export function parseJevPolicy(
         hint,
         corridorWeights: weights.corridorWeights,
         regionWeights: weights.regionWeights,
+        corridorIntents: intents.corridorIntents,
+        regionIntents: intents.regionIntents,
       },
       clamped,
     },

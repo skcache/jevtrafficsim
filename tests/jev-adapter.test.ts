@@ -352,6 +352,8 @@ describe("jev policy schema", () => {
       "hint",
       "corridorWeights",
       "regionWeights",
+      "corridorIntents",
+      "regionIntents",
     ]);
   });
 
