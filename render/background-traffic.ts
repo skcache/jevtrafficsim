@@ -37,8 +37,6 @@ import {
   QUEUE_GAP_M,
   STOP_LINE_CLEARANCE_M,
   VEHICLE_LENGTH_M,
-  laneSlotFor,
-  laneKeyFor,
   stopLineSetbackMetres,
   vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
@@ -151,7 +149,6 @@ export function synthesizeRoadTraffic(
       continue;
     }
     const lanes = Math.max(1, road.lanes);
-    const laneKey = laneKeyFor(city, traffic.roadId);
     const queued = Math.min(count, traffic.queuedCount, SLOTS_PER_KIND);
     const moving = Math.min(count - queued, SLOTS_PER_KIND);
     const setback = stopLineSetbackMetres(lanes);
