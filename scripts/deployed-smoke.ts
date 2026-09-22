@@ -18,6 +18,8 @@
  * Reports facts only; nothing here writes to the deployment.
  */
 import puppeteer from "puppeteer-core";
+import type { PresentationPolicy } from "../worker/presentation-snapshot";
+import { checkLiveJevParticipation } from "./jev-participation-check";
 
 const URL = process.argv[2] ?? "https://jevtrafficsim.vercel.app";
 
@@ -61,11 +63,11 @@ async function main(): Promise<void> {
 
   page.on("console", (message) => {
     if (message.type() === "error") {
-      consoleErrors.push(message.text().slice(0, 200));
+      consoleErrors.push("browser console error");
     }
   });
   page.on("requestfailed", (request) => {
-    failedRequests.push(`${request.method()} ${request.url().slice(0, 120)}`);
+    failedRequests.push(request.resourceType());
   });
   page.on("request", (request) => {
     if (request.url().includes("/api/jev/policy")) {
@@ -149,7 +151,7 @@ async function main(): Promise<void> {
     }
   }
   if (comparison === "") {
-    console.log("comparison panel: DID NOT APPEAR");
+    throw new Error("comparison panel did not appear");
   } else {
     const columns = (comparison.match(/Same scenario · three runs\s*\n\s*([0-9a-f]{8})\s*\n\s*([^\n]*)\n([^\n]*)\n([^\n]*)/i) ?? []).slice(1);
     console.log("payoff fingerprint:", columns[0] ?? "(none)");
@@ -167,6 +169,23 @@ async function main(): Promise<void> {
     }
     const fallbackLine = comparison.match(/(\d+% of the run on the adaptive fallback|[0-9]+ live policies?)/i);
     console.log("provenance detail:", fallbackLine?.[0] ?? "(none)");
+    const run = await page.evaluate(() => {
+      const element = document.querySelector<HTMLElement>("[data-jev-provenance]");
+      return element === null ? null : {
+        provenance: element.dataset.jevProvenance ?? "",
+        label: element.dataset.jevLabel ?? "",
+        simulatedMs: Number(element.dataset.simulatedMs),
+      };
+    });
+    if (run === null) throw new Error("completed run has no public provenance");
+    let policy: PresentationPolicy;
+    try {
+      policy = JSON.parse(run.provenance) as PresentationPolicy;
+    } catch {
+      throw new Error("completed run has malformed provenance");
+    }
+    checkLiveJevParticipation(policy, run.label, run.simulatedMs);
+    console.log("live Jev participation: PASS");
   }
 
   console.log("--- relay calls, whole run ---");
@@ -178,12 +197,18 @@ async function main(): Promise<void> {
   }
 
   console.log("--- console errors ---");
-  console.log(consoleErrors.length === 0 ? "none" : consoleErrors.slice(0, 5).join(" \n"));
+  console.log(consoleErrors.length === 0 ? "none" : `${consoleErrors.length} browser console errors`);
   console.log("--- failed requests ---");
-  console.log(failedRequests.length === 0 ? "none" : failedRequests.slice(0, 5).join(" \n"));
+  console.log(failedRequests.length === 0 ? "none" : `${failedRequests.length} failed requests`);
 
   await context.close();
   browser.disconnect();
 }
 
-void main();
+void main().catch((error: unknown) => {
+  const reason = error instanceof Error && /^(comparison panel|completed run|run has|invalid policy|policy outcomes|governed time|public label|zero accepted|no live Jev)/.test(error.message)
+    ? error.message
+    : "browser smoke failed";
+  console.error(`Deployed smoke FAILED: ${reason}`);
+  process.exitCode = 1;
+});

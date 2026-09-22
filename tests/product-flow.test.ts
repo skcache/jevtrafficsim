@@ -212,6 +212,7 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
       fallbackMs: 5_000,
       accepted: 118,
       rejected: 2,
+      refreshes: 120,
     };
     const onFallback: PresentationPolicy = { ...cleanRun, fallbackMs: 120_000, accepted: 3 };
     const noPolicy: PresentationPolicy = {
@@ -221,6 +222,7 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
       fallbackMs: 600_000,
       accepted: 0,
       rejected: 9,
+      refreshes: 9,
     };
     expect(policyLabel("jev", cleanRun)?.text).toBe("Jev");
     expect(policyLabel("jev", onFallback)?.text).toBe("Jev · fallback used");
@@ -245,6 +247,7 @@ describe("fallback is never presented as pure live Jev", () => {
       fallbackMs,
       accepted: 100,
       rejected: 1,
+      refreshes: 101,
     });
     // Under the notice share: still Jev, and it says how many policies ran.
     const quiet = policyLabel("jev", at(600_000 * JEV_FALLBACK_NOTICE_SHARE - 1));
@@ -296,6 +299,7 @@ describe("fallback is never presented as pure live Jev", () => {
       fallbackMs: meta.fallbackMs,
       accepted: meta.accepted,
       rejected: meta.rejected,
+      refreshes: meta.refreshes,
     };
     const snapshot = buildPresentationSnapshot(engine, 0, SCENARIO.tripId, policy);
     expect(snapshot.policy).toEqual(policy);

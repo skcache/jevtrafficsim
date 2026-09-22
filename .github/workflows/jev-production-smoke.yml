@@ -1,0 +1,33 @@
+name: Jev production release smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Deployment base URL (HTTPS; defaults to production)
+        required: false
+        default: https://jevtrafficsim.vercel.app
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify deployed Jev relay
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: pnpm exec tsx scripts/jev-prod-smoke.ts "$BASE_URL"
