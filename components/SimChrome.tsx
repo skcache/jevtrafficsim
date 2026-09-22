@@ -303,12 +303,14 @@ export function SimChrome(props: SimChromeProps) {
                   {(policyLabel(controller, policy) ?? { text: controller }).text}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="label-micro text-ink-38">Scenario</span>
-                <span className="value-num text-micro leading-none text-ink-70">
-                  {scenarioFingerprint ?? "—"}
-                </span>
-              </div>
+              {props.debug && (
+                <div className="flex items-center gap-2">
+                  <span className="label-micro text-ink-38">Scenario</span>
+                  <span className="value-num text-micro leading-none text-ink-70">
+                    {scenarioFingerprint ?? "—"}
+                  </span>
+                </div>
+              )}
               {runShowsNonComparable({ modified, manualIncidents }) && (
                 <div className="flex items-center gap-2" role="status">
                   <span className="label-micro text-ink-38">Run</span>
