@@ -120,3 +120,15 @@ export const EGO_SCALE = {
   minPixelsByClass: { car: 26, truck: 34, bicycle: 15 } as const,
   maxPixelsByClass: { car: 88, truck: 110, bicycle: 52 } as const,
 } as const;
+
+/**
+ * Background traffic (presentation-only) is drawn at its TRUE physical size, with
+ * a small pixel floor so a car stays findable when zoomed out and a modest cap so
+ * a long truck at close zoom cannot swallow the block. The protagonist's
+ * oversized EGO_SCALE must never apply here: a fleet of 2.2x cars reads as a car
+ * park, which is exactly the failure this pass exists to fix.
+ */
+export const TRAFFIC_SCALE = {
+  minPixelsByClass: { car: 4.5, truck: 6, bicycle: 2.5 } as const,
+  maxPixelsByClass: { car: 26, truck: 40, bicycle: 14 } as const,
+} as const;

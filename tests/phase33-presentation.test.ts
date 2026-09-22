@@ -130,7 +130,7 @@ describe("road presentation hierarchy", () => {
 });
 
 describe("ego vehicle presentation stays coherent", () => {
-  it("renders the supplied ego in map space without reintroducing a fleet contract", () => {
+  it("keeps the ego findable while background traffic is drawn true-to-life", () => {
     const ego = [{
       id: 0,
       roadId: 0,
@@ -151,17 +151,33 @@ describe("ego vehicle presentation stays coherent", () => {
         bicycle: { x: 256, y: 0, width: 128, height: 64, anchorX: 64, anchorY: 32, mask: false },
       },
     } as never;
-    const layers = buildVehicleLayers(model.projection, ego, icons, 16);
-    const car = layers.find((layer) => layer.id === "vehicle-body-car") as unknown as {
+    // Background traffic now ships alongside the ego, so the two are separated by
+    // LAYER: the protagonist keeps its legibility floor, the fleet is drawn at
+    // true size with a small floor so thousands of cars cannot hide the roads.
+    const fleet = [{
+      ...ego[0],
+      id: 4_000_001, // synthetic background key, never the ego's id
+    }];
+    const layers = buildVehicleLayers(model.projection, [...ego, ...fleet], icons, 16, ego[0].id);
+    const hero = layers.find((layer) => layer.id === "vehicle-body-car-ego") as unknown as {
       props: { data: unknown[]; sizeUnits: string; getSize: number; sizeMinPixels: number };
     };
-    expect(car.props.data).toHaveLength(1);
-    expect(car.props.sizeUnits).toBe("meters");
-    expect(car.props.getSize).toBeGreaterThan(0);
+    const traffic = layers.find((layer) => layer.id === "vehicle-body-car") as unknown as {
+      props: { data: unknown[]; sizeUnits: string; getSize: number; sizeMinPixels: number };
+    };
+    expect(hero.props.data).toHaveLength(1);
+    expect(hero.props.sizeUnits).toBe("meters");
+    expect(hero.props.getSize).toBeGreaterThan(0);
     // Nav-app legibility floor: big enough to track at city zoom, still a
     // map object (metres first) rather than a fixed-size UI badge.
-    expect(car.props.sizeMinPixels).toBeGreaterThanOrEqual(20);
-    expect(car.props.sizeMinPixels).toBeLessThanOrEqual(40);
+    expect(hero.props.sizeMinPixels).toBeGreaterThanOrEqual(20);
+    expect(hero.props.sizeMinPixels).toBeLessThanOrEqual(40);
+    // The fleet is true-to-life: same metres-based sizing, a floor small enough
+    // to read as a car rather than a badge.
+    expect(traffic.props.data).toHaveLength(1);
+    expect(traffic.props.sizeUnits).toBe("meters");
+    expect(traffic.props.sizeMinPixels).toBeLessThan(hero.props.sizeMinPixels);
+    expect(traffic.props.getSize).toBeLessThan(hero.props.getSize);
   });
 });
 

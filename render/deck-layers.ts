@@ -16,7 +16,7 @@ import type { Projection } from "@/cities/map-model";
 import { metricToLngLat } from "@/cities/map-model";
 import { hatchSegments } from "./visuals";
 import { iconSizeForLengthUnits, spriteAngleDegrees } from "./vehicle-sprites";
-import { EGO_SCALE } from "./scale";
+import { EGO_SCALE, TRAFFIC_SCALE } from "./scale";
 import type { VehicleIconSet } from "./vehicle-icons";
 
 export type LngLat = [number, number];
@@ -98,6 +98,11 @@ export function buildVehicleLayers(
   vehicles: readonly RenderedVehicle[],
   icons: VehicleIconSet,
   zoom: number,
+  /**
+   * The ONE protagonist vehicle, sized by EGO_SCALE so it stays findable. Every
+   * other sprite is background traffic and is drawn at its true size.
+   */
+  egoId: number | null = null,
 ): Layer[] {
   if (vehicles.length === 0 || zoom < VEHICLE_MINZOOM) {
     // Far zoom is the congestion overlay's job: individual glyphs there were
@@ -109,33 +114,56 @@ export function buildVehicleLayers(
   // One layer per class (three at most, not the seven wait-heat buckets this
   // used to split into): the sprite already carries the class silhouette and
   // its restrained body colour, so nothing is tinted per frame.
+  // Two layers per class: the protagonist (sized by EGO_SCALE so it is findable
+  // at any zoom) and the fleet (drawn true-to-life — thousands of
+  // protagonist-sized blobs would hide the very roads they describe). Pixel
+  // floors are scalars in this deck.gl version, which is why the split is by
+  // layer rather than by object.
   for (const type of ["car", "truck", "bicycle"] as const) {
     const group = visible.filter((vehicle) => vehicle.type === type);
     if (group.length === 0) {
       continue;
     }
-    layers.push(
-      new IconLayer<RenderedVehicle>({
-        id: `vehicle-body-${type}`,
-        data: group,
-        iconAtlas: icons.atlas,
-        iconMapping: icons.mapping,
-        getIcon: () => type,
-        getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
-        // The ego is intentionally oversized enough to track at a glance,
-        // while remaining a map-space object that grows naturally with zoom.
-        getSize: iconSizeForLengthUnits(
-          type,
-          VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale,
-        ),
-        getAngle: (vehicle) => spriteAngleDegrees(vehicle.headingRadians),
-        sizeUnits: "meters",
-        sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
-        sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],
-        billboard: false,
-        pickable: false,
-      }),
-    );
+    const hero = egoId === null ? [] : group.filter((vehicle) => vehicle.id === egoId);
+    const fleet = egoId === null ? group : group.filter((vehicle) => vehicle.id !== egoId);
+    if (hero.length > 0) {
+      layers.push(
+        new IconLayer<RenderedVehicle>({
+          id: `vehicle-body-${type}-ego`,
+          data: hero,
+          iconAtlas: icons.atlas,
+          iconMapping: icons.mapping,
+          getIcon: () => type,
+          getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
+          getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type] * EGO_SCALE.lengthScale),
+          getAngle: (vehicle) => spriteAngleDegrees(vehicle.headingRadians),
+          sizeUnits: "meters",
+          sizeMinPixels: EGO_SCALE.minPixelsByClass[type],
+          sizeMaxPixels: EGO_SCALE.maxPixelsByClass[type],
+          billboard: false,
+          pickable: false,
+        }),
+      );
+    }
+    if (fleet.length > 0) {
+      layers.push(
+        new IconLayer<RenderedVehicle>({
+          id: `vehicle-body-${type}`,
+          data: fleet,
+          iconAtlas: icons.atlas,
+          iconMapping: icons.mapping,
+          getIcon: () => type,
+          getPosition: (vehicle) => toLngLat(projection, vehicle.x, vehicle.y),
+          getSize: iconSizeForLengthUnits(type, VEHICLE_LENGTH_M[type]),
+          getAngle: (vehicle) => spriteAngleDegrees(vehicle.headingRadians),
+          sizeUnits: "meters",
+          sizeMinPixels: TRAFFIC_SCALE.minPixelsByClass[type],
+          sizeMaxPixels: TRAFFIC_SCALE.maxPixelsByClass[type],
+          billboard: false,
+          pickable: false,
+        }),
+      );
+    }
   }
   // Waiting is encoded by queue position and the road-level congestion layer.
   // No circles, halos or heat rings are drawn around vehicles: those made the

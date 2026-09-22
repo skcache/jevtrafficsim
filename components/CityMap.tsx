@@ -38,6 +38,10 @@ import {
 } from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
+  renderBackgroundVehicles,
+  synthesizeRoadTrafficCached,
+} from "@/render/background-traffic";
+import {
   carriagewayPairs,
   laneCentreOffsetMetres,
   widthMetresForRoad,
@@ -557,6 +561,26 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // positions with a free-space x/y lerp: that smoothing can leave the
         // carriageway on curves and was the source of drifting vehicles.
         const settled = vehicles;
+        // Background traffic (presentation-only). The frame carries the
+        // simulation's per-road counts, not vehicle objects, so the fleet is
+        // synthesised from those counts and drawn with the same road rules as the
+        // ego: on the path, in a stable lane, nose along the tangent. Without it
+        // the map showed one car on an empty-looking city.
+        const background = renderBackgroundVehicles(
+          synthesizeRoadTrafficCached(buffer.previous, {
+            city: buffer.model.city,
+            laneOffsets,
+            egoRoadId: buffer.previous?.ego?.roadId ?? null,
+          }),
+          synthesizeRoadTrafficCached(buffer.current, {
+            city: buffer.model.city,
+            laneOffsets,
+            egoRoadId: buffer.current?.ego?.roadId ?? null,
+          }),
+          alpha,
+          { indexes: buffer.paths },
+        );
+        const fleet = background.length === 0 ? settled : [...settled, ...background];
         if (window.location.search.includes("debug")) {
           frameRef.current = settled.map((vehicle) => ({
             id: vehicle.id,
@@ -684,9 +708,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                 ...buildDestinationLayers(projection, destination, destSpritesRef.current),
                 ...buildVehicleLayers(
                   projection,
-                  settled,
+                  fleet,
                   iconsRef.current ?? createVehicleSprites() ?? EMPTY_ICONS,
                   zoomRef.current,
+                  buffer.current?.ego?.id ?? null,
                 ),
                 // Contextual controls take over from the tiny network marker as
                 // the ego approaches, then retire back to network scale.
