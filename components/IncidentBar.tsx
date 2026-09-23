@@ -187,14 +187,15 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     if (option !== null) fire(option);
   };
 
-  const live = phase === "city";
+  const live = phase === "city" && !runComplete;
   // Queued feedback outranks the hover hint: after a click the cursor is
   // still on the button, and the confirmation is what matters.
   const line = pending === null ? (feedback ?? hint) : null;
 
   return (
     <motion.div
-      className="pointer-events-none absolute bottom-4 left-4 right-4 z-10 flex flex-col items-center gap-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+      aria-hidden={!live}
+      className={`pointer-events-none absolute bottom-4 left-4 right-4 z-10 flex flex-col items-center gap-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 ${live ? "" : "invisible"}`}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: live ? 1 : 0, y: live ? 0 : 8 }}
       transition={{ duration: 0.32, delay: live ? 0.12 : 0, ease: [0.22, 1, 0.36, 1] }}

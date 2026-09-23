@@ -83,11 +83,11 @@ export const CONTROL_SCALE = {
    * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
    */
   signalBaseHeightM: 4.8,
-  signalHeightM: 13.5,
+  signalHeightM: 10.5,
   stopBaseHeightM: 4.4,
-  stopHeightM: 10.5,
+  stopHeightM: 8.5,
   minPixels: 4,
-  maxPixels: 72,
+  maxPixels: 48,
   // Match the quiet network marker at emphasis=0, then fade to full strength
   // as the ego approaches. This makes the handoff visually continuous.
   opacityFloor: 0.3,
@@ -129,6 +129,6 @@ export const EGO_SCALE = {
  * park, which is exactly the failure this pass exists to fix.
  */
 export const TRAFFIC_SCALE = {
-  minPixelsByClass: { car: 4.5, truck: 6, bicycle: 2.5 } as const,
+  minPixelsByClass: { car: 10, truck: 13, bicycle: 5 } as const,
   maxPixelsByClass: { car: 26, truck: 40, bicycle: 14 } as const,
 } as const;

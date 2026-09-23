@@ -4,12 +4,33 @@
  */
 import { describe, expect, it } from "vitest";
 import { buildShowcaseGeoJson, toLngLat } from "@/render/map-geojson";
-import { lngLatToMetric } from "@/cities/map-model";
+import { lngLatToMetric, pointInPolygon } from "@/cities/map-model";
+import { MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NAVY_PIER_SOUTH_WATER } from "@/render/coastal-corrections";
 import { chicagoAsset, chicagoModel } from "./chicago-support";
 
 const ALL_SCALES = [0, 1, 2, 3, 4];
 
 describe("Chicago GeoJSON", () => {
+  it("repairs the metro lake gap and preserves a dry Navy Pier and Museum Campus", () => {
+    const geo = buildShowcaseGeoJson(chicagoModel(4));
+    expect(geo.coastalLand.features).toHaveLength(1);
+    expect(geo.coastalLand.features[0].geometry.coordinates[0]).toEqual(NAVY_PIER_LAND);
+    expect(geo.water.features.some((feature) =>
+      feature.properties.id === "navy-pier-south-water" &&
+      feature.geometry.coordinates[0] === NAVY_PIER_SOUTH_WATER,
+    )).toBe(true);
+    expect(geo.parks.features.some((feature) =>
+      feature.properties.id === "museum-campus-green" &&
+      feature.geometry.coordinates[0] === MUSEUM_CAMPUS_PARK,
+    )).toBe(true);
+    expect(geo.layerOrder.indexOf("water")).toBeLessThan(geo.layerOrder.indexOf("coastal-land"));
+    expect(geo.layerOrder.indexOf("coastal-land")).toBeLessThan(geo.layerOrder.indexOf("parks"));
+    expect(pointInPolygon([-87.6055, 41.8916], NAVY_PIER_LAND)).toBe(true);
+    expect(pointInPolygon([-87.6055, 41.8900], NAVY_PIER_SOUTH_WATER)).toBe(true);
+    expect(pointInPolygon([-87.6055, 41.8900], NAVY_PIER_LAND)).toBe(false);
+    expect(pointInPolygon([-87.6170, 41.8640], MUSEUM_CAMPUS_PARK)).toBe(true);
+    expect(buildShowcaseGeoJson(chicagoModel(2)).coastalLand.features).toHaveLength(0);
+  });
   it("emits valid GeoJSON for every scale", () => {
     for (const scale of ALL_SCALES) {
       const model = chicagoModel(scale);

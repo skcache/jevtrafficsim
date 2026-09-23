@@ -808,8 +808,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           ...networkTrafficLayers,
           ...routeLayers,
           ...networkSignalLayers,
-          ...cityVehicleLayers,
           ...challengeTopLayers,
+          ...cityVehicleLayers,
         ];
         overlayRef.current?.setProps({ layers });
 

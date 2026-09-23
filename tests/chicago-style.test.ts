@@ -60,6 +60,14 @@ const byId = new Map(layers.map((layer) => [layer.id as string, layer]));
 const paint = (id: string) => byId.get(id)?.paint as Record<string, unknown>;
 const minzoom = (id: string) => byId.get(id)?.minzoom as number | undefined;
 
+describe("coastal presentation repairs", () => {
+  it("does not stroke the lake extract's non-coastal diagonals", () => {
+    expect(byId.get("water-shore")?.filter).toEqual(["!=", ["get", "kind"], "lake"]);
+    expect(layers.findIndex((layer) => layer.id === "coastal-land"))
+      .toBeGreaterThan(layers.findIndex((layer) => layer.id === "water"));
+  });
+});
+
 /* ------------------------------- palette -------------------------------- */
 
 describe("restrained basemap palette", () => {

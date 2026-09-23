@@ -270,6 +270,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
     land: { type: "geojson", data: geo.land as never },
     blocks: { type: "geojson", data: geo.blocks as never },
     water: { type: "geojson", data: geo.water as never },
+    "coastal-land": { type: "geojson", data: geo.coastalLand as never },
     parks: { type: "geojson", data: geo.parks as never },
     labels: { type: "geojson", data: geo.labels as never },
     "street-labels": { type: "geojson", data: geo.streetLabels as never },
@@ -319,8 +320,13 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       type: "line",
       source: "water",
       minzoom: MAP_ZOOM.waterShore,
+      // The clipped lake polygon has non-coastal diagonals; stroking them
+      // invents white lines out in Lake Michigan. River banks remain stroked.
+      filter: ["!=", ["get", "kind"], "lake"],
       paint: { "line-color": palette.waterShore, "line-width": zoomWidth(1.4, 2.4, 4) },
     },
+    // Cover the extract's lake triangle across the built Navy Pier footprint.
+    { id: "coastal-land", type: "fill", source: "coastal-land", paint: { "fill-color": palette.land } },
     {
       id: "parks",
       type: "fill",

@@ -278,7 +278,7 @@ export function SimChrome(props: SimChromeProps) {
     <>
       {/* Top-left: run identity. */}
       <AnimatePresence>
-        {live && (
+        {live && !runComplete && (
           <motion.div
             key="identity"
             className="pointer-events-none absolute left-4 top-4 z-10"
@@ -333,7 +333,7 @@ export function SimChrome(props: SimChromeProps) {
 
       {/* Top-centre: utilities. */}
       <AnimatePresence>
-        {live && (
+        {live && !runComplete && (
           <motion.div
             key="utilities"
             className="absolute left-4 right-4 top-[180px] z-20 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 lg:top-4"
@@ -447,7 +447,7 @@ export function SimChrome(props: SimChromeProps) {
         {live && runComplete && (
           <motion.div
             key="complete"
-            className="surface-overlay absolute bottom-32 left-1/2 z-20 max-h-[calc(100vh-192px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto p-4 sm:bottom-20 sm:max-h-[calc(100vh-160px)]"
+            className="surface-overlay absolute left-1/2 top-1/2 z-20 max-h-[calc(100vh-48px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 sm:p-5"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
@@ -565,10 +565,11 @@ export function SimChrome(props: SimChromeProps) {
 
       {/* Bottom-right: camera stack (replaces MapLibre's default control). */}
       <motion.div
-        className="absolute bottom-4 right-4 z-10"
+        aria-hidden={!live || runComplete}
+        className={`absolute bottom-4 right-4 z-10 ${live && !runComplete ? "" : "invisible"}`}
         initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: live ? 1 : 0, y: live ? 0 : 6 }}
-        transition={{ duration: 0.34, delay: live ? 0.24 : 0, ease: EASE }}
+        animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
+        transition={{ duration: 0.34, delay: live && !runComplete ? 0.24 : 0, ease: EASE }}
       >
         <div className="surface pointer-events-auto flex flex-col items-center divide-y divide-hair p-[3px]">
           <IconButton label="Zoom in" onClick={props.onZoomIn}>
