@@ -85,7 +85,7 @@ function answer(body: ReturnType<typeof buildEvaluationsBody>, pick: (id: string
   for (const id of Object.keys(body.questions)) {
     const choice = pick(id);
     if (choice !== null) {
-      answers[id] = { type: "choice", choice, probabilities: { [choice]: 0.7 }, confidence: 0.7 };
+      answers[id] = { type: "choice", choice, probabilities: { [choice]: 0.7 } };
     }
   }
   return { model: body.model, answers, usage: { inputTokens: 900, outputTokens: 40 } };
@@ -136,7 +136,8 @@ describe("gateway evaluation request", () => {
     const body = buildEvaluationsBody(policyRequest);
     for (const [id, question] of Object.entries(body.questions)) {
       expect(question.type, id).toBe("choice");
-      expect(question.question.length, id).toBeGreaterThan(10);
+      expect(question.instructions.length, id).toBeGreaterThan(10);
+      expect(question, id).not.toHaveProperty("question");
       expect(Object.keys(question.criteria).length, id).toBeGreaterThanOrEqual(2);
     }
     // The state is the bounded request itself — nothing else is disclosed.
@@ -178,6 +179,23 @@ describe("gateway answer translation", () => {
     expect(policy.hint).toBe("neutral");
     expect(policy.corridorWeights).toEqual([]);
     expect(policy.regionWeights).toEqual([]);
+  });
+
+  it("uses the selected Gateway probability and drops uncertain or malformed choices", () => {
+    const body = buildEvaluationsBody(request());
+    const policy = policyFromEvaluations(body, {
+      answers: {
+        pressure: { choice: "urgent", probabilities: { urgent: 0.8 } },
+        hint: { choice: "switch-sooner", probabilities: { "switch-sooner": 0.1 }, confidence: 1 },
+        "corridor:1": { choice: "top", probabilities: { low: 0.9 } },
+        "corridor:2": { choice: "top", probabilities: { top: 2 } },
+        "corridor:3": { choice: "high", probabilities: { high: 0.7 } },
+        "corridor:4": { choice: "top", probabilities: "invalid", confidence: 1 },
+      },
+    });
+    expect(policy.pressureScale).toBe(JEV_PRESSURE_BUCKETS.urgent);
+    expect(policy.hint).toBe("neutral");
+    expect(policy.corridorWeights).toEqual([{ id: 3, weight: JEV_WEIGHT_BUCKETS.high }]);
   });
 
   it("ignores answers to questions it never asked", () => {
