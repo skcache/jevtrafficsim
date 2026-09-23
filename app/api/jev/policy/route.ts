@@ -6,8 +6,8 @@
  * keeps the secret out of the client bundle, out of the worker payload, out of
  * browser state and out of logs:
  *
- *   - the credential comes from the environment (JEV_ENDPOINT / JEV_TOKEN),
- *     server-side only;
+ *   - the credential comes from Vercel's request-scoped OIDC token for AI
+ *     Gateway, or JEV_TOKEN for a separately hosted/local service;
  *   - the token travels in an Authorization header, never in a body, a URL or a
  *     message we log;
  *   - failure responses carry a status and a short message, never the service's
@@ -44,6 +44,7 @@
  * action, and it is the one thing this repository cannot do for itself.
  */
 import { unstable_checkRateLimit as checkRateLimit } from "@vercel/firewall";
+import { getVercelOidcTokenSync } from "@vercel/oidc";
 import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
 import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
 import { jevPolicyContext } from "@/jev/request";
@@ -230,16 +231,15 @@ export function failureReason(error: unknown): string {
   return "unexpected failure";
 }
 
-export function readJevEnvironment(): JevEnvironment | null {
-  const token = process.env.JEV_TOKEN?.trim();
-  if (!token) {
-    return null;
-  }
+export function readJevEnvironment(gatewayOidcToken?: string): JevEnvironment | null {
+  const configuredToken = process.env.JEV_TOKEN?.trim();
   const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS;
 
   const model = process.env.JEV_MODEL?.trim();
   if (model) {
+    const token = gatewayOidcToken?.trim() || configuredToken;
+    if (!token) return null;
     return {
       token,
       timeoutMs,
@@ -252,11 +252,12 @@ export function readJevEnvironment(): JevEnvironment | null {
     };
   }
 
+  if (!configuredToken) return null;
   const endpoint = process.env.JEV_ENDPOINT?.trim();
   if (!endpoint) {
     return null;
   }
-  return { token, timeoutMs, gateway: null, endpoint };
+  return { token: configuredToken, timeoutMs, gateway: null, endpoint };
 }
 
 /** The one place a client is built from configuration. */
@@ -278,7 +279,18 @@ export function jevClientFromEnvironment(environment: JevEnvironment): JevClient
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const environment = readJevEnvironment();
+  // In Functions the platform rotates this token on each request and exposes it
+  // through request context, not a stable process.env value. The official helper
+  // reads that context; a missing token leaves the explicit local key usable.
+  let gatewayOidcToken: string | undefined;
+  if (process.env.JEV_MODEL?.trim()) {
+    try {
+      gatewayOidcToken = getVercelOidcTokenSync();
+    } catch {
+      // Local/non-Vercel runs may intentionally use JEV_TOKEN instead.
+    }
+  }
+  const environment = readJevEnvironment(gatewayOidcToken);
   if (environment === null) {
     return Response.json({ error: "jev is not configured" }, { status: 503 });
   }

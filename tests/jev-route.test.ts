@@ -319,6 +319,18 @@ describe("jev server boundary", () => {
     expect(gatewayEnv?.endpoint).toBeNull();
   });
 
+  it("prefers request-scoped OIDC for Gateway without changing direct-service credentials", () => {
+    process.env.JEV_MODEL = "typesafe-ai/jev";
+    expect(readJevEnvironment("fresh-oidc-token")?.token).toBe("fresh-oidc-token");
+
+    delete process.env.JEV_TOKEN;
+    expect(readJevEnvironment("fresh-oidc-token")?.token).toBe("fresh-oidc-token");
+    expect(readJevEnvironment()).toBeNull();
+
+    configure();
+    expect(readJevEnvironment("fresh-oidc-token")?.token).toBe(TOKEN);
+  });
+
   it("logs one bounded reason and nothing else", async () => {
     const source = readFileSync(path.join(process.cwd(), "app", "api", "jev", "policy", "route.ts"), "utf8");
     expect(source).not.toMatch(/process\.stdout|process\.stderr/);

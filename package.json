@@ -23,6 +23,7 @@
     "@deck.gl/layers": "^9.4.0",
     "@deck.gl/maplibre": "^9.4.0",
     "@vercel/firewall": "^1.2.5",
+    "@vercel/oidc": "^3.8.9",
     "geist": "^1.7.2",
     "maplibre-gl": "^6.10.0",
     "motion": "^13.4.0",
