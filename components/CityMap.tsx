@@ -119,6 +119,8 @@ export interface MapHandle {
   getZoom: () => number;
   /** Resume following the ego car, easing back to it (Issue #25). */
   followEgo: () => void;
+  /** Show the completed trip in city context behind its result. */
+  frameCompletedTrip: () => void;
   isFollowing: () => boolean;
 }
 
@@ -409,6 +411,40 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             easing: (t) => 1 - Math.pow(1 - t, 3),
           });
         }
+      },
+      frameCompletedTrip: () => {
+        // Respect a visitor who deliberately panned away. Otherwise, staying
+        // zoomed in on the pier leaves the result over nearly empty lake.
+        if (!followRef.current.following) return;
+        const trip = frames.current.current?.trip;
+        const city = modelRef.current;
+        if (!trip || !city) return;
+        const origin = city.city.intersections[trip.originIntersectionId];
+        const destination = city.city.intersections[trip.destinationIntersectionId];
+        if (!origin || !destination) return;
+        const bounds = {
+          minX: Math.min(origin.x, destination.x),
+          minY: Math.min(origin.y, destination.y),
+          maxX: Math.max(origin.x, destination.x),
+          maxY: Math.max(origin.y, destination.y),
+        };
+        for (const roadId of trip.routeRoadIds) {
+          for (const [x, y] of city.directedPaths[roadId] ?? []) {
+            bounds.minX = Math.min(bounds.minX, x);
+            bounds.minY = Math.min(bounds.minY, y);
+            bounds.maxX = Math.max(bounds.maxX, x);
+            bounds.maxY = Math.max(bounds.maxY, y);
+          }
+        }
+        const duration = 1000;
+        const padding = Math.min(88, Math.round(Math.min(map.getContainer().clientWidth, map.getContainer().clientHeight) * 0.12));
+        ownCameraFor(duration);
+        map.fitBounds(cameraBoundsLngLat(city, bounds), {
+          padding,
+          duration,
+          maxZoom: 15.4,
+          easing: (t) => 1 - Math.pow(1 - t, 3),
+        });
       },
       isFollowing: () => followRef.current.following,
     };
@@ -727,6 +763,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         if (
           follow.target &&
           followRef.current.following &&
+          !buffer.current?.trip?.completed &&
           now >= easeGuardUntilRef.current &&
           // An animation in flight counts as "moving" in MapLibre, and while we
           // are following the only thing that can move the map is an animation we

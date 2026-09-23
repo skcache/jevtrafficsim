@@ -6,12 +6,27 @@
  * routing, water-crossing detection and simulation continue using the compiled
  * model. Coordinates are local WGS84 positions, not screen-space decoration.
  */
+// The east end and deck follow the Navy Pier footprint (OSM way 24800238,
+// simplified to its structural corners). The short west connector joins the
+// footprint to the clipped Streeterville shore in this presentation extract.
 export const NAVY_PIER_LAND = [
   [-87.6130, 41.89145],
-  [-87.5987, 41.89145],
-  [-87.5984, 41.89114],
-  [-87.5984, 41.89214],
-  [-87.5987, 41.89234],
+  [-87.60975, 41.89145],
+  [-87.6097114, 41.8910177],
+  [-87.6068946, 41.8910640],
+  [-87.6044081, 41.8911035],
+  [-87.6024238, 41.8911351],
+  [-87.6008988, 41.8911515],
+  [-87.6005808, 41.8911195],
+  [-87.6005903, 41.8914224],
+  [-87.5985431, 41.8914535],
+  [-87.5985659, 41.8922780],
+  [-87.6004561, 41.8922378],
+  [-87.6006109, 41.8924149],
+  [-87.6009292, 41.8923665],
+  [-87.6048101, 41.8923057],
+  [-87.6072839, 41.8922668],
+  [-87.6097504, 41.8922278],
   [-87.6130, 41.89234],
   [-87.6130, 41.89145],
 ] as const;

@@ -35,6 +35,9 @@ describe("Chicago GeoJSON", () => {
     expect(geo.layerOrder.indexOf("water")).toBeLessThan(geo.layerOrder.indexOf("coastal-land"));
     expect(geo.layerOrder.indexOf("coastal-land")).toBeLessThan(geo.layerOrder.indexOf("parks"));
     expect(pointInPolygon([-87.6055, 41.8916], NAVY_PIER_LAND)).toBe(true);
+    expect(pointInPolygon([-87.5986, 41.8918], NAVY_PIER_LAND)).toBe(true);
+    // The old hand-drawn southeast spike put a large fake land triangle in the lake.
+    expect(pointInPolygon([-87.5985, 41.8912], NAVY_PIER_LAND)).toBe(false);
     expect(pointInPolygon([-87.6055, 41.8900], LAKE_MICHIGAN_WATER)).toBe(true);
     expect(pointInPolygon([-87.6055, 41.8900], NAVY_PIER_LAND)).toBe(false);
     expect(pointInPolygon([-87.6170, 41.8640], MUSEUM_CAMPUS_PARK)).toBe(true);

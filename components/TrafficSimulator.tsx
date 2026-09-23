@@ -312,6 +312,7 @@ export function TrafficSimulator() {
         case "RUN_COMPLETE": {
           store.setRunning(false);
           store.setRunComplete(true);
+          mapHandleRef.current?.frameCompletedTrip();
           // Remember WHICH world finished, so a READY for that same world cannot
           // erase the outcome (see applyReady).
           store.setCompletedFingerprint(store.scenarioFingerprint);
@@ -540,6 +541,7 @@ export function TrafficSimulator() {
       store.resetMetrics();
       send({ type: "RESET", mode: "same-seed" });
       store.setRunning(true);
+      mapHandleRef.current?.flyToCentral();
     });
   }, [guardDiscard, send]);
 
@@ -551,6 +553,7 @@ export function TrafficSimulator() {
       store.resetMetrics();
       send({ type: "RESET", mode: "new-seed" });
       store.setRunning(true);
+      mapHandleRef.current?.flyToCentral();
     });
   }, [guardDiscard, send]);
 

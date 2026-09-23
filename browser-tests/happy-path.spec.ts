@@ -47,6 +47,9 @@ async function journey(page: Page, relayStatus: 200 | 503) {
       current.y - (window as Window & { __firstEgo?: { x: number; y: number } }).__firstEgo!.y) : 0;
   }), { timeout: 30_000 }).toBeGreaterThan(0.1);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
+  await expect.poll(async () => page.evaluate(() =>
+    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 20,
+  )).toBeLessThan(15);
   await expect(page.getByRole("status", { name: "Trip" })).toBeHidden();
   await expect(page.getByText("Jev Traffic · Chicago")).toBeHidden();
   await expect(page.getByRole("button", { name: "+5× Traffic" })).toBeHidden();
@@ -100,6 +103,9 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   expect(lastControlBox!.x + lastControlBox!.width).toBeLessThanOrEqual(390);
   expect(hudBox!.y + hudBox!.height).toBeLessThan(firstControlBox!.y);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
+  await expect.poll(async () => page.evaluate(() =>
+    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 20,
+  )).toBeLessThan(15);
   const payoff = page.locator(".surface-overlay").filter({ hasText: "Run complete" });
   const box = await payoff.boundingBox();
   expect(box).not.toBeNull();
