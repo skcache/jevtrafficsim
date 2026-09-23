@@ -13,5 +13,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // Parallel CI runs several real Chicago simulation workloads at once.
+    // Keep a finite hang guard without treating normal runner contention as a failure.
+    testTimeout: 15_000,
   },
 });

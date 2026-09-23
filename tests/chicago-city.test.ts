@@ -737,5 +737,5 @@ describe("Chicago incidents", () => {
       }
       expect(checkTrafficInvariants(engine.city, engine.traffic)).toEqual([]);
     }
-  }, 15_000);
+  });
 });
