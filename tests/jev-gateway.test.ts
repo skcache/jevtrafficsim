@@ -127,12 +127,11 @@ describe("gateway evaluation request", () => {
       id.startsWith("corridor:"),
     );
     expect(corridorQuestions).toHaveLength(JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS);
-    // Busiest first. The live-proven default stays at eight questions total:
-    // citywide pressure + hint, then weights and intents for two corridors and
-    // one region. More questions made the production-state Gateway return 503.
+    // Busiest first. The deployed-safe default stays at six questions total:
+    // citywide pressure + hint, then weights and intents for one corridor and
+    // one region. Larger production-state requests returned 503.
     expect(corridorQuestions).toContain("corridor:1");
-    expect(corridorQuestions).toContain("corridor:2");
-    expect(corridorQuestions).not.toContain("corridor:3");
+    expect(corridorQuestions).not.toContain("corridor:2");
     expect(Object.keys(body.questions)).toHaveLength(
       2 + 2 * (JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS + JEV_GATEWAY_DEFAULT_REGION_QUESTIONS),
     );

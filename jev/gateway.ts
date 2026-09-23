@@ -146,10 +146,11 @@ export interface GatewayJevClientOptions {
   readonly fetchImpl?: typeof fetch;
 }
 
-// Live Gateway verification with the production 18 KB state accepted 8
-// questions, but returned 503 for 10 and 12. Keep the default below that
-// observed failure boundary; the complete city state is still provided.
-export const JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS = 2;
+// Live Gateway verification with the production 18 KB state accepted six
+// questions. Eight succeeded once directly but failed twice through the
+// deployed relay; ten and twelve returned 503 directly. Keep the default at
+// the smaller proven budget; the complete city state is still provided.
+export const JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS = 1;
 export const JEV_GATEWAY_DEFAULT_REGION_QUESTIONS = 1;
 export const JEV_GATEWAY_TIMEOUT_MS = 15_000;
 
