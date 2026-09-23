@@ -39,7 +39,7 @@ export function TripHUD() {
 
   return (
     <motion.div
-      className="pointer-events-none absolute bottom-4 left-4 z-10 w-[204px]"
+      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[204px] sm:bottom-4"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: live ? 1 : 0, y: live ? 0 : 6 }}
       transition={{ duration: 0.32, delay: live ? 0.18 : 0, ease: [0.22, 1, 0.36, 1] }}

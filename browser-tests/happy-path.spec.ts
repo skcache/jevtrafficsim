@@ -74,3 +74,21 @@ test("fallback-only still completes but fails the live-Jev release assertion", a
   expect(result.label).toBe("Adaptive fallback");
   expect(() => checkLiveJevParticipation(result.policy, result.label, result.simulatedMs)).toThrow(/no live/);
 });
+
+test("mobile trip HUD and incident controls stay inside the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?debug=1");
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  await page.getByRole("radio", { name: "Adaptive" }).click();
+  await page.getByRole("button", { name: "Enter City" }).click();
+  const hud = page.getByRole("status", { name: "Trip" });
+  const lastControl = page.getByRole("button", { name: "Event Lets Out" });
+  await expect(hud).toBeVisible();
+  await expect(lastControl).toBeVisible();
+  const hudBox = await hud.boundingBox();
+  const firstControlBox = await page.getByRole("button", { name: "+5× Traffic" }).boundingBox();
+  const lastControlBox = await lastControl.boundingBox();
+  expect(hudBox && firstControlBox && lastControlBox).toBeTruthy();
+  expect(lastControlBox!.x + lastControlBox!.width).toBeLessThanOrEqual(390);
+  expect(hudBox!.y + hudBox!.height).toBeLessThan(firstControlBox!.y);
+});

@@ -447,7 +447,7 @@ export function SimChrome(props: SimChromeProps) {
         {live && runComplete && (
           <motion.div
             key="complete"
-            className="surface-overlay absolute bottom-20 left-1/2 z-20 max-h-[calc(100vh-160px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto p-4"
+            className="surface-overlay absolute bottom-32 left-1/2 z-20 max-h-[calc(100vh-192px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto p-4 sm:bottom-20 sm:max-h-[calc(100vh-160px)]"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
