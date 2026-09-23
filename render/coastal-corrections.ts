@@ -38,6 +38,9 @@ export const NAVY_PIER_LAND = [
  * routing and water-crossing semantics.
  */
 export const LAKE_MICHIGAN_WATER = [
+  // Carry the lake beyond the clipped asset so a fitted trip never reveals a
+  // straight east/south edge of the source extract. No sim geometry uses this.
+  [-87.6157, 41.8400],
   [-87.6157, 41.8610],
   [-87.6158, 41.8660],
   [-87.6162, 41.8689],
@@ -50,9 +53,9 @@ export const LAKE_MICHIGAN_WATER = [
   [-87.6110, 41.8935],
   [-87.6102, 41.8962],
   [-87.6120, 41.9010],
-  [-87.5960, 41.9010],
-  [-87.5960, 41.8610],
-  [-87.6157, 41.8610],
+  [-87.5500, 41.9010],
+  [-87.5500, 41.8400],
+  [-87.6157, 41.8400],
 ] as const;
 
 // North and west edge follow the Chicago Park District's Burnham Park boundary

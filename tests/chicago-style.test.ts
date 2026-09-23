@@ -148,7 +148,7 @@ describe("subtraction at city zoom", () => {
     // so the first screen of the product showed a city with empty roads. The
     // floor must stay below the opening framing while still keeping true city
     // zoom (whole metro, ~11-12) free of per-vehicle detail.
-    expect(VEHICLE_MINZOOM).toBeGreaterThan(12);
+    expect(VEHICLE_MINZOOM).toBeGreaterThanOrEqual(14);
     expect(VEHICLE_MINZOOM).toBeLessThan(14.1);
   });
 });

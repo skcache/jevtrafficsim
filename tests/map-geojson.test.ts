@@ -39,6 +39,9 @@ describe("Chicago GeoJSON", () => {
     // The old hand-drawn southeast spike put a large fake land triangle in the lake.
     expect(pointInPolygon([-87.5985, 41.8912], NAVY_PIER_LAND)).toBe(false);
     expect(pointInPolygon([-87.6055, 41.8900], LAKE_MICHIGAN_WATER)).toBe(true);
+    // Fitting the whole trip must not expose the clipped lake's east/south edge.
+    expect(pointInPolygon([-87.58, 41.89], LAKE_MICHIGAN_WATER)).toBe(true);
+    expect(pointInPolygon([-87.58, 41.85], LAKE_MICHIGAN_WATER)).toBe(true);
     expect(pointInPolygon([-87.6055, 41.8900], NAVY_PIER_LAND)).toBe(false);
     expect(pointInPolygon([-87.6170, 41.8640], MUSEUM_CAMPUS_PARK)).toBe(true);
     expect(buildShowcaseGeoJson(chicagoModel(2)).coastalLand.features).toHaveLength(0);
