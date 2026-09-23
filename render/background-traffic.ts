@@ -122,10 +122,14 @@ export function createBackgroundTrafficTracker(): BackgroundTrafficTracker {
         for (const sprite of survivors) {
           const queued = queuedKeys.has(sprite.key);
           const end = queued ? stop : Math.max(sprite.progress, usableEnd);
-          const travelled = queued ? 0 : dtSeconds * speed;
-          const wrapped = !queued && travelled > 0 && sprite.progress + travelled > end;
+          // A growing queue can collapse the moving segment behind a survivor.
+          // Hold it there until space opens; wrapping through a made-up 6 m
+          // span would place it inside the queue on a short one-lane road.
+          const travelled = queued || usableEnd <= sprite.progress ? 0 : dtSeconds * speed;
+          const span = end - start;
+          const wrapped = travelled > 0 && span >= SPRITE_SPACING_M && sprite.progress + travelled > end;
           const progress = wrapped
-            ? start + ((sprite.progress + travelled - end) % Math.max(SPRITE_SPACING_M, end - start))
+            ? start + ((sprite.progress + travelled - end) % span)
             : Math.min(end, sprite.progress + travelled);
           next.push({ ...sprite, progress: Math.max(0, Math.min(road.length, progress)), queueRank: queued ? 0 : -1, wrapped });
         }

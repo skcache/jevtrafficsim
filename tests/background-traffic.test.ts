@@ -8,7 +8,7 @@ import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { laneCentreOffsetMetres, carriagewayPairs } from "@/render/road-presentation";
 import {
   createBackgroundTrafficTracker, renderBackgroundVehicles,
-  MAX_SPRITES_PER_ROAD, SPRITE_SPACING_M, type SyntheticVehicle,
+  KEY_STRIDE, MAX_SPRITES_PER_ROAD, SPRITE_SPACING_M, type SyntheticVehicle,
 } from "@/render/background-traffic";
 
 const model = chicagoModel(4); // frozen production Metro geography
@@ -111,6 +111,26 @@ describe("aggregate background presentation continuity", () => {
     const ends = halfway.filter((vehicle) => vehicle.id === wrapped!.key || vehicle.id === wrapped!.key + 1_000_000_000);
     expect(ends).toHaveLength(2);
     expect(ends.every((vehicle) => vehicle.fade === 0.5)).toBe(true);
+  });
+
+  it("holds a moving sprite when a one-lane queue leaves no usable segment", () => {
+    // Frozen Metro road 273 is 35.41 m long. With two queued cars, the one
+    // survivor starts exactly one display spacing behind the queue tail.
+    const road = model.city.roads[273];
+    expect(road.lanes).toBe(1);
+    const tracker = createBackgroundTrafficTracker();
+    const initial = tracker.update(snapshot(road.id, 3, 0, 1, 0), options).current;
+    const queued = tracker.update(snapshot(road.id, 3, 2, 1, 1_000), options).current;
+    const held = tracker.update(snapshot(road.id, 3, 2, 1, 2_000), options).current;
+    const moving = initial.find((sprite) => sprite.key === road.id * KEY_STRIDE)!;
+    const survivor = queued.find((sprite) => sprite.key === moving.key)!;
+    const next = held.find((sprite) => sprite.key === moving.key)!;
+    const queueTail = Math.min(...held.filter((sprite) => sprite.queueRank >= 0).map((sprite) => sprite.progress));
+    expect(survivor.progress).toBe(moving.progress);
+    expect(next.progress).toBe(moving.progress);
+    expect(survivor.wrapped).toBe(false);
+    expect(next.wrapped).toBe(false);
+    expect(queueTail - next.progress).toBeGreaterThanOrEqual(SPRITE_SPACING_M);
   });
 
   it("caps physical density on real sub-metre and 4-5m Chicago roads", () => {
