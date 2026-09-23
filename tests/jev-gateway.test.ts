@@ -17,6 +17,7 @@ import {
   buildEvaluationsBody,
   createGatewayJevClient,
   JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS,
+  JEV_GATEWAY_DEFAULT_REGION_QUESTIONS,
   JEV_GATEWAY_ENDPOINT,
   JEV_GATEWAY_MODEL,
   JEV_PRESSURE_BUCKETS,
@@ -126,9 +127,15 @@ describe("gateway evaluation request", () => {
       id.startsWith("corridor:"),
     );
     expect(corridorQuestions).toHaveLength(JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS);
-    // Busiest first: corridor 1 has the longest queue, corridor 8 the 8th.
+    // Busiest first. The live-proven default stays at eight questions total:
+    // citywide pressure + hint, then weights and intents for two corridors and
+    // one region. More questions made the production-state Gateway return 503.
     expect(corridorQuestions).toContain("corridor:1");
-    expect(corridorQuestions).not.toContain("corridor:9");
+    expect(corridorQuestions).toContain("corridor:2");
+    expect(corridorQuestions).not.toContain("corridor:3");
+    expect(Object.keys(body.questions)).toHaveLength(
+      2 + 2 * (JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS + JEV_GATEWAY_DEFAULT_REGION_QUESTIONS),
+    );
   });
 
   it("asks only choice questions, each with a criteria record", () => {
@@ -182,7 +189,7 @@ describe("gateway answer translation", () => {
   });
 
   it("uses the selected Gateway probability and drops uncertain or malformed choices", () => {
-    const body = buildEvaluationsBody(request());
+    const body = buildEvaluationsBody(request(), { corridorQuestions: 4 });
     const policy = policyFromEvaluations(body, {
       answers: {
         pressure: { choice: "urgent", probabilities: { urgent: 0.8 } },
