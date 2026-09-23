@@ -11,7 +11,7 @@ import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-mod
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import type { Point } from "@/cities/paths";
 import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
-import { MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NAVY_PIER_SOUTH_WATER } from "./coastal-corrections";
+import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND } from "./coastal-corrections";
 
 export type LngLat = readonly [number, number];
 
@@ -164,6 +164,13 @@ function compactnessOf(ring: readonly (readonly number[])[]): number {
   return perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 1;
 }
 
+/** The frozen Navy Pier extract includes two large triangular park fragments. */
+function isNavyParkFragment(projection: Projection, ring: readonly Point[]): boolean {
+  if (ring.length > 4) return false;
+  const [lon, lat] = toLngLat(projection, ring[0]);
+  return lon >= -87.613 && lon <= -87.602 && lat >= 41.893 && lat <= 41.897;
+}
+
 export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
@@ -197,6 +204,18 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
         }]
       : [],
   };
+  // The frozen extract's largest lake ring loops through the river and across
+  // the pier. Split its river arm from the bad lake fill, then draw one coherent
+  // lake presentation polygon. The underlying model is not mutated.
+  const foldedLake = metro
+    ? model.water.find((entry) => entry.kind === "lake" && entry.rings[0].length > 60)
+    : undefined;
+  const riverArm = foldedLake
+    ? [
+        ...foldedLake.rings[0].slice(0, 31),
+        ...foldedLake.rings[0].slice(52),
+      ]
+    : null;
   const land: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: [
@@ -218,6 +237,7 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
     type: "FeatureCollection",
     features: [
       ...model.water
+        .filter((entry) => entry !== foldedLake)
         .filter((entry) => {
           // The Chicago River is intentionally long and thin, so compactness is
           // the wrong metric for the major water that actually orients the city.
@@ -240,11 +260,14 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
             areaM2: Math.round(entry.areaM2),
           }),
         ),
+      ...(riverArm && riverArm.length >= 4
+        ? [polygonFeature(projection, [riverArm], { id: "chicago-river-arm", kind: "river", areaM2: 250_000 })]
+        : []),
       ...(metro
         ? [{
             type: "Feature" as const,
-            properties: { id: "navy-pier-south-water", kind: "lake", areaM2: 250_000 },
-            geometry: { type: "Polygon" as const, coordinates: [NAVY_PIER_SOUTH_WATER] },
+            properties: { id: "lake-michigan", kind: "lake", areaM2: 5_000_000 },
+            geometry: { type: "Polygon" as const, coordinates: [LAKE_MICHIGAN_WATER] },
           }]
         : []),
     ],
@@ -259,7 +282,8 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
         .filter(
           (entry) =>
             entry.areaM2 >= PRESENTATION_PARK_MIN_AREA_M2 &&
-            compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS,
+            compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS &&
+            !(metro && isNavyParkFragment(projection, entry.rings[0])),
         )
         .map((entry, index) =>
           polygonFeature(projection, entry.rings, {
