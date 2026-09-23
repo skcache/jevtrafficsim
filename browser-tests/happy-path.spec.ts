@@ -47,6 +47,7 @@ async function journey(page: Page, relayStatus: 200 | 503) {
       current.y - (window as Window & { __firstEgo?: { x: number; y: number } }).__firstEgo!.y) : 0;
   }), { timeout: 30_000 }).toBeGreaterThan(0.1);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
+  await expect(page.getByRole("status", { name: "Trip" })).toBeHidden();
   const panel = page.locator("[data-jev-provenance]");
   await expect(panel).toBeVisible();
   const policy = JSON.parse((await panel.getAttribute("data-jev-provenance")) ?? "null") as PresentationPolicy;
