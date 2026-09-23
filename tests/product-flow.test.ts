@@ -109,9 +109,10 @@ describe("the public setup", () => {
     expect(state.controller).toBe("jev");
     // A preview must not spend live model calls; the challenge must use Jev.
     const simulator = source("components/TrafficSimulator.tsx");
-    expect(simulator).toContain('return debugEnabled() ? store.controller : "adaptive";');
+    expect(simulator).toContain('function previewController(): ControllerChoice {\n  return "adaptive";');
     expect(simulator).toContain("controller: previewController(),");
-    expect(simulator).toContain("Enter City");
+    expect(simulator).toContain("const enterCity = useCallback(() => {");
+    expect(simulator).toContain("startRun();");
   });
 });
 

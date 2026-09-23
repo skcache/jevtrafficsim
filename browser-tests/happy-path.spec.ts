@@ -94,13 +94,22 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   await page.getByRole("button", { name: "Enter City" }).click();
   const hud = page.getByRole("status", { name: "Trip" });
   const lastControl = page.getByRole("button", { name: "Event Lets Out" });
+  const following = page.getByRole("button", { name: "Following the car" });
+  const scenario = page.getByRole("button", { name: "Scenario" });
   await expect(hud).toBeVisible();
   await expect(lastControl).toBeVisible();
+  await expect(following).toBeVisible();
+  await expect(scenario).toBeVisible();
   const hudBox = await hud.boundingBox();
   const firstControlBox = await page.getByRole("button", { name: "+5× Traffic" }).boundingBox();
   const lastControlBox = await lastControl.boundingBox();
-  expect(hudBox && firstControlBox && lastControlBox).toBeTruthy();
+  const followingBox = await following.boundingBox();
+  const scenarioBox = await scenario.boundingBox();
+  expect(hudBox && firstControlBox && lastControlBox && followingBox && scenarioBox).toBeTruthy();
   expect(lastControlBox!.x + lastControlBox!.width).toBeLessThanOrEqual(390);
+  expect(followingBox!.x + followingBox!.width).toBeLessThanOrEqual(390);
+  expect(scenarioBox!.x + scenarioBox!.width).toBeLessThanOrEqual(390);
+  expect(scenarioBox!.x).toBeGreaterThanOrEqual(followingBox!.x + followingBox!.width);
   expect(hudBox!.y + hudBox!.height).toBeLessThan(firstControlBox!.y);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
   await expect.poll(async () => page.evaluate(() =>

@@ -129,11 +129,13 @@ pnpm dev                        # http://localhost:3000
 With no Jev configuration the app runs entirely on the Adaptive fallback and labels it that
 way — a complete demo with no credentials at all.
 
-To point it at live Jev, set in `.env.local` (never committed):
+On Vercel, set `JEV_MODEL=typesafe-ai/jev`; the relay uses its request-scoped
+Vercel OIDC token for AI Gateway. For local runs outside Vercel, provide a valid
+AI Gateway key in `.env.local` (never committed):
 
 ```
 JEV_MODEL=typesafe-ai/jev
-JEV_TOKEN=<your Vercel AI Gateway key>
+JEV_TOKEN=<your local AI Gateway key>
 # optional
 JEV_MIN_CONFIDENCE=0.25
 JEV_TIMEOUT_MS=12000   # the free evaluation tier is variable; a tight
@@ -142,6 +144,10 @@ JEV_TIMEOUT_MS=12000   # the free evaluation tier is variable; a tight
 
 `JEV_ENDPOINT` is the alternative backend: a service that speaks the Jev policy schema
 directly. The two are never mixed — `JEV_MODEL` selects the gateway.
+The default policy refresh is every 20 simulated seconds (about 2.5 wall-clock
+seconds in the 8× browser playback); the previous 5-second cadence hit AI Gateway
+429s during a full run. A timed-out or rate-limited request remains an explicit
+Adaptive fallback, never a hidden live policy.
 
 For a public deployment, configure a matching Vercel Firewall rate-limit rule and set
 `JEV_RATE_LIMIT_ID` to its id. The route's in-memory budget is per serverless instance,

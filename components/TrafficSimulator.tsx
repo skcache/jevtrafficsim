@@ -76,8 +76,7 @@ function debugEnabled(): boolean {
  * calls. "Enter City" starts the real thing.
  */
 function previewController(): ControllerChoice {
-  const store = useUiStore.getState();
-  return debugEnabled() ? store.controller : "adaptive";
+  return "adaptive";
 }
 
 function updateDebugHook(event: WorkerEvent): void {

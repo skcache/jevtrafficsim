@@ -103,7 +103,7 @@ async function main(): Promise<void> {
   const clickText = async (label: string): Promise<boolean> =>
     page.evaluate((wanted) => {
       const elements = Array.from(document.querySelectorAll("button, a")) as HTMLElement[];
-      const target = elements.find((element) => element.innerText.trim() === wanted);
+      const target = elements.find((element) => element.innerText.trim().toUpperCase() === wanted.toUpperCase());
       if (!target) {
         return false;
       }
@@ -144,8 +144,9 @@ async function main(): Promise<void> {
   for (let waited = 0; waited < 24; waited += 1) {
     await new Promise((resolve) => setTimeout(resolve, 7_500));
     const body = await text();
-    // The panel's own header, uppercase on screen; the column labels come with it.
-    if (has(body, "Same scenario") && (has(body, "Fixed") || has(body, "Adaptive"))) {
+    // The first payoff is the trip-first summary. The full same-scenario table
+    // is deliberately collapsed behind See details in the current UI.
+    if (has(body, "Who got there first") && has(body, "Fixed") && has(body, "Adaptive")) {
       comparison = body;
       break;
     }
@@ -153,6 +154,10 @@ async function main(): Promise<void> {
   if (comparison === "") {
     throw new Error("comparison panel did not appear");
   } else {
+    if (!await clickText("See details")) throw new Error("comparison details did not open");
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    comparison = await text();
+    if (!has(comparison, "Same scenario")) throw new Error("comparison details did not appear");
     const columns = (comparison.match(/Same scenario · three runs\s*\n\s*([0-9a-f]{8})\s*\n\s*([^\n]*)\n([^\n]*)\n([^\n]*)/i) ?? []).slice(1);
     console.log("payoff fingerprint:", columns[0] ?? "(none)");
     console.log("payoff column headers:", columns.slice(1).join(" | "));
@@ -206,7 +211,7 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  const reason = error instanceof Error && /^(comparison panel|completed run|run has|invalid policy|policy outcomes|governed time|public label|zero accepted|no live Jev)/.test(error.message)
+  const reason = error instanceof Error && /^(comparison panel|comparison details|completed run|run has|invalid policy|policy outcomes|governed time|public label|zero accepted|no live Jev)/.test(error.message)
     ? error.message
     : "browser smoke failed";
   console.error(`Deployed smoke FAILED: ${reason}`);

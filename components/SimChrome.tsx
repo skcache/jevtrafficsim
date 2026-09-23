@@ -390,13 +390,14 @@ export function SimChrome(props: SimChromeProps) {
                   <circle cx="6.5" cy="6.5" r="2.1" />
                   <path d="M6.5 1.4v1.9M6.5 9.7v1.9M1.4 6.5h1.9M9.7 6.5h1.9" />
                 </svg>
-                {props.following ? "Following" : "Recenter"}
+                <span className="hidden sm:inline">{props.following ? "Following" : "Recenter"}</span>
               </button>
               <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
               <button
                 type="button"
                 onClick={() => setScenarioOpen(!scenarioOpen)}
                 aria-expanded={scenarioOpen}
+                aria-label="Scenario"
                 className={`flex h-[30px] items-center gap-[6px] rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
                   scenarioOpen ? "bg-ink/[0.06] text-ink" : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
                 } focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/25`}
@@ -407,7 +408,7 @@ export function SimChrome(props: SimChromeProps) {
                   <circle cx="8.4" cy="6.5" r="1.2" fill="currentColor" stroke="none" />
                   <circle cx="5.8" cy="9" r="1.2" fill="currentColor" stroke="none" />
                 </svg>
-                Scenario
+                <span className="hidden sm:inline">Scenario</span>
               </button>
             </div>
             <AnimatePresence>

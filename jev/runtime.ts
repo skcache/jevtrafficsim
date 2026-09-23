@@ -59,10 +59,12 @@ import {
 } from "./trace";
 
 export const JEV_RUNTIME_DEFAULTS = {
-  /** Simulated ms between citywide requests. */
-  REFRESH_MS: 5_000,
+  /** Simulated ms between citywide requests. At 8x playback the old 5 s
+   * cadence sent about 90/min and the live Gateway returned 429 repeatedly;
+   * 20 s targets about 23/min without changing any simulation timestep. */
+  REFRESH_MS: 20_000,
   /** Simulated ms a policy stays valid after acceptance (three windows). */
-  TTL_MS: 15_000,
+  TTL_MS: 60_000,
   /** Simulated ms a newly accepted policy is held before another may replace it. */
   MIN_HOLD_MS: 5_000,
 } as const;
