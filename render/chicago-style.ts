@@ -325,7 +325,7 @@ export function buildChicagoStyle(geo: ShowcaseGeoJson): StyleSpecification {
       filter: ["!=", ["get", "kind"], "lake"],
       paint: { "line-color": palette.waterShore, "line-width": zoomWidth(1.4, 2.4, 4) },
     },
-    // Cover the extract's lake triangle across the built Navy Pier footprint.
+    // Preserve the built Navy Pier footprint over the presentation lake.
     { id: "coastal-land", type: "fill", source: "coastal-land", paint: { "fill-color": palette.land } },
     {
       id: "parks",

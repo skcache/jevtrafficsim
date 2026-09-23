@@ -11,7 +11,7 @@ import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-mod
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import type { Point } from "@/cities/paths";
 import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
-import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND } from "./coastal-corrections";
+import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NORTHERLY_ISLAND_PARK } from "./coastal-corrections";
 
 export type LngLat = readonly [number, number];
 
@@ -171,6 +171,15 @@ function isNavyParkFragment(projection: Projection, ring: readonly Point[]): boo
   return lon >= -87.613 && lon <= -87.602 && lat >= 41.893 && lat <= 41.897;
 }
 
+/** Metro clipping splits the Museum Campus and Northerly Island into wedges. */
+function isClippedMuseumPark(projection: Projection, ring: readonly Point[]): boolean {
+  const points = ring.map((point) => toLngLat(projection, point));
+  const lons = points.map(([lon]) => lon);
+  const lats = points.map(([, lat]) => lat);
+  return Math.min(...lons) >= -87.619 && Math.max(...lons) <= -87.605 &&
+    Math.min(...lats) >= 41.861 && Math.max(...lats) <= 41.8673;
+}
+
 export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
@@ -283,7 +292,8 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
           (entry) =>
             entry.areaM2 >= PRESENTATION_PARK_MIN_AREA_M2 &&
             compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS &&
-            !(metro && isNavyParkFragment(projection, entry.rings[0])),
+            !(metro && (isNavyParkFragment(projection, entry.rings[0]) ||
+              isClippedMuseumPark(projection, entry.rings[0]))),
         )
         .map((entry, index) =>
           polygonFeature(projection, entry.rings, {
@@ -297,6 +307,10 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
             type: "Feature" as const,
             properties: { id: "museum-campus-green", kind: "major", areaM2: 300_000 },
             geometry: { type: "Polygon" as const, coordinates: [MUSEUM_CAMPUS_PARK] },
+          }, {
+            type: "Feature" as const,
+            properties: { id: "northerly-island-green", kind: "major", areaM2: 500_000 },
+            geometry: { type: "Polygon" as const, coordinates: [NORTHERLY_ISLAND_PARK] },
           }]
         : []),
     ],
