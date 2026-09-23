@@ -20,6 +20,7 @@ import {
   JEV_GATEWAY_DEFAULT_REGION_QUESTIONS,
   JEV_GATEWAY_ENDPOINT,
   JEV_GATEWAY_MODEL,
+  JEV_GATEWAY_STATE_LIMITS,
   JEV_PRESSURE_BUCKETS,
   JEV_WEIGHT_BUCKETS,
   policyFromEvaluations,
@@ -146,8 +147,15 @@ describe("gateway evaluation request", () => {
       expect(question, id).not.toHaveProperty("question");
       expect(Object.keys(question.criteria).length, id).toBeGreaterThanOrEqual(2);
     }
-    // The state is the bounded request itself — nothing else is disclosed.
-    expect(body.state).toEqual(policyRequest);
+    // The Gateway receives a compact citywide digest, not every request entry
+    // or a vehicle-level target. Ids remain the same as the validated request.
+    const state = body.state as Record<string, unknown>;
+    expect(state.city).toEqual(policyRequest.city);
+    expect(state.totalCorridors).toBe(policyRequest.corridors.length);
+    expect((state.corridors as unknown[]).length).toBeLessThanOrEqual(JEV_GATEWAY_STATE_LIMITS.corridors);
+    expect((state.regions as unknown[]).length).toBeLessThanOrEqual(JEV_GATEWAY_STATE_LIMITS.regions);
+    expect((state.hotspots as unknown[]).length).toBeLessThanOrEqual(JEV_GATEWAY_STATE_LIMITS.hotspots);
+    expect(JSON.stringify(body)).not.toMatch(/ego|destination|route/i);
   });
 });
 

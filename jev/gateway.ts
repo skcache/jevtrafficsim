@@ -153,6 +153,8 @@ export interface GatewayJevClientOptions {
 export const JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS = 1;
 export const JEV_GATEWAY_DEFAULT_REGION_QUESTIONS = 1;
 export const JEV_GATEWAY_TIMEOUT_MS = 15_000;
+/** The Gateway's evaluated state is a citywide digest, never vehicle-level data. */
+export const JEV_GATEWAY_STATE_LIMITS = { corridors: 8, regions: 6, hotspots: 4 } as const;
 
 interface EvaluationsQuestion {
   readonly type: "choice";
@@ -250,7 +252,23 @@ export function buildEvaluationsBody(
 
   return {
     model: options.model ?? JEV_GATEWAY_MODEL,
-    state: request,
+    // The relay validates the full request and its ids. The evaluation model
+    // only needs the city totals and the busiest aggregate witnesses: sending
+    // every bounded entry (18 KB in rush hour) made the live Gateway return
+    // 503 even for two questions. This digest remains deterministic, citywide,
+    // and free of the watched car's identity, route or destination.
+    state: {
+      schemaVersion: request.schemaVersion,
+      timeMs: request.timeMs,
+      windowMs: request.windowMs,
+      city: request.city,
+      totalCorridors: request.corridors.length,
+      totalRegions: request.regions.length,
+      totalHotspots: request.hotspots.length,
+      corridors: busiest(request.corridors, JEV_GATEWAY_STATE_LIMITS.corridors, (entry) => entry.corridorId),
+      regions: busiest(request.regions, JEV_GATEWAY_STATE_LIMITS.regions, (entry) => entry.regionId),
+      hotspots: busiest(request.hotspots, JEV_GATEWAY_STATE_LIMITS.hotspots, (entry) => entry.intersectionId),
+    },
     questions,
   };
 }
