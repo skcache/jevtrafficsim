@@ -40,10 +40,6 @@ import {
 } from "@/render/interpolate";
 import { clampVehiclesAtSignals } from "@/render/queue-packing";
 import {
-  createBackgroundTrafficTracker,
-  renderBackgroundVehicles,
-} from "@/render/background-traffic";
-import {
   carriagewayPairs,
   laneCentreOffsetMetres,
   widthMetresForRoad,
@@ -119,8 +115,6 @@ export interface MapHandle {
   getZoom: () => number;
   /** Resume following the ego car, easing back to it (Issue #25). */
   followEgo: () => void;
-  /** Show the completed trip in city context behind its result. */
-  frameCompletedTrip: () => void;
   isFollowing: () => boolean;
 }
 
@@ -145,8 +139,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
-  const backgroundTrackerRef = useRef(createBackgroundTrafficTracker());
-  const backgroundGenerationRef = useRef(-1);
   /** Per-road lng/lat paths + physical widths, for the whole-city traffic layer. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   /** Static low-prominence signal network: citywide system context, no worker payload. */
@@ -412,40 +404,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           });
         }
       },
-      frameCompletedTrip: () => {
-        // Respect a visitor who deliberately panned away. Otherwise, staying
-        // zoomed in on the pier leaves the result over nearly empty lake.
-        if (!followRef.current.following) return;
-        const trip = frames.current.current?.trip;
-        const city = modelRef.current;
-        if (!trip || !city) return;
-        const origin = city.city.intersections[trip.originIntersectionId];
-        const destination = city.city.intersections[trip.destinationIntersectionId];
-        if (!origin || !destination) return;
-        const bounds = {
-          minX: Math.min(origin.x, destination.x),
-          minY: Math.min(origin.y, destination.y),
-          maxX: Math.max(origin.x, destination.x),
-          maxY: Math.max(origin.y, destination.y),
-        };
-        for (const roadId of trip.routeRoadIds) {
-          for (const [x, y] of city.directedPaths[roadId] ?? []) {
-            bounds.minX = Math.min(bounds.minX, x);
-            bounds.minY = Math.min(bounds.minY, y);
-            bounds.maxX = Math.max(bounds.maxX, x);
-            bounds.maxY = Math.max(bounds.maxY, y);
-          }
-        }
-        const duration = 1000;
-        const padding = Math.min(88, Math.round(Math.min(map.getContainer().clientWidth, map.getContainer().clientHeight) * 0.12));
-        ownCameraFor(duration);
-        map.fitBounds(cameraBoundsLngLat(city, bounds), {
-          padding,
-          duration,
-          maxZoom: 15.4,
-          easing: (t) => 1 - Math.pow(1 - t, 3),
-        });
-      },
+      // Deliberately no "frame the whole trip" move on arrival: measured, it
+      // pulled the result back to zoom 13.6 - a city-wide view over mostly lake,
+      // which read as the map losing the thread rather than as a finish. The
+      // camera stays with the car; the result card takes the middle.
       isFollowing: () => followRef.current.following,
     };
 
@@ -632,31 +594,12 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // positions with a free-space x/y lerp: that smoothing can leave the
         // carriageway on curves and was the source of drifting vehicles.
         const settled = vehicles;
-        // Background traffic (presentation-only). The frame carries the
-        // simulation's per-road counts, not vehicle objects, so the fleet is
-        // synthesised from those counts and drawn with the same road rules as the
-        // ego: on the path, in a stable lane, nose along the tangent. Without it
-        // the map showed one car on an empty-looking city.
-        if (backgroundGenerationRef.current !== buffer.generation) {
-          backgroundTrackerRef.current.reset();
-          backgroundGenerationRef.current = buffer.generation;
-        }
-        const backgroundPair = backgroundTrackerRef.current.update(buffer.current, {
-            city: buffer.model.city,
-            laneOffsets,
-            egoRoadId: buffer.current?.ego?.roadId ?? null,
-          });
-        const background = renderBackgroundVehicles(
-          backgroundPair.previous,
-          backgroundPair.current,
-          alpha,
-          {
-            indexes: buffer.paths,
-            egoRoadId: buffer.current?.ego?.roadId ?? null,
-            egoProgress: displayEgoProgress?.progress ?? null,
-          },
-        );
-        const fleet = background.length === 0 ? settled : [...settled, ...background];
+        // One car, one route, and the road colours underneath: the city's own
+        // congestion overlay carries the traffic story. A synthesised fleet of
+        // sprites was tried and removed - at 6 000+ sprites it read as grey
+        // confetti, and its cars sat on parks, water and each other because a
+        // per-road count is not a set of vehicle positions.
+        const fleet = settled;
         // Debug-only readout of what the renderer is actually working with:
         // how many sprites the fleet synthesised, and what the zoom grammar is
         // allowing through. `?debug` is the product's own debug path.

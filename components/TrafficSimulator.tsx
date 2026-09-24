@@ -311,7 +311,6 @@ export function TrafficSimulator() {
         case "RUN_COMPLETE": {
           store.setRunning(false);
           store.setRunComplete(true);
-          mapHandleRef.current?.frameCompletedTrip();
           // Remember WHICH world finished, so a READY for that same world cannot
           // erase the outcome (see applyReady).
           store.setCompletedFingerprint(store.scenarioFingerprint);
