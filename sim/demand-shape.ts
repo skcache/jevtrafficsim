@@ -38,6 +38,14 @@ export interface DemandShapeContext {
   readonly core: ReadonlySet<IntersectionId>;
   /** Longest-budget corridors' endpoints — the arterial proxy. */
   readonly arterial: ReadonlySet<IntersectionId>;
+  /**
+   * Endpoints of expressway-kind roads: the commute spine (IDOT AADT: the
+   * expressways carry the largest volumes, so a Chicago morning peak should be
+   * loading THESE, not arbitrary local blocks).
+   */
+  readonly highways: ReadonlySet<IntersectionId>;
+  /** Endpoints of arterial-kind roads — IDOT functional classification. */
+  readonly arterialRoads: ReadonlySet<IntersectionId>;
   /** Endpoints of bridge roads — where crossings land. */
   readonly bridges: ReadonlySet<IntersectionId>;
   /** The single busiest intersection: where an event lets out. */
@@ -60,6 +68,8 @@ export function shapeContext(city: City): DemandShapeContext {
   const degree = new Map<IntersectionId, number>();
   const bridgeEnds: IntersectionId[] = [];
   const arterialScore = new Map<IntersectionId, number>();
+  const highwayEnds = new Set<IntersectionId>();
+  const arterialEnds = new Set<IntersectionId>();
 
   for (const road of city.roads) {
     const from = road.from;
@@ -68,6 +78,14 @@ export function shapeContext(city: City): DemandShapeContext {
     degree.set(to, (degree.get(to) ?? 0) + 1);
     if (road.kind === "bridge") {
       bridgeEnds.push(from, to);
+    }
+    if (road.kind === "highway") {
+      highwayEnds.add(from);
+      highwayEnds.add(to);
+    }
+    if (road.kind === "arterial") {
+      arterialEnds.add(from);
+      arterialEnds.add(to);
     }
     // An arterial is a road that carries you a long way quickly: length over
     // free-flow travel time is exactly its speed limit, so rank by length and
@@ -91,10 +109,10 @@ export function shapeContext(city: City): DemandShapeContext {
   const bridges = new Set(bridgeEnds);
   const venue = byValueThenId(degree.entries(), true)[0] ?? 0;
 
-  return { core, arterial, bridges, venue };
+  return { core, arterial, bridges, venue, highways: highwayEnds, arterialRoads: arterialEnds };
 }
 
-const SHAPES: Record<DemandShapeName, DemandShape> = {
+export const SHAPES: Record<DemandShapeName, DemandShape> = {
   uniform: {
     name: "uniform",
     weight: () => 1,
@@ -102,9 +120,20 @@ const SHAPES: Record<DemandShapeName, DemandShape> = {
   /** Morning peak: anywhere → downtown. */
   "downtown-bound": {
     name: "downtown-bound",
+    /**
+     * Morning peak, weighted by the real road hierarchy rather than by length:
+     * a commute runs from an expressway-adjacent street, along the expressway,
+     * and exits at an expressway junction into the core. Pair weights are
+     * relative (the tournament compares them), so this redistributes WHERE the
+     * same volume goes - a highway pair scores 9 against a random local pair's
+     * 1, while local pairs keep their base weight and still carry traffic.
+     */
     weight: (origin, destination, context) => {
       let weight = 1;
       if (context.core.has(destination)) weight += 6;
+      if (context.highways.has(origin)) weight += 5;
+      if (context.highways.has(destination)) weight += 3;
+      if (context.arterialRoads.has(origin)) weight += 2;
       if (context.arterial.has(origin)) weight += 1;
       return weight;
     },

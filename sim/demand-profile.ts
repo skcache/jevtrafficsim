@@ -32,8 +32,13 @@ import type { TrafficLevel } from "./types";
  * every curated trip still completing. 3.75x takes the red share to 10.2% at
  * the highest throughput that is not yet paying for it in starvation or waits
  * (4.0x: starvation 52 vs 31, p95 wait 223s vs 208s, for 1.3% more throughput).
+ *
+ * v3: the rush-hour shape now weights OD pairs by road FUNCTIONAL CLASS
+ * (expressway endpoints > arterial endpoints > everything else) instead of
+ * carrying a flat base weight for every pair, so the same 3.75x volume lands on
+ * the roads Chicago actually loads.
  */
-export const DEMAND_PROFILE_VERSION = 2;
+export const DEMAND_PROFILE_VERSION = 3;
 
 export interface DemandProfile {
   /** Volume multiplier on the level's active-vehicle target. */
@@ -55,10 +60,11 @@ export const PRODUCTION_DEMAND: Record<TrafficLevel, DemandProfile> = {
   // Commuter-weighted: long fast corridors carry most of the load, which is what
   // produces the "many roads busy, a few congested" Everyday look.
   everyday: { multiplier: 2.25, shape: "corridor-heavy", label: "everyday-2.25-corridor-v1" },
-  // Downtown-bound morning peak: anywhere -> core, which stacks queues on the
-  // approaches into the Loop instead of spreading them evenly. 3.75x is the
-  // measured ceiling of the usable range - see DEMAND_PROFILE_VERSION.
-  "rush-hour": { multiplier: 3.75, shape: "downtown-bound", label: "rush-3.75-downtown-v1" },
+  // Downtown-bound morning peak: anywhere -> core along the road hierarchy -
+  // expressway endpoints dominate the OD weights, arterials next, so the load
+  // lands where Chicago actually puts it. 3.75x is the measured ceiling of the
+  // usable range - see DEMAND_PROFILE_VERSION.
+  "rush-hour": { multiplier: 3.75, shape: "downtown-bound", label: "rush-3.75-downtown-v2" },
 };
 
 export function demandProfileFor(level: TrafficLevel): DemandProfile {
