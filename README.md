@@ -150,12 +150,18 @@ seconds in the 8× browser playback); the previous 5-second cadence hit AI Gatew
 Adaptive fallback, never a hidden live policy.
 
 For a public deployment, configure a matching Vercel Firewall rate-limit rule and set
-`JEV_RATE_LIMIT_ID` to its id. The route's in-memory budget is per serverless instance,
-not a production-wide cost limit. Verify the dashboard rule separately; repository tests
-cannot prove it exists. `/api/build` exposes the deployed commit SHA (or `unknown` when
-the platform provides no build identity). The manual Jev production smoke is separate
-from routine CI and must prove a completed run used live policy before calling a release
-live-Jev verified.
+`JEV_RATE_LIMIT_ID` to its **Rate Limit API ID** — the handle the rule's condition matches,
+printed by `vercel firewall rules inspect <rule>` as `Conditions: rate limit API ID equals
+<value>`. Do **not** use the rule's own generated `rule_...` identifier: the CLI accepts it,
+and at runtime the SDK's lookup finds no rule, the route logs
+`no Vercel Firewall rate-limit rule matches JEV_RATE_LIMIT_ID`, and only the per-instance
+budget is active. Environment variables reach the running deployment only on a new
+deployment, so redeploy after changing this. The route's in-memory budget is per serverless
+instance, not a production-wide cost limit. Verify the rule with
+`vercel firewall rules inspect` — repository tests cannot prove it exists. `/api/build`
+exposes the deployed commit SHA (or `unknown` when the platform provides no build identity).
+The manual Jev production smoke is separate from routine CI and must prove a completed run
+used live policy before calling a release live-Jev verified.
 
 ## Developer flags
 
