@@ -80,6 +80,7 @@ import {
 } from "@/render/contextual-controls";
 import { buildControlLayers } from "@/render/control-layers";
 import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
+import { deriveLocalTraffic, LOCAL_TRAFFIC } from "@/render/local-traffic";
 import { SIM_TICK_MS } from "@/worker/protocol";
 import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 import type { FrameBuffer } from "./frame-buffer";
@@ -628,7 +629,28 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // simulation's own, so it keeps the authoritative progress (already
         // corrected to the rendered stop line by the interpolation's own
         // stop-line warp, so nothing else may move it.
-        const vehicles = interpolated;
+        // Background context, derived from the simulation's own per-road
+        // aggregates: restrained, deterministic, road-locked, and only around
+        // the ego (issue #56). The ego stays the only vehicle with authority -
+        // these are drawn by the muted fleet layers and never enter the
+        // simulation, the controller, the routing or the comparison.
+        const localTraffic = buffer.current
+          ? deriveLocalTraffic({
+              model: buffer.model,
+              indexes: buffer.paths,
+              laneOffsets,
+              roadTraffic: buffer.current.roadTraffic,
+              ego:
+                interpolated[0] !== undefined
+                  ? {
+                      x: interpolated[0].x,
+                      y: interpolated[0].y,
+                      roadId: interpolated[0].roadId,
+                    }
+                  : null,
+            })
+          : [];
+        const vehicles = [...interpolated, ...localTraffic];
         // Every rendered position now comes directly from a road path, a bounded
         // junction turn, or queue packing on that same road. Do not "settle"
         // positions with a free-space x/y lerp: that smoothing can leave the
@@ -702,6 +724,26 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               );
             })(),
             controlCount: controlsRef.current.length,
+            // Classification for the highway-control audit: what is on screen,
+            // how far ahead, whether it is retiring behind the car, and how much
+            // of the ego's own road remains. A control that lies ON the ego's own
+            // road while that road is expressway-class is the bogus case.
+            controlDetails: controlsRef.current.map((control) => ({
+              id: control.intersectionId,
+              kind: control.kind,
+              d: Number(control.distanceAheadM.toFixed(1)),
+              life: control.lifecycle,
+              prom: control.prominence,
+            })),
+            egoRemainingM:
+              buffer.current?.ego && buffer.current.ego.roadId !== null
+                ? (() => {
+                    const road = buffer.model.city.roads[buffer.current!.ego!.roadId!];
+                    return road ? Number((road.length - buffer.current!.ego!.progress).toFixed(1)) : null;
+                  })()
+                : null,
+            localFleet: localTraffic.length,
+            localTrafficBudget: LOCAL_TRAFFIC.maxTotal,
             pxPerMetre: mapRef.current
               ? (() => {
                   const projection = modelRef.current!.projection;
