@@ -82,12 +82,17 @@ export const CONTROL_SCALE = {
    * network marker and grows continuously as the ego approaches. This is the
    * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
    */
-  signalBaseHeightM: 4.8,
-  signalHeightM: 10.5,
-  stopBaseHeightM: 4.4,
-  stopHeightM: 8.5,
-  minPixels: 4,
-  maxPixels: 48,
+  signalBaseHeightM: 6.2,
+  signalHeightM: 13.5,
+  stopBaseHeightM: 5.6,
+  stopHeightM: 11,
+  // The pixel FLOOR is what makes a control readable, and it is also what keeps
+  // it readable at a distance: measured at the follow zoom the map is
+  // 0.561 px per metre, so even a 13.5 m signal is only 7.6 px without it. 18 px
+  // is ~3x the previous rendered size (5.9 px) and holds out to the zoom levels
+  // a viewer actually uses (issue #56).
+  minPixels: 18,
+  maxPixels: 56,
   // Match the quiet network marker at emphasis=0, then fade to full strength
   // as the ego approaches. This makes the handoff visually continuous.
   opacityFloor: 0.3,
@@ -95,9 +100,9 @@ export const CONTROL_SCALE = {
 
 /** Tiny neutral signal heads that prove the whole-city control system exists. */
 export const NETWORK_CONTROL_SCALE = {
-  signalHeightM: 4.8,
-  minPixels: 3.5,
-  maxPixels: 12,
+  signalHeightM: 5.6,
+  minPixels: 6,
+  maxPixels: 16,
   opacity: 0.3,
   minZoom: 12.8,
 } as const;

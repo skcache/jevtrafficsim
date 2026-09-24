@@ -38,7 +38,6 @@ import {
   interpolateVehicles,
   smoothRenderClock,
 } from "@/render/interpolate";
-import { clampVehiclesAtSignals } from "@/render/queue-packing";
 import {
   carriagewayPairs,
   laneCentreOffsetMetres,
@@ -82,6 +81,7 @@ import {
 import { buildControlLayers } from "@/render/control-layers";
 import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
 import { SIM_TICK_MS } from "@/worker/protocol";
+import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 import type { FrameBuffer } from "./frame-buffer";
 
 /**
@@ -609,17 +609,15 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
               city: buffer.model.city,
             })
           : [];
-        // Presentation-only queue packing: same simulation state, same pixels.
-        const signalClamped = buffer.current
-          ? clampVehiclesAtSignals(
-              buffer.model.city,
-              buffer.paths,
-              laneOffsets,
-              interpolated,
-              (id) => progress.get(id) ?? 0,
-              buffer.current.routeControls,
-            )
-          : [];
+        // The stop-line clamp that used to run here is GONE (issue #56).
+        //
+        // It re-placed any vehicle whose APPROACH was not permitted onto the
+        // painted stop line, comparing the raw interpolated progress against it.
+        // The interpolation now warps the final approach so the simulation's node
+        // maps onto the line by construction, which makes the clamp redundant for
+        // queued cars and actively wrong for moving ones: a car crossing on a
+        // phase change was yanked several metres backwards mid-motion. One
+        // mechanism, in one place, with a continuous derivative.
         // The followed car is NOT queue-packed.
         //
         // Packing exists to make a queue read as one object: it re-places each
@@ -628,10 +626,9 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // a single frame, i.e. the car the user is watching jumps at every red
         // light. The protagonist is the one vehicle whose position must be the
         // simulation's own, so it keeps the authoritative progress (already
-        // corrected to the rendered stop line by the interpolation) and only the
-        // bounded signal clamp, which never moves it more than a fraction of a
-        // metre.
-        const vehicles = signalClamped;
+        // corrected to the rendered stop line by the interpolation's own
+        // stop-line warp, so nothing else may move it.
+        const vehicles = interpolated;
         // Every rendered position now comes directly from a road path, a bounded
         // junction turn, or queue packing on that same road. Do not "settle"
         // positions with a free-space x/y lerp: that smoothing can leave the
@@ -671,8 +668,48 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                   })()
                 : null,
             egoProgress: buffer.current?.ego?.progress ?? null,
+            egoRoadId: buffer.current?.ego?.roadId ?? null,
+            tripCompleted: buffer.current?.trip?.completed ?? null,
             egoId: buffer.current?.ego?.id ?? null,
             egoSpeed: buffer.current?.ego?.speed ?? null,
+            // Motion root-cause instrumentation (issue #56): the frame's own
+            // numbers, so a probe can attribute a rendered step to the stop-line
+            // residual rather than guessing at it.
+            egoRoadLength:
+              buffer.current?.ego && buffer.current.ego.roadId !== null
+                ? (buffer.model.city.roads[buffer.current.ego.roadId]?.length ?? null)
+                : null,
+            egoRoadKind:
+              buffer.current?.ego && buffer.current.ego.roadId !== null
+                ? (buffer.model.city.roads[buffer.current.ego.roadId]?.kind ?? null)
+                : null,
+            egoPermitted: (() => {
+              const ego = buffer.current?.ego;
+              if (!ego || ego.roadId === null) return null;
+              const road = buffer.model.city.roads[ego.roadId];
+              if (!road) return null;
+              const signal = buffer.current?.routeControls.find(
+                (control) => control.intersectionId === road.to,
+              );
+              if (!signal) return null;
+              const groups = deriveApproachGroups(buffer.model.city, road.to);
+              if (groups.length === 0) return null;
+              return canApproachProceedForPhase(
+                groups,
+                signal.stage,
+                ((signal.phaseIndex % groups.length) + groups.length) % groups.length,
+                ego.roadId,
+              );
+            })(),
+            controlCount: controlsRef.current.length,
+            pxPerMetre: mapRef.current
+              ? (() => {
+                  const projection = modelRef.current!.projection;
+                  const a = mapRef.current!.project(metricToLngLat(projection, 0, 0));
+                  const b = mapRef.current!.project(metricToLngLat(projection, 100, 0));
+                  return Number((Math.hypot(b.x - a.x, b.y - a.y) / 100).toFixed(4));
+                })()
+              : null,
             // Render-clock state: the QA surface for animation smoothness. A
             // probe samples these per animation frame to see what the display
             // actually got, rather than inferring it from frame arrivals.

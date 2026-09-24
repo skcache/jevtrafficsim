@@ -172,6 +172,14 @@ export function deriveContextualControls(input: ContextualControlInput): Context
     if (!intersection) {
       continue;
     }
+    // Highway mainline travel has no surface-street control to meet. A node the
+    // graph marks as controlled can still belong to a surface street crossing
+    // underneath: the car on the expressway must not be shown a light for it
+    // (issue #56). Ramps and surface roads keep theirs, because for them the
+    // node IS their junction.
+    if (road.kind === "highway") {
+      continue;
+    }
     const kind = intersection.control;
     if (kind !== "signal" && kind !== "stop") {
       continue;
@@ -279,7 +287,7 @@ export function deriveContextualControls(input: ContextualControlInput): Context
   ) {
     const previousRoadId = trip.routeRoadIds[startIndex - 1];
     const previousRoad = city.roads[previousRoadId];
-    const previousIntersection = previousRoad
+    const previousIntersection = previousRoad && previousRoad.kind !== "highway"
       ? city.intersections[previousRoad.to]
       : undefined;
     const kind = previousIntersection?.control;

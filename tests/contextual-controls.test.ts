@@ -30,7 +30,7 @@ import {
 } from "@/render/contextual-controls";
 import { buildControlLayers, controlPixelBounds, controlSpriteFor } from "@/render/control-layers";
 import { CONTROL_SPRITE_IDS, createControlSprites } from "@/render/control-sprites";
-import { CONTROL_SCALE } from "@/render/scale";
+import { CONTROL_SCALE, NETWORK_CONTROL_SCALE } from "@/render/scale";
 import { chicagoModel } from "./chicago-support";
 
 /* ------------------------------------------------------------------ */
@@ -496,7 +496,12 @@ describe("contextual controls: placement and scale", () => {
       6,
     );
     expect(controlPixelBounds().minPixels).toBeGreaterThan(0);
-    expect(CONTROL_SCALE.minPixels).toBeLessThan(12);
+    // The contextual control takes over from the network marker, so its floor
+    // can never be smaller than that marker's cap (no shrink at the handoff) - and
+    // it must be readable: measured at the follow zoom the map is 0.561 px per
+    // metre, so the previous 4 px floor drew a signal 5.9 px tall (issue #56).
+    expect(CONTROL_SCALE.minPixels).toBeGreaterThanOrEqual(NETWORK_CONTROL_SCALE.maxPixels);
+    expect(CONTROL_SCALE.minPixels).toBeGreaterThanOrEqual(16);
     expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
     expect(props.billboard).toBe(true);
     // No screen-space offset. A 16 px "kerb clearance" was tried here and

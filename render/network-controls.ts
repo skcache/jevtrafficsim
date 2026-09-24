@@ -31,12 +31,24 @@ export function networkSignalMarkers(model: MapModel): NetworkSignalMarker[] {
     for (const roadId of street.roadIds) visibleRoadIds.add(roadId);
   }
 
+  // A signal belongs to a junction between SURFACE roads. A node whose every
+  // road is expressway mainline is not one, and a marker there reads as a
+  // traffic light standing in the middle of the highway (issue #56). Nodes that
+  // also serve surface roads keep their marker: that signal is geographically
+  // real for the traffic it actually controls.
+  const surfaceRoadIds = new Set(
+    model.city.roads.filter((road) => road.kind !== "highway").map((road) => road.id),
+  );
+
   return model.city.intersections
     .filter(
       (intersection) =>
         intersection.control === "signal" &&
         [...intersection.incoming, ...intersection.outgoing].some((roadId) =>
           visibleRoadIds.has(roadId),
+        ) &&
+        [...intersection.incoming, ...intersection.outgoing].some((roadId) =>
+          surfaceRoadIds.has(roadId),
         ),
     )
     .map((intersection) => ({

@@ -21,7 +21,6 @@ import {
   stopLineSetbackMetres,
   vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
-import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 import type { City, RoadId } from "@/sim/types";
 import type {
   PresentationEgoVehicle,
@@ -302,6 +301,36 @@ export function interpolateVehicles(
  * interpolation carry the car the last few metres up to the stop line, which is
  * what a car actually does.
  */
+/**
+ * Stop-line warp (issue #56).
+ *
+ * The simulation's control point is the graph NODE, so a queued car sits at
+ * `progress === road.length` — measured, 0.0 m from the end — while the painted
+ * line is `stopLineSetbackMetres + body/2 + clearance` earlier. Two earlier
+ * attempts to reconcile that in presentation each produced a different visible
+ * defect: clamping the interpolated result yanked a car backwards onto the line,
+ * and clamping the snapshots by PERMISSION froze a car that was still moving
+ * (measured: 100% of real motion lost across the whole 0.5-3 m/s band, then a
+ * ~9 m snap when it released).
+ *
+ * Both existed because a CLAMP is discontinuous: it holds a fixed value and
+ * jumps when it lets go. This is a WARP instead. Over the last `band` metres of a
+ * signal-controlled road, progress is compressed smoothly so the node maps onto
+ * the line:
+ *
+ *     display = progress - residual * smoothstep((band - fromEnd) / band)
+ *
+ * - at the node, display is exactly the stop line;
+ * - further back than `band`, display is untouched, so ordinary driving — and
+ *   creeping behind a queue — is bit-identical to the simulation;
+ * - the derivative stays positive with `band = 3 * residual`, so it is monotone:
+ *   the car never moves backwards and never jumps;
+ * - it is a function of progress alone: no state, no time, no filtering, and the
+ *   result is always a point ON the road, never a smoothed free-space position.
+ *
+ * Stop-controlled nodes are excluded: the simulation has no yield behaviour, so
+ * there is no queue to map, and warping them would move cars for no reason.
+ */
 function heldProgress(
   snapshot: PresentationSnapshot | null,
   ego: PresentationEgoVehicle | null,
@@ -316,35 +345,8 @@ function heldProgress(
   if (!road) {
     return progress;
   }
-  const signal = snapshot.routeControls.find((control) => control.intersectionId === road.to);
-  if (!signal) {
-    return progress;
-  }
-  // Same question the renderer's stop-line clamp asks, asked every frame instead
-  // of only once the simulation has already moved the car to the node. Holding by
-  // PERMISSION means the car drives up to the stop line and waits there: the cap
-  // engages as the car reaches the line, so it never has to be pulled back. Doing
-  // it off the queue state instead meant the car was already ~9 m past the painted
-  // line (the simulation's control point is the junction node) and every stop
-  // included a visible slide backwards.
-  const groups = deriveApproachGroups(city, road.to);
-  if (groups.length === 0) {
-    return progress;
-  }
-  const permitted = canApproachProceedForPhase(
-    groups,
-    signal.stage,
-    ((signal.phaseIndex % groups.length) + groups.length) % groups.length,
-    roadId,
-  );
-  if (permitted) {
-    return progress;
-  }
-  // A car that has already committed and is crossing on the change of phase is
-  // left alone: holding it would pull a moving car back into the junction it has
-  // just entered. Only a car still arriving at the line is held, which is the
-  // case the stop line exists for.
-  if (ego.speed > CROSSING_SPEED_FLOOR_MPS) {
+  const intersection = city.intersections[road.to];
+  if (!intersection || intersection.control !== "signal") {
     return progress;
   }
   const bodyLength = VEHICLE_LENGTH_M[ego.type] ?? VEHICLE_LENGTH_M.car;
@@ -352,7 +354,29 @@ function heldProgress(
     0,
     road.length - stopLineSetbackMetres(road.lanes) - bodyLength / 2 - STOP_LINE_CLEARANCE_M,
   );
-  return Math.min(progress, stop);
+  const residual = road.length - stop;
+  if (residual <= 0.05) {
+    return progress;
+  }
+  const band = Math.min(road.length, Math.max(residual * 3, residual + 8));
+  const fromEnd = road.length - progress;
+  if (fromEnd >= band) {
+    return progress;
+  }
+  // SPATIAL gate: only the final approach is affected, so mid-block driving is
+  // bit-identical to the simulation.
+  const raw = 1 - fromEnd / band;
+  const gate = raw * raw * (3 - 2 * raw);
+  // SPEED factor: the residual is a standstill correction. A car that is moving
+  // has, by definition, already crossed the point it was being held at, so the
+  // correction must shrink as speed rises — otherwise the display would have to
+  // make the whole residual up in one step when the car finally leaves the road.
+  // At 0 m/s it is the full residual (the car waits ON the painted line); at the
+  // road's own cruise speed it is gone (the display is the simulation's own
+  // position). Both are frame scalars, so this stays stateless and derivable.
+  const cruise = Math.max(4, road.speedLimit);
+  const speedFactor = 1 - Math.min(1, Math.max(0, ego.speed ?? 0) / cruise);
+  return progress - residual * gate * speedFactor;
 }
 
 /**
@@ -514,5 +538,4 @@ const TURN_MIN_RADIANS = 0.15;
 const MAX_TRANSITION_M = 60;
 
 /** Above this the car is crossing, not arriving: the stop line must not hold it. */
-const CROSSING_SPEED_FLOOR_MPS = 3;
 
