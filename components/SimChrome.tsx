@@ -327,17 +327,22 @@ export function SimChrome(props: SimChromeProps) {
                 </svg>
                 <span className="hidden sm:inline">{props.following ? "Following" : "Recenter"}</span>
               </button>
-              <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
-              <IconButton label="Zoom out" onClick={props.onZoomOut}>
-                <svg {...glyph}>
-                  <path d="M3 6.5h7" />
-                </svg>
-              </IconButton>
-              <IconButton label="Zoom in" onClick={props.onZoomIn}>
-                <svg {...glyph}>
-                  <path d="M6.5 3v7M3 6.5h7" />
-                </svg>
-              </IconButton>
+              {/* Zoom is a pointer affordance: on touch the map pinches, and the
+                  row has to fit 390px with the debug controller picker in it
+                  (measured: it pushed Scenario off-screen when always shown). */}
+              <span className="mx-[3px] hidden h-4 w-px bg-hair sm:block" aria-hidden="true" />
+              <span className="hidden items-center gap-[3px] sm:flex">
+                <IconButton label="Zoom out" onClick={props.onZoomOut}>
+                  <svg {...glyph}>
+                    <path d="M3 6.5h7" />
+                  </svg>
+                </IconButton>
+                <IconButton label="Zoom in" onClick={props.onZoomIn}>
+                  <svg {...glyph}>
+                    <path d="M6.5 3v7M3 6.5h7" />
+                  </svg>
+                </IconButton>
+              </span>
               <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
               <button
                 type="button"

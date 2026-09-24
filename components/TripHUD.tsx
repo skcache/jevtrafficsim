@@ -17,7 +17,7 @@
  * Every value is a field the worker computed (see tripHudView in ui-model), so
  * the HUD can never disagree with the map or the simulation.
  */
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { useUiStore } from "@/store/ui-store";
 import {
   formatDuration,
@@ -59,12 +59,14 @@ export function TripHUD() {
   const PRIMARY_ROWS = ["Elapsed", "Remaining", "Speed"];
 
   return (
+    <AnimatePresence>
+      {live && !runComplete && (
     <motion.div
       className="pointer-events-none absolute bottom-28 left-4 z-10 w-[214px] sm:bottom-4"
       initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
-      transition={{ duration: 0.32, delay: live ? 0.18 : 0, ease: [0.22, 1, 0.36, 1] }}
-      aria-hidden={!live || runComplete}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6 }}
+      transition={{ duration: 0.32, delay: 0.18, ease: [0.22, 1, 0.36, 1] }}
     >
       <div className="surface flex flex-col gap-2 px-3 py-2.5" role="status" aria-label="Trip">
         <span className="label-micro">Jev Traffic · Chicago</span>
@@ -121,5 +123,7 @@ export function TripHUD() {
         )}
       </div>
     </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
