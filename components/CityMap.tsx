@@ -785,8 +785,14 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // infrastructure remains visible until its contextual replacement takes
         // over; the ego and relevant live control own the top hierarchy.
         const layers: Layer[] = [
-          ...networkTrafficLayers,
           ...routeLayers,
+          // Congestion rides ABOVE the route band. The band is 15 m wide and
+          // near-opaque, so with the old order a route road never showed the
+          // amber/red pressure the rest of the city showed - the road the user
+          // is actually watching was the one road with no traffic on it. The
+          // overlay is a centre stripe (2-6 m), so the band still reads as the
+          // route on both sides of it.
+          ...networkTrafficLayers,
           ...networkSignalLayers,
           ...challengeTopLayers,
           ...cityVehicleLayers,

@@ -358,10 +358,20 @@ function heldProgress(
 /**
  * Position and heading while crossing from one road to the next.
  *
- * Position is constrained to one of the two authoritative road paths at every
- * frame. This deliberately gives up free-space Bézier smoothing: a renderer may
- * not invent drivable geometry that the basemap does not contain. Returns null
- * when the two roads are not joined; the caller then keeps the current position.
+ * A straight continuation walks the road paths exactly as before: old road to
+ * its node, new road from its node, nose on the road's own tangent.
+ *
+ * A real TURN is one rounded corner: a quadratic from where the car is on the
+ * old road, through the corner where the two tangents cross, to where it will be
+ * on the new road. Both the position and the heading come from that curve, so
+ * the nose is always the tangent of the path the car is actually travelling.
+ *
+ * That last property is the fix for the sideways car. The previous version kept
+ * the position on the old road while blending the heading toward the next road's
+ * tangent over the last eight metres — so a sprite rotated up to 90 degrees
+ * while still driving straight, which is exactly "the car goes sideways on
+ * turns". Rotating early is not a smoothing trick; it is a lie about where the
+ * car is going.
  */
 function transitionPosition(
   indexes: DirectedPathIndexes,
@@ -399,61 +409,93 @@ function transitionPosition(
     return null;
   }
 
-  // Position is never interpolated through free space. It walks the old road
-  // to its actual endpoint, then walks the new road from its actual start.
-  // This is intentionally stricter than a cosmetic Bezier: a renderer may not
-  // invent drivable geometry that the map itself does not contain.
-  const distance = clamp01(t) * total;
   const previousOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, before.id, before.roadId);
   const currentOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, current.id, current.roadId);
-  // The two tangents that meet at the shared node: this road's end, and the next
-  // road's start.
+  // Lane centres on two roads generally do not meet at exactly the same
+  // coordinate. Taper each lane offset into the junction node, then back out on
+  // the next road, so the path through the shared node stays continuous.
+  const laneTaperM = 8;
+  const outgoingProgress = Math.min(currentIndex.total, Math.max(0, travelled));
+  const incoming = applyLaneOffset(
+    samplePathIndex(previousIndex, previousProgress),
+    previousOffset * Math.min(1, Math.max(0, previousIndex.total - previousProgress) / laneTaperM),
+  );
+  const outgoing = applyLaneOffset(
+    samplePathIndex(currentIndex, outgoingProgress),
+    currentOffset * Math.min(1, outgoingProgress / laneTaperM),
+  );
   const incomingHeading = samplePathIndex(previousIndex, previousIndex.total).heading;
   const outgoingHeading = samplePathIndex(currentIndex, 0).heading;
 
-  // Lane centres on two roads generally do not meet at exactly the same
-  // coordinate. Taper each lane offset into the junction centre, then back out
-  // on the next road. This preserves lane identity away from the junction while
-  // guaranteeing a continuous path through the shared node.
-  const laneTaperM = 8;
-  if (distance <= remaining) {
-    // Start from the SAME presentation progress used to calculate
-    // `remaining`. A red-light snapshot can be physically capped several metres
-    // before the graph node; mixing that capped remaining distance with the raw
-    // simulation progress jumps the car straight to the junction on release.
-    const progress = previousProgress + distance;
-    const distanceToJunction = Math.max(0, previousIndex.total - progress);
-    const taper = Math.min(1, distanceToJunction / laneTaperM);
+  const u = clamp01(t);
+  if (Math.abs(angleDelta(incomingHeading, outgoingHeading)) < TURN_MIN_RADIANS) {
+    // Straight through: stay on the roads themselves. Inventing a line here is
+    // what used to drift vehicles off curved carriageways.
+    if (u * total <= remaining) {
+      const progress = previousProgress + u * total;
+      const distanceToJunction = Math.max(0, previousIndex.total - progress);
+      const position = applyLaneOffset(
+        samplePathIndex(previousIndex, progress),
+        previousOffset * Math.min(1, distanceToJunction / laneTaperM),
+      );
+      return { ...position, heading: incomingHeading };
+    }
     const position = applyLaneOffset(
-      samplePathIndex(previousIndex, progress),
-      previousOffset * taper,
+      samplePathIndex(currentIndex, Math.min(currentIndex.total, u * total - remaining)),
+      currentOffset * Math.min(1, Math.max(0, u * total - remaining) / laneTaperM),
     );
-    // The nose follows THIS road's tangent, and only starts rotating inside the
-    // junction window — the last few metres before the node, eased so a 90 degree
-    // turn is distributed over a handful of frames instead of snapping. Half a
-    // block early is a bug; rotating after the node is a different bug; both are
-    // excluded by construction here.
-    const blend = smoothstep(clamp01(1 - distanceToJunction / TURN_WINDOW_M));
-    return { ...position, heading: lerpAngle(incomingHeading, outgoingHeading, blend) };
+    return { ...position, heading: outgoingHeading };
   }
 
-  const outgoingProgress = Math.min(currentIndex.total, distance - remaining);
-  const taper = Math.min(1, Math.max(0, outgoingProgress) / laneTaperM);
-  const position = applyLaneOffset(
-    samplePathIndex(currentIndex, outgoingProgress),
-    currentOffset * taper,
-  );
-  // Past the node the turn is done: the nose is exactly the new road's tangent.
-  return position;
+  // The corner: where the incoming tangent line meets the outgoing one. A right
+  // angle puts it on the shared node, which is what rounds a city turn.
+  const corner = cornerControlPoint(incoming, outgoing, incomingHeading, outgoingHeading);
+  const x = quadratic(incoming.x, corner.x, outgoing.x, u);
+  const y = quadratic(incoming.y, corner.y, outgoing.y, u);
+  const dx = quadraticTangent(incoming.x, corner.x, outgoing.x, u);
+  const dy = quadraticTangent(incoming.y, corner.y, outgoing.y, u);
+  if (Math.hypot(dx, dy) < 1e-9) {
+    return { x, y, heading: outgoingHeading };
+  }
+  return { x, y, heading: Math.atan2(dy, dx) };
 }
 
-/** Metres before the junction where the sprite begins rotating into the turn. */
-const TURN_WINDOW_M = 8;
+/**
+ * The control point of the rounded corner: where the incoming and outgoing
+ * tangents cross, clamped so a shallow turn cannot fling the curve sideways.
+ */
+function cornerControlPoint(
+  incoming: WorldPosition,
+  outgoing: WorldPosition,
+  incomingHeading: number,
+  outgoingHeading: number,
+): { x: number; y: number } {
+  const inDir = { x: Math.cos(incomingHeading), y: Math.sin(incomingHeading) };
+  const outDir = { x: Math.cos(outgoingHeading), y: Math.sin(outgoingHeading) };
+  const cross = inDir.x * outDir.y - inDir.y * outDir.x;
+  const reach = Math.hypot(outgoing.x - incoming.x, outgoing.y - incoming.y);
+  if (Math.abs(cross) < 1e-6) {
+    return { x: (incoming.x + outgoing.x) / 2, y: (incoming.y + outgoing.y) / 2 };
+  }
+  const dx = outgoing.x - incoming.x;
+  const dy = outgoing.y - incoming.y;
+  const along = Math.min(reach, Math.max(0, (dx * outDir.y - dy * outDir.x) / cross));
+  return { x: incoming.x + inDir.x * along, y: incoming.y + inDir.y * along };
+}
+
+function quadratic(a: number, b: number, c: number, u: number): number {
+  const inv = 1 - u;
+  return inv * inv * a + 2 * inv * u * b + u * u * c;
+}
+
+/** Derivative of the quadratic at u: 2(1-u)(b-a) + 2u(c-b). */
+function quadraticTangent(a: number, b: number, c: number, u: number): number {
+  return 2 * (1 - u) * (b - a) + 2 * u * (c - b);
+}
+
+/** Below this a junction is a continuation, not a turn. */
+const TURN_MIN_RADIANS = 0.15;
 
 /** Above this the car is crossing, not arriving: the stop line must not hold it. */
 const CROSSING_SPEED_FLOOR_MPS = 3;
 
-/** 0..1 with zero slope at both ends, so the turn eases in and out. */
-function smoothstep(value: number): number {
-  return value * value * (3 - 2 * value);
-}

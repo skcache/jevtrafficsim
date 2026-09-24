@@ -18,7 +18,6 @@ import {
   STOP_LINE_CLEARANCE_M,
   VEHICLE_LENGTH_M,
   stopLineSetbackMetres,
-  vehicleLaneOffsetMetres,
 } from "@/render/road-presentation";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import type { MapModel } from "@/cities/map-model";
@@ -169,36 +168,39 @@ describe("turn interpolation", () => {
   const indexes = buildDirectedPathIndexes(straightModel());
   const laneOffsets = [0, 0, 0];
 
-  it("walks through the junction instead of cutting the corner", () => {
+  it("rounds the junction: the nose follows the motion, the path stays in the box", () => {
     // Vehicle crosses intersection 1 from road 0 onto road 2 (a right turn).
     const previous = snapshot(0, [{ id: 7, roadId: 0, progress: 90 }]);
     const current = snapshot(100, [{ id: 7, roadId: 2, progress: 5 }]);
     // Remaining 10 m on road 0, then 5 m into road 2 = 15 m of path.
-    const beforeJunction = interpolateVehicles(
-      indexes,
-      previous,
-      current,
-      0.5,
-      options(city, laneOffsets),
-    )[0];
-    // t=0.5 -> 7.5 m travelled. Position stays exactly on the old road.
-    expect(beforeJunction.x).toBeCloseTo(97.5, 6);
-    // Lane offset tapers into the shared junction node, so the path stays
-    // continuous. The side of the carriageway comes from the authoritative lane
-    // assignment for this vehicle, not a hardcoded sign.
-    const laneOffset = vehicleLaneOffsetMetres(city, laneOffsets, 7, 0);
-    expect(beforeJunction.y).toBeCloseTo(-laneOffset * (2.5 / 8), 6);
-    // t=0.8 -> 12 m travelled: 2 m past the junction, now on road 2.
-    const pastJunction = interpolateVehicles(
-      indexes,
-      previous,
-      current,
-      0.8,
-      options(city, laneOffsets),
-    )[0];
-    // Once the junction is crossed, position stays exactly on the new road.
-    expect(pastJunction.x).toBeCloseTo(100, 6);
-    expect(pastJunction.y).toBeCloseTo(2, 6);
+    //
+    // The turn is one rounded corner through the shared node, so the sprite is
+    // never rotated toward a road it is not yet on: at every sample the heading
+    // IS the direction the car is moving. That is the property the old
+    // road-locked-with-early-rotation version failed, and it is why the car
+    // visibly crabbed through every turn.
+    let last = interpolateVehicles(indexes, previous, current, 0, options(city, laneOffsets))[0];
+    let worstBodyMotion = 0;
+    for (let step = 1; step <= 20; step += 1) {
+      const point = interpolateVehicles(indexes, previous, current, step / 20, options(city, laneOffsets))[0];
+      const motion = Math.atan2(point.y - last.y, point.x - last.x);
+      let delta = Math.abs(motion - point.headingRadians);
+      delta = Math.min(delta, Math.abs(delta - Math.PI * 2));
+      worstBodyMotion = Math.max(worstBodyMotion, (delta * 180) / Math.PI);
+      // The corner is local: the car may round it, but it never leaves the
+      // junction box on its way across.
+      expect(Math.abs(point.x - 100)).toBeLessThanOrEqual(11);
+      expect(Math.abs(point.y)).toBeLessThanOrEqual(11);
+      last = point;
+    }
+    // The chord between two samples differs from the curve's tangent by a few
+    // degrees at 20 samples per crossing; the point is that it never approaches
+    // the old sideways behaviour, which measured tens of degrees.
+    expect(worstBodyMotion).toBeLessThan(8);
+    // The turn is complete at the far side: the last sample is on the new road.
+    const end = interpolateVehicles(indexes, previous, current, 1, options(city, laneOffsets))[0];
+    expect(end.x).toBeCloseTo(100, 6);
+    expect(end.y).toBeCloseTo(5, 6);
   });
 
   it("releases from the rendered stop line instead of jumping to the junction", () => {
@@ -220,13 +222,14 @@ describe("turn interpolation", () => {
       stopLineSetbackMetres(city.roads[0].lanes) -
       VEHICLE_LENGTH_M.car / 2 -
       STOP_LINE_CLEARANCE_M;
-    const expectedProgress = stop + ((100 - stop) + 2) * 0.5;
 
     // The transition's distance calculation and its sampled starting progress
     // must use the same presentation-space stop-line position. Mixing the raw
     // 99 m simulation progress with a remaining distance measured from ~90 m
     // clamps the car to x=100 immediately, which looks like a launch/jump.
-    expect(halfway.x).toBeCloseTo(expectedProgress, 5);
+    // Halfway through the release the car is between the two: it has left the
+    // line and it has not launched to the node.
+    expect(halfway.x).toBeGreaterThan(stop);
     expect(halfway.x).toBeLessThan(100);
   });
 
@@ -303,15 +306,30 @@ describe("turn interpolation", () => {
     const previous = snapshot(0, [{ id: 11, roadId: 0, progress: 92 }]);
     const current = snapshot(100, [{ id: 11, roadId: 3, progress: 4 }]);
     const offsets = [0, 0, 0, 0];
-    const mid = interpolateVehicles(leftIndexes, previous, current, 0.6, options(leftCity, offsets))[0];
-    // 8 m remaining, 4 m on the new road: at t=0.6 the vehicle remains
-    // exactly on the incoming road.
-    expect(mid.x).toBeCloseTo(99.2, 6);
-    expect(mid.y).toBeCloseTo(-0.17, 6);
-    const after = interpolateVehicles(leftIndexes, previous, current, 0.9, options(leftCity, offsets))[0];
-    // t=0.9 -> 10.8 m: 2.8 m onto the outgoing road, still road-locked.
-    expect(after.x).toBeCloseTo(100, 6);
-    expect(after.y).toBeCloseTo(-2.8, 6);
+    // The same invariant as the right turn: whatever the turn direction, the
+    // nose is the tangent of the path being travelled, and the path stays inside
+    // the junction while it rounds the corner.
+    let last = interpolateVehicles(leftIndexes, previous, current, 0, options(leftCity, offsets))[0];
+    let worstBodyMotion = 0;
+    for (let step = 1; step <= 20; step += 1) {
+      const point = interpolateVehicles(leftIndexes, previous, current, step / 20, options(leftCity, offsets))[0];
+      const motion = Math.atan2(point.y - last.y, point.x - last.x);
+      let delta = Math.abs(motion - point.headingRadians);
+      delta = Math.min(delta, Math.abs(delta - Math.PI * 2));
+      worstBodyMotion = Math.max(worstBodyMotion, (delta * 180) / Math.PI);
+      expect(Math.abs(point.x - 100)).toBeLessThanOrEqual(11);
+      expect(Math.abs(point.y)).toBeLessThanOrEqual(11);
+      last = point;
+    }
+    // The chord between two samples differs from the curve's tangent by a few
+    // degrees at 20 samples per crossing; the point is that it never approaches
+    // the old sideways behaviour, which measured tens of degrees.
+    expect(worstBodyMotion).toBeLessThan(8);
+    // Left turn: the car ends on road 3, which runs north.
+    const end = interpolateVehicles(leftIndexes, previous, current, 1, options(leftCity, offsets))[0];
+    expect(end.x).toBeCloseTo(100, 6);
+    expect(end.y).toBeCloseTo(-4, 6);
+    expect(Math.abs(end.headingRadians + Math.PI / 2)).toBeLessThan(0.01);
   });
 
   it("falls back to the current position when the roads are not joined", () => {

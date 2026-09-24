@@ -543,17 +543,39 @@ export function TrafficSimulator() {
     });
   }, [guardDiscard, send]);
 
+  /**
+   * "New scenario" returns to the setup screen.
+   *
+   * It used to fire a fresh seed and fly straight back into the city, so the
+   * button restarted the run instead of letting anyone choose a different trip,
+   * level or driver - the opposite of what the label promises. The scenario is
+   * still reset (a new seed is drawn on the next press of Enter City); the phase
+   * is what changes, so the menu is where the user lands.
+   */
   const onNewScenario = useCallback(() => {
-    guardDiscard("new-scenario", () => {
+    const goToMenu = () => {
       const store = useUiStore.getState();
       store.setError(null);
       store.setRunComplete(false);
       store.resetMetrics();
-      send({ type: "RESET", mode: "new-seed" });
-      store.setRunning(true);
-      mapHandleRef.current?.flyToCentral();
-    });
-  }, [guardDiscard, send]);
+      // No RESET here. A reset makes the worker post a fresh READY for the world
+      // it was just given, and the READY handler flips the phase straight back to
+      // "city" - which is how this button kept restarting the run instead of
+      // showing the menu. The worker is idle and the next Enter City dispatches
+      // the scenario that is chosen there.
+      store.setRunning(false);
+      store.setPhase("config");
+      mapHandleRef.current?.fitCity();
+    };
+    // A finished run has nothing to discard: the result is on screen because the
+    // user just asked to leave it, and a confirmation here turned one deliberate
+    // action into two. Only a run still in flight needs the guard.
+    if (useUiStore.getState().runComplete) {
+      goToMenu();
+      return;
+    }
+    guardDiscard("new-scenario", goToMenu);
+  }, [guardDiscard]);
 
   /**
    * Ask the baseline worker again for the scenario on screen. Deliberately the

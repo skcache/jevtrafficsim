@@ -85,13 +85,12 @@ export function buildControlLayers(
       getIcon: (control) => controlSpriteFor(control),
       getPosition: (control) => toLngLat(projection, control.x, control.y) as LngLat,
       getSize: (control) => sizeFor(control),
-      // A screen-space kerb clearance keeps the icon off the oversized ego
-      // sprite even at the follow camera's lower zooms. Rotate it with the
-      // approach so the sign remains on the same side of every road.
-      getPixelOffset: (control) => [
-        16 * Math.sin(control.bearing),
-        16 * Math.cos(control.bearing),
-      ],
+      // No screen-space offset. A 16 px "kerb clearance" was tried here to keep
+      // the icon off the ego sprite, but a pixel offset is constant in SCREEN
+      // space: as the camera zooms, the sign slid further off its approach
+      // instead of tracking it, which is exactly the "signs do not zoom
+      // correctly any more" defect. Signs sit on their own approach, at every
+      // zoom, like every other map object.
       getColor: (control) => [255, 255, 255, Math.round(opacityFor(control) * 255)],
       sizeUnits: "meters",
       sizeMinPixels: CONTROL_SCALE.minPixels,

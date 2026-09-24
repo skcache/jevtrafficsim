@@ -85,7 +85,7 @@ export const CAMERA_PRESETS = {
   /** Landing composition: Loop edge and the river, deliberately off-centre. */
   hero: { anchor: [-87.6308, 41.8874], zoom: 14.1 },
   /** About four to seven city blocks of street. */
-  street: { anchor: [-87.6294, 41.8825], zoom: 15.4 },
+  street: { anchor: [-87.6294, 41.8825], zoom: 15.0 },
   /** The Loop and River North. */
   neighborhood: { anchor: [-87.6338, 41.8855], zoom: 14.6 },
   /** The whole active city. */

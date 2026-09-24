@@ -499,10 +499,12 @@ describe("contextual controls: placement and scale", () => {
     expect(CONTROL_SCALE.minPixels).toBeLessThan(12);
     expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
     expect(props.billboard).toBe(true);
-    expect((props.getPixelOffset as (control: ContextualControl) => number[])(controls[0]))
-      .toHaveLength(2);
-    expect(Math.hypot(...(props.getPixelOffset as (control: ContextualControl) => number[])(controls[0])))
-      .toBeCloseTo(16);
+    // No screen-space offset. A 16 px "kerb clearance" was tried here and
+    // removed: a pixel offset is constant in SCREEN space, so as the camera
+    // zoomed the sign slid further off its approach instead of tracking it —
+    // the "signs do not zoom in and out correctly" defect. A signal or stop sign
+    // sits on its own approach's coordinate at every zoom.
+    expect(props.getPixelOffset).toEqual([0, 0]);
 
     // At the reveal boundary the contextual head starts at the same quiet
     // network scale, then grows continuously instead of popping between layers.

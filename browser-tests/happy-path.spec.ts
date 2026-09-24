@@ -52,7 +52,9 @@ async function journey(page: Page, relayStatus: 200 | 503) {
   // the car, not over a mostly-empty lake (measured 13.6 before, 15.4 now).
   await expect.poll(async () => page.evaluate(() =>
     (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 0,
-  )).toBeGreaterThan(15);
+    // Still the street framing (the follow preset is 15.0), and still far from
+    // the city-wide view the arrival used to pull back to.
+  )).toBeGreaterThan(14.5);
   await expect(page.getByRole("status", { name: "Trip" })).toBeHidden();
   await expect(page.getByText("Jev Traffic · Chicago")).toBeHidden();
   await expect(page.getByRole("button", { name: "+5× Traffic" })).toBeHidden();
@@ -120,7 +122,9 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   // the car, not over a mostly-empty lake (measured 13.6 before, 15.4 now).
   await expect.poll(async () => page.evaluate(() =>
     (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 0,
-  )).toBeGreaterThan(15);
+    // Still the street framing (the follow preset is 15.0), and still far from
+    // the city-wide view the arrival used to pull back to.
+  )).toBeGreaterThan(14.5);
   const payoff = page.locator(".surface-overlay").filter({ hasText: "Run complete" });
   const box = await payoff.boundingBox();
   expect(box).not.toBeNull();
