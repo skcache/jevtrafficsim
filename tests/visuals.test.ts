@@ -123,12 +123,12 @@ describe("sparkline", () => {
 });
 
 describe("vehicle sprite rotation", () => {
-  // Sprites are authored nose-at-+X (east) and deck.gl rotates clockwise on
-  // screen, so the bearing a sprite points at is 90 + angle. Getting this sign
-  // wrong mirrors the car: it drives with its nose in oncoming traffic.
+  // deck.gl rotates the icon counter-clockwise (see spriteAngleDegrees for the
+  // shader that settles it), so a nose-east sprite at angle `a` points at
+  // bearing 90 - a, and the heading passes through unchanged.
   const bearingOf = (headingRadians: number): number => {
     const angle = spriteAngleDegrees(headingRadians);
-    return ((90 + angle) % 360 + 360) % 360;
+    return ((90 - angle) % 360 + 360) % 360;
   };
   const expectedBearing = (headingRadians: number): number => {
     const deg = (headingRadians * 180) / Math.PI;
@@ -141,9 +141,8 @@ describe("vehicle sprite rotation", () => {
   });
 
   it("points north-bound cars north, not south", () => {
-    // The old `+heading` sent this one to 180 (south) — the reported bug.
     expect(bearingOf(Math.PI / 2)).toBeCloseTo(0, 6);
-    expect(spriteAngleDegrees(Math.PI / 2)).toBeCloseTo(-90, 6);
+    expect(spriteAngleDegrees(Math.PI / 2)).toBeCloseTo(90, 6);
   });
 
   it("matches the true compass bearing for every heading", () => {
@@ -151,5 +150,19 @@ describe("vehicle sprite rotation", () => {
       const heading = (deg * Math.PI) / 180;
       expect(bearingOf(heading)).toBeCloseTo(expectedBearing(heading), 6);
     }
+  });
+
+  it("draws a diagonal car along its road, not sideways", () => {
+    // The regression this pins: negating the heading mirrored the sprite, so a
+    // car on a 45-degree road (the route's Lake Shore Drive) was drawn 90
+    // degrees sideways - the "car is going sideways" report. 2T error, so it
+    // only ever showed on diagonals.
+    const diagonal = Math.PI / 4;
+    const angle = spriteAngleDegrees(diagonal);
+    expect(angle).toBeCloseTo(45, 6);
+    // Screen direction of the drawn sprite equals the screen direction of the
+    // road: same angle, and a mirrored sign would put them 90 degrees apart.
+    expect(Math.abs(angle - 45)).toBeLessThan(1e-6);
+    expect(Math.abs(-angle - 45)).toBeGreaterThan(45); // the old mirror
   });
 });

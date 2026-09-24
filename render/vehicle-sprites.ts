@@ -195,20 +195,31 @@ export function spriteAspect(type: VehicleType): number {
 /**
  * deck.gl IconLayer angle for a vehicle heading.
  *
- * The sprite is authored nose-at-+X (east), and deck.gl rotates the icon
- * CLOCKWISE on screen, so the bearing a sprite ends up pointing at is
- * `90 + angle`. The vehicle's heading is `atan2(dy, dx)` — 0 = east,
- * counter-clockwise — whose compass bearing is `90 - heading`. Solving
- * `90 + angle = 90 - heading` gives:
+ * Settled from deck.gl's own shader, which is the only authority here
+ * (icon-layer-vertex.glsl):
  *
- *     angle = -heading
+ *     pixelOffset = rotate_by_angle(pixelOffset, instanceAngles) * instanceScale;
+ *     pixelOffset.y *= -1.0;      // the flip lands AFTER the rotation
  *
- * Passing `+heading` (as this used to) mirrors every vehicle about the
- * east-west axis: the nose points into oncoming traffic while the body sits in
- * the correct lane, which is what "the car is driving on the wrong side of the
- * road" actually was. East- and west-bound cars were the only ones that looked
- * right, which is why it survived this long.
+ * The rotation happens in a y-down space and the flip lands afterwards, so
+ * `getAngle` ends up counter-clockwise - the same sense as Math.atan2. The
+ * heading goes through unchanged.
+ *
+ * The previous version negated it on a "deck.gl rotates clockwise" assumption
+ * (and a test was written to match that assumption). It mirrored every vehicle:
+ * a car at heading T was drawn at -T, i.e. 2T away from its road. On an
+ * east-west street 2T = 0, so those cars looked right; north-south cars were
+ * 180 degrees out; and on the 45-degree diagonal that the route's Lake Shore
+ * Drive follows, the car was drawn exactly 90 degrees sideways. Measured on the
+ * live map: a sprite's long axis sat 45 degrees off a horizontal road.
  */
 export function spriteAngleDegrees(headingRadians: number): number {
-  return (-headingRadians * 180) / Math.PI;
+  // deck.gl applies the rotation BEFORE its y-flip (icon-layer-vertex.glsl:
+  // `rotate_by_angle(...)` then `pixelOffset.y *= -1.0`), so `getAngle` is
+  // counter-clockwise - the same sense as Math.atan2 - and the heading passes
+  // through unchanged. Negating it here mirrors every vehicle: a car at heading
+  // T is drawn at -T, i.e. 2T off its road. Invisible on east-west streets,
+  // 180 degrees out on north-south, and exactly 90 degrees sideways on the
+  // 45-degree diagonal that the route's Lake Shore Drive follows.
+  return (headingRadians * 180) / Math.PI;
 }

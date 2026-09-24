@@ -614,6 +614,19 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             // The rendered hero, not the simulation's idea of it: this is what a
             // QA pass can measure against the road path (lateral offset, nose vs
             // motion) without instrumenting the render loop.
+            egoScreen:
+              settled[0] && mapRef.current
+                ? (() => {
+                    const point = mapRef.current!.project(
+                      metricToLngLat(
+                        modelRef.current!.projection,
+                        settled[0]!.x,
+                        settled[0]!.y,
+                      ),
+                    );
+                    return [Math.round(point.x), Math.round(point.y)];
+                  })()
+                : null,
             egoProgress: buffer.current?.ego?.progress ?? null,
             egoId: buffer.current?.ego?.id ?? null,
             egoSpeed: buffer.current?.ego?.speed ?? null,
