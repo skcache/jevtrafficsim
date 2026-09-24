@@ -93,6 +93,14 @@ import type { FrameBuffer } from "./frame-buffer";
 const EXPECTED_FRAME_INTERVAL_MS = SIM_TICK_MS;
 
 /**
+ * Time constant for the arrival-interval estimate, in wall milliseconds.
+ *
+ * Long on purpose: the window must follow the producer's real cadence without
+ * chasing a single outlier tick.
+ */
+const ARRIVAL_INTERVAL_TAU_MS = 120;
+
+/**
  * MapLibre's module worker, self-hosted (public/maplibre/). The bundled
  * worker URL does not resolve under the Turbopack production build (it came
  * out empty and every source stalled), so we point MapLibre at the exact
@@ -155,6 +163,13 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   /** Smoothed render clock (simulated ms) and the wall time it last advanced. */
   const renderClockRef = useRef<number>(Number.NaN);
   const renderClockNowRef = useRef<number>(Number.NaN);
+  /** Alpha actually used for the last drawn frame (QA/debug readout). */
+  const alphaRef = useRef<number>(1);
+  /** Wall-clock arrival interval, low-passed. The render window follows it. */
+  const expectedIntervalRef = useRef<number>(EXPECTED_FRAME_INTERVAL_MS);
+  const lastArrivalRef = useRef<number>(Number.NaN);
+  /** Recent arrival gaps, so QA can read the real cadence in one sample. */
+  const arrivalGapsRef = useRef<number[]>([]);
   /** Follow camera state; north-up, driven by the interpolated car. */
   const followRef = useRef<FollowState>(createFollowState());
   /** While a camera ease owns the frame (enter-city flight, recenter). */
@@ -527,7 +542,34 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           raf = requestAnimationFrame(render);
           return;
         }
-        const frameAlphaValue = frameAlpha(now, buffer.currentReceivedAtMs, EXPECTED_FRAME_INTERVAL_MS);
+        // MEASURE the arrival cadence; do not assume it.
+        //
+        // Frames are posted once per worker tick, and a tick that runs long
+        // delivers late - measured p95 ~205 ms against the 100 ms nominal. With a
+        // fixed 100 ms window the alpha pinned at 1 on every late frame, so the
+        // render clock reached the current frame and then STOPPED until the next
+        // frame landed: the car froze, then jumped, once per tick. That
+        // freeze-and-snap is what "the animation is jittery" looks like. The
+        // window now follows the real cadence through a slow low-pass, so alpha
+        // arrives at 1 exactly as the next frame arrives and the motion is
+        // continuous.
+        const arrival = buffer.currentReceivedAtMs;
+        if (arrival !== lastArrivalRef.current) {
+          const previousArrival = lastArrivalRef.current;
+          lastArrivalRef.current = arrival;
+          if (Number.isFinite(previousArrival)) {
+            const gap = arrival - previousArrival;
+            if (gap > 5 && gap < 2000) {
+              const k = 1 - Math.exp(-gap / ARRIVAL_INTERVAL_TAU_MS);
+              expectedIntervalRef.current += (gap - expectedIntervalRef.current) * k;
+              arrivalGapsRef.current.push(gap);
+              if (arrivalGapsRef.current.length > 60) {
+                arrivalGapsRef.current.shift();
+              }
+            }
+          }
+        }
+        const frameAlphaValue = frameAlpha(now, arrival, expectedIntervalRef.current);
         const previousTime = buffer.previous?.timeMs ?? currentFrame.timeMs;
         const currentTime = currentFrame.timeMs;
         const targetClock = previousTime + frameAlphaValue * (currentTime - previousTime);
@@ -543,6 +585,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         renderClockRef.current = clock;
         const alpha =
           currentTime > previousTime ? clamp01((clock - previousTime) / (currentTime - previousTime)) : frameAlphaValue;
+        alphaRef.current = alpha;
         // One vehicle in the frame now: the ego. Background traffic reaches the
         // map only as sparse road aggregates. Route/control presentation uses
         // the SAME display-time progress as the visible car, otherwise a smooth
@@ -630,6 +673,19 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             egoProgress: buffer.current?.ego?.progress ?? null,
             egoId: buffer.current?.ego?.id ?? null,
             egoSpeed: buffer.current?.ego?.speed ?? null,
+            // Render-clock state: the QA surface for animation smoothness. A
+            // probe samples these per animation frame to see what the display
+            // actually got, rather than inferring it from frame arrivals.
+            receivedAtMs: buffer.currentReceivedAtMs,
+            alpha: Number(alphaRef.current.toFixed(4)),
+            clockMs: Number(renderClockRef.current.toFixed(1)),
+            frameIntervalMs: Number(expectedIntervalRef.current.toFixed(1)),
+            arrivalGapsMs: arrivalGapsRef.current.slice(-40),
+            cameraCenter: [
+              Number(mapRef.current!.getCenter().lng.toFixed(6)),
+              Number(mapRef.current!.getCenter().lat.toFixed(6)),
+            ],
+            cameraZoom: Number(mapRef.current!.getZoom().toFixed(3)),
             ego: settled[0]
               ? [
                   Number(settled[0].x.toFixed(3)),

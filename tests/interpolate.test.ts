@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   angleDelta,
+  frameAlpha,
   interpolateVehicles,
   lerpAngle,
   positionForRoad,
@@ -348,6 +349,27 @@ describe("turn interpolation", () => {
     expect(mid.roadId).toBe(2);
     expect(Math.abs(mid.x - 100)).toBeLessThan(6);
     expect(Math.abs(mid.y - 55)).toBeLessThan(6);
+  });
+
+  it("interpolates across the real arrival gap instead of freezing on it", () => {
+    // Frames are posted once per worker tick and a slow tick delivers late:
+    // measured mean 109 ms, p95 178 ms, max 256 ms against a 100 ms nominal. The
+    // alpha window must be the REAL gap. With the fixed 100 ms window alpha
+    // pinned at 1 on every late frame, so the render clock reached the current
+    // frame and stopped until the next one arrived - measured in the live app as
+    // alpha pinned on 100% of sampled frames, i.e. the car froze and then jumped
+    // once per tick. That is the jitter.
+    const arrival = 1000;
+    const gap = 256; // the measured worst case
+    // With the real gap as the window, the clock is still moving right up to the
+    // next arrival...
+    for (const t of [gap * 0.25, gap * 0.5, gap * 0.9]) {
+      expect(frameAlpha(arrival + t, arrival, gap)).toBeLessThan(1);
+    }
+    expect(frameAlpha(arrival + gap, arrival, gap)).toBeCloseTo(1, 6);
+    // ...whereas the fixed nominal window saturates almost immediately and then
+    // holds, which is the freeze.
+    expect(frameAlpha(arrival + gap * 0.5, arrival, 100)).toBe(1);
   });
 
   it("falls back to the current position when the roads are not joined", () => {
