@@ -340,11 +340,12 @@ describe("product shell contracts", () => {
     // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
     // road state even while the camera is close enough to inspect the ego.
     expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
-    // The remaining route is one navigation-blue band. Citywide pressure is
-    // suppressed only under those visible segments; roads already driven
-    // immediately rejoin the city traffic layer.
-    expect(map).toContain("new Set(segments.map((segment) => segment.roadId))");
-    expect(map).toContain("!visibleRouteRoadIds.has(entry.roadId)");
+    // The remaining route is one navigation-blue band, and the citywide pressure
+    // overlay draws over it - route roads INCLUDED. Suppressing the overlay under
+    // the route (what this used to pin) made the one road the user watches the
+    // only road in the city that could never show amber or red.
+    expect(map).toContain("roadPressure(buffer.current)");
+    expect(map).not.toContain("visibleRouteRoadIds");
     // Tiny network signals sit above the route until the contextual replacement
     // takes over, preventing the blue band from hiding proof of the signal net.
     expect(map.indexOf("...routeLayers")).toBeLessThan(map.indexOf("...networkSignalLayers"));

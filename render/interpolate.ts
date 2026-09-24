@@ -408,6 +408,16 @@ function transitionPosition(
   if (total <= 0) {
     return null;
   }
+  // A REROUTE is not a junction crossing. When the route changes, the ego is
+  // moved to a different road with its progress reset, so "remaining + travelled"
+  // can span most of a block - measured, 75 m of car sliding sideways across the
+  // map in a single interpolation window, which reads exactly like the car
+  // flying off its road. Nothing that long is a junction: snap to where the
+  // simulation now says the car is (returning null keeps the current position)
+  // and let the reroute be a reroute.
+  if (total > MAX_TRANSITION_M) {
+    return null;
+  }
 
   const previousOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, before.id, before.roadId);
   const currentOffset = vehicleLaneOffsetMetres(options.city, options.laneOffsets, current.id, current.roadId);
@@ -495,6 +505,13 @@ function quadraticTangent(a: number, b: number, c: number, u: number): number {
 
 /** Below this a junction is a continuation, not a turn. */
 const TURN_MIN_RADIANS = 0.15;
+
+/**
+ * The longest gap a single junction crossing can span. A city junction is tens of
+ * metres at the very most; anything beyond this is a route change, which must not
+ * be animated as a drive.
+ */
+const MAX_TRANSITION_M = 60;
 
 /** Above this the car is crossing, not arriving: the stop line must not hold it. */
 const CROSSING_SPEED_FLOOR_MPS = 3;

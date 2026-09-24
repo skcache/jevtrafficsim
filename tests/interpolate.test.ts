@@ -332,6 +332,24 @@ describe("turn interpolation", () => {
     expect(Math.abs(end.headingRadians + Math.PI / 2)).toBeLessThan(0.01);
   });
 
+  it("snaps on a reroute instead of gliding the car across the map", () => {
+    // A reroute moves the ego to a different road with its progress reset. The
+    // distance between the two is most of a block, and animating it drew the car
+    // sliding sideways across the city (measured: 75 m in one interpolation
+    // window). Presentation snaps instead: the car is simply where the
+    // simulation now says it is.
+    const previous = snapshot(0, [{ id: 7, roadId: 0, progress: 12 }]);
+    const current = snapshot(100, [{ id: 7, roadId: 2, progress: 55 }]);
+    const mid = interpolateVehicles(indexes, previous, current, 0.5, options(city, laneOffsets))[0];
+    // Placed on the CURRENT road at its own projected position, not halfway
+    // between two unrelated places.
+    // On the CURRENT road, at the position the current road implies - not
+    // halfway between two unrelated places, and not left behind on the old one.
+    expect(mid.roadId).toBe(2);
+    expect(Math.abs(mid.x - 100)).toBeLessThan(6);
+    expect(Math.abs(mid.y - 55)).toBeLessThan(6);
+  });
+
   it("falls back to the current position when the roads are not joined", () => {
     // Road 2 -> road 0 is not a legal successor pair.
     const previous = snapshot(0, [{ id: 9, roadId: 2, progress: 10 }]);

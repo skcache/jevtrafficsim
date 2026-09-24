@@ -16,6 +16,7 @@
  * only roads that carry state.
  */
 import type { PresentationRoadTraffic, PresentationSnapshot } from "@/worker/presentation-snapshot";
+import { congestionLevelFor } from "./congestion";
 import type { RoadId } from "@/sim/types";
 
 export type RouteTrafficClass = "free" | "slowed" | "congested";
@@ -50,16 +51,20 @@ export function classifyRoadTraffic(
     // Absent from the sparse frame = free flow. Same contract as the sim.
     return "free";
   }
-  // The severity is the SIMULATION'S OWN (sim/road-traffic): the route paints
-  // the traffic state that is actually slowing vehicles, instead of a second
-  // threshold table that could disagree with it.
-  if (entry.severity === "severe") {
+  // The SAME rule the city overlay uses (render/congestion): severity, occupancy
+  // ratio, queues and blocked wait. Reading severity alone left the route blue
+  // through rush hour - measured, 54 frames of a drive had a route road the
+  // simulation called "slower" and the route never rendered slowed or congested.
+  const level = congestionLevelFor({
+    severity: entry.severity,
+    occupancyRatio: entry.capacity > 0 ? entry.occupancy / entry.capacity : 0,
+    queuedCount: entry.queuedCount,
+    maxBlockedWaitMs: entry.maxBlockedWaitMs,
+  });
+  if (level === "severe" || level === "bad") {
     return "congested";
   }
-  if (entry.severity === "slower") {
-    return "slowed";
-  }
-  return "free";
+  return level === "warm" ? "slowed" : "free";
 }
 
 /**

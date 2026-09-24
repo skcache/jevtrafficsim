@@ -52,11 +52,36 @@ export const CONGESTION_COLORS: Record<
  * physics uses, so the overlay cannot paint a road amber that cars cross at
  * free-flow speed. Free roads stay NEUTRAL (never painted).
  */
-function levelFor(severity: PresentationRoadTraffic["severity"]): CongestionLevel | null {
-  if (severity === "severe") {
+/**
+ * THE congestion rule, in one place, so the city overlay and the route band can
+ * never disagree.
+ *
+ * Severity alone is too coarse to be the only input: the simulation reports
+ * "free" for a road at 75% occupancy (it is still flowing, by its reckoning), so
+ * a busy road - including the one the user is watching - showed no pressure at
+ * all. Occupancy ratio, queue length and blocked wait are all in the frame
+ * already; they were simply not being read.
+ */
+export function congestionLevelFor(entry: {
+  severity: PresentationRoadTraffic["severity"];
+  occupancyRatio: number;
+  queuedCount: number;
+  maxBlockedWaitMs: number;
+}): CongestionLevel | null {
+  // The simulation's own severity keeps its tiers: severe reads severe, slower
+  // reads warm. What changed is what happens BELOW that: a road the sim calls
+  // free can still be 75% full, and painting nothing there is why the route -
+  // and every busy street - looked empty through rush hour.
+  if (entry.severity === "severe") {
     return "severe";
   }
-  if (severity === "slower") {
+  if (entry.severity === "slower") {
+    return "warm";
+  }
+  if (entry.occupancyRatio >= 0.85) {
+    return "bad";
+  }
+  if (entry.occupancyRatio >= 0.6 || entry.queuedCount >= 2) {
     return "warm";
   }
   return null;
@@ -95,7 +120,12 @@ export function roadPressure(snapshot: PresentationSnapshot | null): RoadPressur
 
   const pressure: RoadPressure[] = [];
   for (const [roadId, entry] of [...stats.entries()].sort((a, b) => a[0] - b[0])) {
-    const level = levelFor(entry.severity);
+    const level = congestionLevelFor({
+      severity: entry.severity,
+      occupancyRatio: entry.occupancyRatio,
+      queuedCount: entry.queued,
+      maxBlockedWaitMs: entry.maxWait,
+    });
     if (level === null) {
       continue;
     }

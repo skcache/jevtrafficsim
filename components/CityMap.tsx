@@ -611,6 +611,19 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             egoRoad: buffer.current?.ego?.roadId ?? null,
             occupiedRoads: buffer.current?.roadTraffic.length ?? 0,
             fleet: fleet.length,
+            // The rendered hero, not the simulation's idea of it: this is what a
+            // QA pass can measure against the road path (lateral offset, nose vs
+            // motion) without instrumenting the render loop.
+            egoProgress: buffer.current?.ego?.progress ?? null,
+            egoId: buffer.current?.ego?.id ?? null,
+            egoSpeed: buffer.current?.ego?.speed ?? null,
+            ego: settled[0]
+              ? [
+                  Number(settled[0].x.toFixed(3)),
+                  Number(settled[0].y.toFixed(3)),
+                  Number(settled[0].headingRadians.toFixed(5)),
+                ]
+              : null,
           };
         }
         if (window.location.search.includes("debug")) {
@@ -640,6 +653,26 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
             displayEgoProgress,
             classifySnapshotRoads(snapshot),
           );
+          if (window.location.search.includes("debug")) {
+            const counts = { free: 0, slowed: 0, congested: 0 };
+            for (const segment of segments) counts[segment.traffic] += 1;
+            const debugSink = window as unknown as {
+              __cityDebug?: { route?: unknown; routeRoads?: unknown };
+            };
+            debugSink.__cityDebug!.route = counts;
+            // The route's own roads, with the sim's severity and occupancy: this is
+            // what decides whether the route band can ever show amber or red.
+            const routeRoadIds = new Set(snapshot.trip.routeRoadIds);
+            debugSink.__cityDebug!.routeRoads = (buffer.current?.roadTraffic ?? [])
+              .filter((entry) => routeRoadIds.has(entry.roadId))
+              .map((entry) => [
+                entry.roadId,
+                entry.severity,
+                Number((entry.capacity > 0 ? entry.occupancy / entry.capacity : 0).toFixed(2)),
+                entry.vehicleCount,
+              ])
+              .slice(0, 40);
+          }
           const destinationNode = buffer.model.city.intersections[snapshot.trip.destinationIntersectionId];
           if (destinationNode) {
             destination = {
@@ -651,20 +684,20 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         }
         routeSegmentsRef.current = segments;
 
-        // Whole-city traffic remains visible at every challenge zoom. Hide it
-        // only under the BLUE route that is actually still visible. Roads the
-        // ego already drove immediately return to the city traffic layer rather
-        // than leaving a permanent traffic-free hole behind the car.
-        const visibleRouteRoadIds = liveRef.current
-          ? new Set(segments.map((segment) => segment.roadId))
-          : new Set<number>();
+        // Whole-city traffic remains visible at every challenge zoom, route roads
+        // included: excluding them is what kept the one road the user watches
+        // permanently free of amber and red.
         const congestion =
           !trafficHiddenRef.current && buffer.current
             ? buildCongestionLayers(
                 congestionRoadsRef.current ?? [],
-                roadPressure(buffer.current).filter(
-                  (entry) => !visibleRouteRoadIds.has(entry.roadId),
-                ),
+                // Route roads are NOT excluded. They used to be, on the theory
+                // that the route band carried its own traffic colour - but the
+                // band renders "free" whenever the road's severity is not severe,
+                // so the single road the user watches was the one road in the
+                // city that could never show amber or red. The overlay is a
+                // centre stripe and the band is 15 m wide, so both read.
+                roadPressure(buffer.current),
                 zoomRef.current,
               )
             : [];

@@ -40,13 +40,19 @@ function road(partial: Partial<PresentationRoadTraffic>): PresentationRoadTraffi
 }
 
 describe("route traffic classification", () => {
-  it("reads the simulation's own flow state, never a second threshold table", () => {
+  it("reads the simulation's flow state, and paints a busy road it still calls free", () => {
     // Absent from the sparse frame = free flow, same contract as the sim.
     expect(classifyRoadTraffic(undefined)).toBe("free");
-    // Severity is authoritative: occupancy numbers alone do not decide colour.
-    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10, severity: "free" }))).toBe("free");
+    // Severity keeps its tiers.
     expect(classifyRoadTraffic(road({ severity: "slower" }))).toBe("slowed");
     expect(classifyRoadTraffic(road({ severity: "severe" }))).toBe("congested");
+    // A road the simulation calls free but which is nearly full is NOT invisible.
+    // Measured before this rule: a route road at 75% occupancy rendered free for
+    // the whole drive, so the one road the user watches never showed traffic.
+    expect(classifyRoadTraffic(road({ occupancy: 9, capacity: 10, severity: "free" }))).toBe("congested");
+    expect(classifyRoadTraffic(road({ occupancy: 7, capacity: 10, severity: "free" }))).toBe("slowed");
+    // Genuinely light traffic stays free: the overlay must not paint the city.
+    expect(classifyRoadTraffic(road({ occupancy: 3, capacity: 10, severity: "free" }))).toBe("free");
     // A closed road can never read as free, whatever the flow state says.
     expect(classifyRoadTraffic(road({ severity: "free" }), true)).toBe("congested");
   });
