@@ -286,8 +286,10 @@ describe("product shell contracts", () => {
   const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
 
   it("names the real city in the run identity, never the rejected one", () => {
-    expect(chrome).toContain("Chicago");
-    expect(chrome).not.toContain("Central");
+    // Issue #49 moved the identity into the trip panel: one panel says which city
+    // and which trip, instead of a second card saying the same thing.
+    expect(tripHud).toContain("Jev Traffic · Chicago");
+    expect(`${tripHud}${chrome}`).not.toContain("Central");
   });
 
   it("groups the HUD into one surface and has no sparkline", () => {

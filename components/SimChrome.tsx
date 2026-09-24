@@ -4,12 +4,15 @@
  * SimChrome (Task 11 polish pass): the live product's chrome in discrete
  * zones — nothing spans the viewport.
  *
- *   top-left      run identity (bare type, hover reveals "Change setup…")
- *   top-centre    controller · pause/play · scenario
- *   bottom-right  camera stack (zoom in / out / fit city)
- *   bottom-centre run-complete payoff and error state (above the dock)
+ *   top-centre    pause/play · follow/recenter · zoom out/in · scenario
+ *   bottom-left   trip state and provenance (TripHUD, one panel)
+ *   bottom-centre incident dock, run-complete payoff and error state
  *
- * Panels are the only overlay material; everything else is type on the map.
+ * Two surfaces and a dock (Issue #49). The run-identity card that used to sit
+ * top-left said the same things as the trip panel - trip name, level, driver,
+ * provenance - so it was merged into it, and the camera stack moved into the
+ * control row where follow/recenter already lives. Panels are the only overlay
+ * material; everything else is type on the map.
  */
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +24,6 @@ import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
 import { ComparisonPanel } from "./ComparisonPanel";
 import {
   BASELINE_COMPUTING_DETAIL,
-  runShowsNonComparable,
   BASELINE_COMPUTING_TEXT,
   BASELINE_FAILED_DETAIL,
   BASELINE_FAILED_TEXT,
@@ -34,10 +36,7 @@ import {
   DRIVER_OPTIONS,
   TRAFFIC_OPTIONS,
   diceSeed,
-  driverLabel,
   normalizeSeed,
-  policyLabel,
-  trafficLabel,
 } from "./ui-model";
 
 import type { DriverStrategy } from "@/sim/driver";
@@ -63,8 +62,6 @@ interface SimChromeProps {
   onCancelDiscard: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
-  onHome: () => void;
-  onChangeSetup: () => void;
 }
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -243,10 +240,6 @@ export function SimChrome(props: SimChromeProps) {
   const phase = useUiStore((state) => state.phase);
   const running = useUiStore((state) => state.running);
   const controller = useUiStore((state) => state.controller);
-  const driver = useUiStore((state) => state.driver);
-  const scenarioFingerprint = useUiStore((state) => state.scenarioFingerprint);
-  const tripId = useUiStore((state) => state.tripId);
-  const trafficLevel = useUiStore((state) => state.trafficLevel);
   const scenarioOpen = useUiStore((state) => state.scenarioOpen);
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
   const runComplete = useUiStore((state) => state.runComplete);
@@ -256,8 +249,6 @@ export function SimChrome(props: SimChromeProps) {
   const baselines = useUiStore((state) => state.baselines);
   const baselinesRunning = useUiStore((state) => state.baselinesRunning);
   const baselinesFailed = useUiStore((state) => state.baselinesFailed);
-  const modified = useUiStore((state) => state.modified);
-  const manualIncidents = useUiStore((state) => state.manualIncidents);
   const pendingDiscard = useUiStore((state) => state.pendingDiscard);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
@@ -265,7 +256,6 @@ export function SimChrome(props: SimChromeProps) {
   // always is: the payoff panel is the whole point of finishing, and a run entered
   // without onboarding (or through ?debug) never flips the phase on its own.
   const live = phase === "city" || runComplete;
-  const activeTrip = curatedTrip(tripId);
   const panel = baselinePanelState({
     runComplete,
     hasBaselines: baselines !== null,
@@ -276,67 +266,12 @@ export function SimChrome(props: SimChromeProps) {
 
   return (
     <>
-      {/* Top-left: run identity. */}
-      <AnimatePresence>
-        {live && !runComplete && (
-          <motion.div
-            key="identity"
-            className="pointer-events-none absolute left-4 top-4 z-10"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.34, ease: EASE }}
-          >
-            <div className="surface pointer-events-auto flex flex-col items-start gap-2.5 px-3.5 py-3">
-              <div className="flex flex-col items-start gap-1">
-                <span className="label-micro">Jev Traffic · Chicago</span>
-                <span className="text-ui font-semibold leading-tight tracking-tight text-ink">
-                  {activeTrip.label}
-                </span>
-                <span className="text-meta leading-tight text-ink-52">
-                  {trafficLabel(trafficLevel)} · {driverLabel(driver)} driver
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="label-micro text-ink-38">Signals</span>
-                <span className="text-meta leading-none text-ink-70">
-                  {(policyLabel(controller, policy) ?? { text: controller }).text}
-                </span>
-              </div>
-              {props.debug && (
-                <div className="flex items-center gap-2">
-                  <span className="label-micro text-ink-38">Scenario</span>
-                  <span className="value-num text-micro leading-none text-ink-70">
-                    {scenarioFingerprint ?? "—"}
-                  </span>
-                </div>
-              )}
-              {runShowsNonComparable({ modified, manualIncidents }) && (
-                <div className="flex items-center gap-2" role="status">
-                  <span className="label-micro text-ink-38">Run</span>
-                  <span className="text-micro leading-none text-ink-70">
-                    modified · not comparable
-                  </span>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={props.onChangeSetup}
-                className="text-micro font-medium text-ink-38 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
-              >
-                Change setup…
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Top-centre: utilities. */}
       <AnimatePresence>
         {live && !runComplete && (
           <motion.div
             key="utilities"
-            className="absolute left-4 right-4 top-[180px] z-20 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 lg:top-4"
+            className="absolute left-4 right-4 top-4 z-20 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
@@ -392,6 +327,17 @@ export function SimChrome(props: SimChromeProps) {
                 </svg>
                 <span className="hidden sm:inline">{props.following ? "Following" : "Recenter"}</span>
               </button>
+              <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
+              <IconButton label="Zoom out" onClick={props.onZoomOut}>
+                <svg {...glyph}>
+                  <path d="M3 6.5h7" />
+                </svg>
+              </IconButton>
+              <IconButton label="Zoom in" onClick={props.onZoomIn}>
+                <svg {...glyph}>
+                  <path d="M6.5 3v7M3 6.5h7" />
+                </svg>
+              </IconButton>
               <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
               <button
                 type="button"
@@ -561,33 +507,6 @@ export function SimChrome(props: SimChromeProps) {
         )}
       </AnimatePresence>
 
-      {/* Bottom-right: camera stack (replaces MapLibre's default control). */}
-      <motion.div
-        aria-hidden={!live || runComplete}
-        className={`absolute bottom-4 right-4 z-10 ${live && !runComplete ? "" : "invisible"}`}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
-        transition={{ duration: 0.34, delay: live && !runComplete ? 0.24 : 0, ease: EASE }}
-      >
-        <div className="surface pointer-events-auto flex flex-col items-center divide-y divide-hair p-[3px]">
-          <IconButton label="Zoom in" onClick={props.onZoomIn}>
-            <svg {...glyph}>
-              <path d="M6.5 3v7M3 6.5h7" />
-            </svg>
-          </IconButton>
-          <IconButton label="Zoom out" onClick={props.onZoomOut}>
-            <svg {...glyph}>
-              <path d="M3 6.5h7" />
-            </svg>
-          </IconButton>
-          <IconButton label="Fit city" onClick={props.onHome}>
-            <svg {...glyph}>
-              <path d="M2 4.6V2h2.6M10.4 2H13v2.6M13 10.4V13h-2.6M2 10.4V13h2.6" />
-              <circle cx="6.5" cy="6.5" r="1.6" />
-            </svg>
-          </IconButton>
-        </div>
-      </motion.div>
     </>
   );
 }

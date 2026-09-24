@@ -1,20 +1,33 @@
 "use client";
 
 /**
- * TripHUD (Issue #25, decluttered in the shipping pass).
+ * TripHUD (Issue #25, consolidated in Issue #49).
  *
- * The live view answers four questions and nothing else: where am I going, how
- * long have I been going, how far is left, and how fast am I moving. Stopped
- * time, intersections cleared, the estimate and the citywide health block were
- * a monitoring dashboard sitting on top of a race — they are still computed and
- * still shown, but behind ?debug where they belong.
+ * ONE panel answers everything the live view has to say: which trip, how it is
+ * going, and what is driving the signals. The run-identity card that used to
+ * float in the top-left corner carried the same trip name and the same
+ * provenance, so two panels said the same thing and competed with the map for
+ * attention. The card is gone; its content lives here, in the panel that was
+ * already answering the trip questions.
+ *
+ * Elapsed, remaining and speed are the three facts a visitor reads mid-race.
+ * Stopped time, intersections cleared, the estimate and the citywide health
+ * block are still computed and still shown, behind ?debug.
  *
  * Every value is a field the worker computed (see tripHudView in ui-model), so
  * the HUD can never disagree with the map or the simulation.
  */
 import { motion } from "motion/react";
 import { useUiStore } from "@/store/ui-store";
-import { formatDuration, formatPercent, tripHudView } from "./ui-model";
+import {
+  formatDuration,
+  formatPercent,
+  policyLabel,
+  runShowsNonComparable,
+  trafficLabel,
+  driverLabel,
+  tripHudView,
+} from "./ui-model";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -33,20 +46,28 @@ export function TripHUD() {
   const egoSpeedMps = useUiStore((state) => state.egoSpeedMps);
   const metrics = useUiStore((state) => state.metrics);
   const debug = useUiStore((state) => state.debug);
+  const controller = useUiStore((state) => state.controller);
+  const policy = useUiStore((state) => state.policy);
+  const trafficLevel = useUiStore((state) => state.trafficLevel);
+  const driver = useUiStore((state) => state.driver);
+  const modified = useUiStore((state) => state.modified);
+  const manualIncidents = useUiStore((state) => state.manualIncidents);
+  const scenarioFingerprint = useUiStore((state) => state.scenarioFingerprint);
   const live = phase === "city";
   const view = tripHudView({ trip, egoState, egoSpeedMps });
-  // The four facts a visitor reads mid-race; everything else waits for ?debug.
+  // The three facts a visitor reads mid-race; everything else waits for ?debug.
   const PRIMARY_ROWS = ["Elapsed", "Remaining", "Speed"];
 
   return (
     <motion.div
-      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[204px] sm:bottom-4"
+      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[214px] sm:bottom-4"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
       transition={{ duration: 0.32, delay: live ? 0.18 : 0, ease: [0.22, 1, 0.36, 1] }}
       aria-hidden={!live || runComplete}
     >
       <div className="surface flex flex-col gap-2 px-3 py-2.5" role="status" aria-label="Trip">
+        <span className="label-micro">Jev Traffic · Chicago</span>
         <div className="flex items-baseline justify-between gap-3">
           <span className="min-w-0 truncate text-ui font-medium text-ink">
             {view?.tripName ?? "Trip"}
@@ -55,6 +76,14 @@ export function TripHUD() {
             className={`label-micro shrink-0 ${view?.completed ? "text-ink" : "text-ink-52"}`}
           >
             {view?.state.toUpperCase() ?? "—"}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-meta leading-tight text-ink-52">
+            {trafficLabel(trafficLevel)} · {driverLabel(driver)}
+          </span>
+          <span className="text-meta leading-none text-ink-70">
+            {(policyLabel(controller, policy) ?? { text: controller }).text}
           </span>
         </div>
         <div className="flex flex-col gap-[6px]">
@@ -71,8 +100,14 @@ export function TripHUD() {
             ))
           )}
         </div>
+        {runShowsNonComparable({ modified, manualIncidents }) && (
+          <span className="text-micro leading-none text-ink-70">modified · not comparable</span>
+        )}
         {debug && (
           <div className="mt-0.5 border-t border-hair pt-2">
+            <div className="value-num mb-1 truncate text-micro text-ink-38">
+              {scenarioFingerprint ?? "—"}
+            </div>
             <div className="mb-1 label-micro text-ink-38">City traffic · debug</div>
             <div className="value-num flex items-baseline justify-between text-micro text-ink-38">
               <span>{formatDuration(metrics?.averageWaitTimeMs ?? 0)} avg wait</span>

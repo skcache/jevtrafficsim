@@ -581,20 +581,12 @@ export function TrafficSimulator() {
     [send],
   );
 
-  const onHome = useCallback(() => {
-    mapHandleRef.current?.fitCity();
-  }, []);
-
   const onZoomIn = useCallback(() => {
     mapHandleRef.current?.zoomIn();
   }, []);
 
   const onZoomOut = useCallback(() => {
     mapHandleRef.current?.zoomOut();
-  }, []);
-
-  const onChangeSetup = useCallback(() => {
-    useUiStore.getState().setPhase("config");
   }, []);
 
   const handleMap = useCallback((handle: MapHandle | null) => {
@@ -671,8 +663,6 @@ export function TrafficSimulator() {
           onCancelDiscard={onCancelDiscard}
           onZoomIn={onZoomIn}
           onZoomOut={onZoomOut}
-          onHome={onHome}
-          onChangeSetup={onChangeSetup}
         />
         <TripHUD />
         <IncidentBar onIncident={onIncident} />
