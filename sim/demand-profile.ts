@@ -23,8 +23,17 @@ import type { DemandShapeName } from "./demand-shape";
 import type { ScheduledSpawn } from "./engine";
 import type { TrafficLevel } from "./types";
 
-/** Bump when a profile's numbers or shapes change in a way that alters the world. */
-export const DEMAND_PROFILE_VERSION = 1;
+/**
+ * Bump when a profile's numbers or shapes change in a way that alters the world.
+ *
+ * v2: rush hour 2.75x -> 3.75x. Measured, not chosen: at 2.75x the shipping
+ * downtown-bound shape put 7 585 vehicles on the network with 6.2% of roads red,
+ * and the sweep to 4.0x showed throughput still rising (402.8 -> 462.5/min) with
+ * every curated trip still completing. 3.75x takes the red share to 10.2% at
+ * the highest throughput that is not yet paying for it in starvation or waits
+ * (4.0x: starvation 52 vs 31, p95 wait 223s vs 208s, for 1.3% more throughput).
+ */
+export const DEMAND_PROFILE_VERSION = 2;
 
 export interface DemandProfile {
   /** Volume multiplier on the level's active-vehicle target. */
@@ -47,8 +56,9 @@ export const PRODUCTION_DEMAND: Record<TrafficLevel, DemandProfile> = {
   // produces the "many roads busy, a few congested" Everyday look.
   everyday: { multiplier: 2.25, shape: "corridor-heavy", label: "everyday-2.25-corridor-v1" },
   // Downtown-bound morning peak: anywhere -> core, which stacks queues on the
-  // approaches into the Loop instead of spreading them evenly.
-  "rush-hour": { multiplier: 2.75, shape: "downtown-bound", label: "rush-2.75-downtown-v1" },
+  // approaches into the Loop instead of spreading them evenly. 3.75x is the
+  // measured ceiling of the usable range - see DEMAND_PROFILE_VERSION.
+  "rush-hour": { multiplier: 3.75, shape: "downtown-bound", label: "rush-3.75-downtown-v1" },
 };
 
 export function demandProfileFor(level: TrafficLevel): DemandProfile {

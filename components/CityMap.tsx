@@ -80,7 +80,6 @@ import {
 } from "@/render/contextual-controls";
 import { buildControlLayers } from "@/render/control-layers";
 import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
-import { deriveLocalTraffic, LOCAL_TRAFFIC } from "@/render/local-traffic";
 import { SIM_TICK_MS } from "@/worker/protocol";
 import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 import type { FrameBuffer } from "./frame-buffer";
@@ -143,7 +142,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const overlayRef = useRef<MapLibreOverlay | null>(null);
-  const zoomRef = useRef(16);
+const zoomRef = useRef(16);
   const iconsRef = useRef<VehicleIconSet | null>(null);
   const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
@@ -629,28 +628,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // simulation's own, so it keeps the authoritative progress (already
         // corrected to the rendered stop line by the interpolation's own
         // stop-line warp, so nothing else may move it.
-        // Background context, derived from the simulation's own per-road
-        // aggregates: restrained, deterministic, road-locked, and only around
-        // the ego (issue #56). The ego stays the only vehicle with authority -
-        // these are drawn by the muted fleet layers and never enter the
-        // simulation, the controller, the routing or the comparison.
-        const localTraffic = buffer.current
-          ? deriveLocalTraffic({
-              model: buffer.model,
-              indexes: buffer.paths,
-              laneOffsets,
-              roadTraffic: buffer.current.roadTraffic,
-              ego:
-                interpolated[0] !== undefined
-                  ? {
-                      x: interpolated[0].x,
-                      y: interpolated[0].y,
-                      roadId: interpolated[0].roadId,
-                    }
-                  : null,
-            })
-          : [];
-        const vehicles = [...interpolated, ...localTraffic];
+        // ONE vehicle is drawn on this map: the simulation's own protagonist.
+        const vehicles = interpolated;
         // Every rendered position now comes directly from a road path, a bounded
         // junction turn, or queue packing on that same road. Do not "settle"
         // positions with a free-space x/y lerp: that smoothing can leave the
@@ -742,8 +721,6 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
                     return road ? Number((road.length - buffer.current!.ego!.progress).toFixed(1)) : null;
                   })()
                 : null,
-            localFleet: localTraffic.length,
-            localTrafficBudget: LOCAL_TRAFFIC.maxTotal,
             pxPerMetre: mapRef.current
               ? (() => {
                   const projection = modelRef.current!.projection;
