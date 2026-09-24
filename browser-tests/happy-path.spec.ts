@@ -47,9 +47,12 @@ async function journey(page: Page, relayStatus: 200 | 503) {
       current.y - (window as Window & { __firstEgo?: { x: number; y: number } }).__firstEgo!.y) : 0;
   }), { timeout: 30_000 }).toBeGreaterThan(0.1);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
+  // The arrival keeps the street framing. Pulling the camera back to a
+  // city-wide view on completion was tried and removed: the result belongs over
+  // the car, not over a mostly-empty lake (measured 13.6 before, 15.4 now).
   await expect.poll(async () => page.evaluate(() =>
-    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 20,
-  )).toBeLessThan(15);
+    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 0,
+  )).toBeGreaterThan(15);
   await expect(page.getByRole("status", { name: "Trip" })).toBeHidden();
   await expect(page.getByText("Jev Traffic · Chicago")).toBeHidden();
   await expect(page.getByRole("button", { name: "+5× Traffic" })).toBeHidden();
@@ -112,9 +115,12 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   expect(scenarioBox!.x).toBeGreaterThanOrEqual(followingBox!.x + followingBox!.width);
   expect(hudBox!.y + hudBox!.height).toBeLessThan(firstControlBox!.y);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
+  // The arrival keeps the street framing. Pulling the camera back to a
+  // city-wide view on completion was tried and removed: the result belongs over
+  // the car, not over a mostly-empty lake (measured 13.6 before, 15.4 now).
   await expect.poll(async () => page.evaluate(() =>
-    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 20,
-  )).toBeLessThan(15);
+    (window as Window & { __jevMapInstance?: { getZoom: () => number } }).__jevMapInstance?.getZoom() ?? 0,
+  )).toBeGreaterThan(15);
   const payoff = page.locator(".surface-overlay").filter({ hasText: "Run complete" });
   const box = await payoff.boundingBox();
   expect(box).not.toBeNull();
