@@ -11,7 +11,7 @@ import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-mod
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import type { Point } from "@/cities/paths";
 import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
-import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NORTHERLY_ISLAND_PARK } from "./coastal-corrections";
+import { LAKE_MICHIGAN_WATER, NAVY_PIER_LAND } from "./coastal-corrections";
 
 export type LngLat = readonly [number, number];
 
@@ -302,17 +302,10 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
             areaM2: Math.round(entry.areaM2),
           }),
         ),
-      ...(metro
-        ? [{
-            type: "Feature" as const,
-            properties: { id: "museum-campus-green", kind: "major", areaM2: 300_000 },
-            geometry: { type: "Polygon" as const, coordinates: [MUSEUM_CAMPUS_PARK] },
-          }, {
-            type: "Feature" as const,
-            properties: { id: "northerly-island-green", kind: "major", areaM2: 500_000 },
-            geometry: { type: "Polygon" as const, coordinates: [NORTHERLY_ISLAND_PARK] },
-          }]
-        : []),
+      // Hand-drawn park polygons (museum campus, Northerly Island) were merged in
+      // here and removed again: at street zoom their straight-line edges read as
+      // jagged green triangles stuck onto the shoreline. Parks come from the real
+      // data; a missing green patch is better than an invented one.
     ],
   };
 

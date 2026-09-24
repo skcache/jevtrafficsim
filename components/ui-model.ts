@@ -596,9 +596,9 @@ export function baselinePanelState(input: {
 }
 
 export const BASELINE_COMPUTING_TEXT = "Computing same-scenario baselines…";
-export const BASELINE_COMPUTING_DETAIL =
-  "Fixed and Adaptive are being run headlessly on the scenario you just watched. " +
-  "They take about as long as the trip did; there is no fake progress bar.";
+// One line, not a paragraph: the wait is self-explanatory and the explanation was
+// chrome on top of a result the visitor is waiting for.
+export const BASELINE_COMPUTING_DETAIL = "Fixed and Adaptive, same scenario, same driver.";
 export const BASELINE_FAILED_TEXT = "The same-scenario baselines could not be computed.";
 export const BASELINE_FAILED_DETAIL =
   "The comparison needs both baselines. Retry runs them again for this exact scenario.";

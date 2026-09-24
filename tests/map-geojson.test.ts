@@ -11,7 +11,7 @@ import { chicagoAsset, chicagoModel } from "./chicago-support";
 const ALL_SCALES = [0, 1, 2, 3, 4];
 
 describe("Chicago GeoJSON", () => {
-  it("repairs the metro lake gap and preserves a dry Navy Pier and Museum Campus", () => {
+  it("repairs the metro lake gap and preserves a dry Navy Pier", () => {
     const geo = buildShowcaseGeoJson(chicagoModel(4));
     expect(geo.coastalLand.features).toHaveLength(1);
     expect(geo.coastalLand.features[0].geometry.coordinates[0]).toEqual(NAVY_PIER_LAND);
@@ -22,14 +22,13 @@ describe("Chicago GeoJSON", () => {
     expect(geo.water.features.filter((feature) => feature.properties.kind === "lake")
       .map((feature) => feature.properties.id)).toEqual(["lake-michigan"]);
     expect(geo.water.features.some((feature) => feature.properties.id === "chicago-river-arm")).toBe(true);
+    // Hand-drawn greens for the Museum Campus and Northerly Island were removed:
+    // at street zoom their straight-line edges read as jagged green triangles
+    // stuck onto the shoreline, so parks come from the real data only.
     expect(geo.parks.features.some((feature) =>
-      feature.properties.id === "museum-campus-green" &&
-      feature.geometry.coordinates[0] === MUSEUM_CAMPUS_PARK,
-    )).toBe(true);
-    expect(geo.parks.features.some((feature) =>
-      feature.properties.id === "northerly-island-green" &&
-      feature.geometry.coordinates[0] === NORTHERLY_ISLAND_PARK,
-    )).toBe(true);
+      feature.properties.id === "museum-campus-green" ||
+      feature.properties.id === "northerly-island-green",
+    )).toBe(false);
     expect(geo.parks.features.some((feature) =>
       feature.geometry.coordinates[0].length <= 4 &&
       feature.geometry.coordinates[0].some(([lon, lat]) =>

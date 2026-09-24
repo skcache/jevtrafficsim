@@ -456,9 +456,6 @@ export function SimChrome(props: SimChromeProps) {
           >
             <div className="flex items-baseline justify-between">
               <span className="label-micro">Run complete</span>
-              <span className="value-num text-meta text-ink-52">
-                {Math.round((liveResult?.simulatedMs ?? 0) / 1000)}s simulated
-              </span>
             </div>
             <div className="mt-3">
               {panel === "comparison" && liveResult !== null && baselines !== null ? (

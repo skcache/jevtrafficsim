@@ -45,7 +45,6 @@ export function ComparisonPanel({
       <div>
         <div className="flex items-baseline justify-between gap-3">
           <span className="label-micro">This run</span>
-          <span className="value-num text-micro text-ink-38">{live.fingerprint}</span>
         </div>
         <p className="mt-2 text-meta leading-relaxed text-ink-52">
           This run cannot be shown beside the baselines: {verdict.reason}.
@@ -67,7 +66,6 @@ export function ComparisonPanel({
     <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="label-micro">Who got there first</span>
-        <span className="value-num text-micro text-ink-38">{live.fingerprint}</span>
       </div>
 
       <div className="mt-2.5 flex flex-col">
