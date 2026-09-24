@@ -499,6 +499,10 @@ describe("contextual controls: placement and scale", () => {
     expect(CONTROL_SCALE.minPixels).toBeLessThan(12);
     expect(CONTROL_SCALE.maxPixels).toBeGreaterThan(CONTROL_SCALE.minPixels);
     expect(props.billboard).toBe(true);
+    expect((props.getPixelOffset as (control: ContextualControl) => number[])(controls[0]))
+      .toHaveLength(2);
+    expect(Math.hypot(...(props.getPixelOffset as (control: ContextualControl) => number[])(controls[0])))
+      .toBeCloseTo(16);
 
     // At the reveal boundary the contextual head starts at the same quiet
     // network scale, then grows continuously instead of popping between layers.

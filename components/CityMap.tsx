@@ -7,7 +7,7 @@
  * GeoJSON (no tiles, no external basemap, no attribution) and owns the camera
  * (pan / wheel zoom / pinch / double-click). deck.gl (via MapLibreOverlay)
  * draws the dynamic layers — vehicles, signals, incident overlays — from the
- * bounded 5 Hz presentation snapshots, interpolated to display rate in one
+ * bounded per-tick presentation snapshots, interpolated to display rate in one
  * rAF loop.
  *
  * Presentation grammar: muted city context under explicit simulation state.
@@ -28,6 +28,8 @@ import { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Layer } from "@deck.gl/core";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import { setFrameModel } from "./frame-buffer";
 import { lngLatToMetric, metricToLngLat, type MapModel } from "@/cities/map-model";
 import {
   clamp01,
@@ -38,8 +40,8 @@ import {
 } from "@/render/interpolate";
 import { clampVehiclesAtSignals } from "@/render/queue-packing";
 import {
+  createBackgroundTrafficTracker,
   renderBackgroundVehicles,
-  synthesizeRoadTrafficCached,
 } from "@/render/background-traffic";
 import {
   carriagewayPairs,
@@ -117,6 +119,8 @@ export interface MapHandle {
   getZoom: () => number;
   /** Resume following the ego car, easing back to it (Issue #25). */
   followEgo: () => void;
+  /** Show the completed trip in city context behind its result. */
+  frameCompletedTrip: () => void;
   isFollowing: () => boolean;
 }
 
@@ -141,6 +145,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   const controlSpritesRef = useRef<ControlSpriteSet | null>(null);
   /** Per-road lane-centre offsets in metres for the current model. */
   const laneOffsetsRef = useRef<number[] | null>(null);
+  const backgroundTrackerRef = useRef(createBackgroundTrafficTracker());
+  const backgroundGenerationRef = useRef(-1);
   /** Per-road lng/lat paths + physical widths, for the whole-city traffic layer. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
   /** Static low-prominence signal network: citywide system context, no worker payload. */
@@ -182,23 +188,28 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
   // model is loaded asynchronously from the frozen Chicago assets.
   const ready = model !== null;
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     loadChicagoCity(scaleIndex)
       .then((loaded) => {
         if (!cancelled) {
+          if (frames.current.model === null) {
+            setFrameModel(frames.current, loaded, buildDirectedPathIndexes(loaded));
+          }
           setModel(loaded);
+          setLoadError(null);
         }
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : String(error));
+          setLoadError("Chicago map data is temporarily unavailable.");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [scaleIndex]);
+  }, [scaleIndex, loadAttempt, frames]);
 
   const geo = useMemo(() => (model ? buildShowcaseGeoJson(model) : null), [model]);
   const modelRef = useRef<MapModel | null>(model);
@@ -401,6 +412,40 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           });
         }
       },
+      frameCompletedTrip: () => {
+        // Respect a visitor who deliberately panned away. Otherwise, staying
+        // zoomed in on the pier leaves the result over nearly empty lake.
+        if (!followRef.current.following) return;
+        const trip = frames.current.current?.trip;
+        const city = modelRef.current;
+        if (!trip || !city) return;
+        const origin = city.city.intersections[trip.originIntersectionId];
+        const destination = city.city.intersections[trip.destinationIntersectionId];
+        if (!origin || !destination) return;
+        const bounds = {
+          minX: Math.min(origin.x, destination.x),
+          minY: Math.min(origin.y, destination.y),
+          maxX: Math.max(origin.x, destination.x),
+          maxY: Math.max(origin.y, destination.y),
+        };
+        for (const roadId of trip.routeRoadIds) {
+          for (const [x, y] of city.directedPaths[roadId] ?? []) {
+            bounds.minX = Math.min(bounds.minX, x);
+            bounds.minY = Math.min(bounds.minY, y);
+            bounds.maxX = Math.max(bounds.maxX, x);
+            bounds.maxY = Math.max(bounds.maxY, y);
+          }
+        }
+        const duration = 1000;
+        const padding = Math.min(88, Math.round(Math.min(map.getContainer().clientWidth, map.getContainer().clientHeight) * 0.12));
+        ownCameraFor(duration);
+        map.fitBounds(cameraBoundsLngLat(city, bounds), {
+          padding,
+          duration,
+          maxZoom: 15.4,
+          easing: (t) => 1 - Math.pow(1 - t, 3),
+        });
+      },
       isFollowing: () => followRef.current.following,
     };
 
@@ -539,7 +584,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // One vehicle in the frame now: the ego. Background traffic reaches the
         // map only as sparse road aggregates. Route/control presentation uses
         // the SAME display-time progress as the visible car, otherwise a smooth
-        // car would drag a 5 Hz route/light behind it.
+        // car would drag a snapshot-cadence route/light behind it.
         const displayEgoProgress = interpolateEgoRoadProgress(
           buffer.previous,
           buffer.current,
@@ -592,17 +637,18 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         // synthesised from those counts and drawn with the same road rules as the
         // ego: on the path, in a stable lane, nose along the tangent. Without it
         // the map showed one car on an empty-looking city.
-        const background = renderBackgroundVehicles(
-          synthesizeRoadTrafficCached(buffer.previous, {
-            city: buffer.model.city,
-            laneOffsets,
-            egoRoadId: buffer.previous?.ego?.roadId ?? null,
-          }),
-          synthesizeRoadTrafficCached(buffer.current, {
+        if (backgroundGenerationRef.current !== buffer.generation) {
+          backgroundTrackerRef.current.reset();
+          backgroundGenerationRef.current = buffer.generation;
+        }
+        const backgroundPair = backgroundTrackerRef.current.update(buffer.current, {
             city: buffer.model.city,
             laneOffsets,
             egoRoadId: buffer.current?.ego?.roadId ?? null,
-          }),
+          });
+        const background = renderBackgroundVehicles(
+          backgroundPair.previous,
+          backgroundPair.current,
           alpha,
           {
             indexes: buffer.paths,
@@ -702,7 +748,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           : null;
 
         // Follow camera: driven by the INTERPOLATED on-screen car (60 Hz), not
-        // the 5 Hz worker snapshot, and north-up. A camera ease in flight wins
+        // the worker snapshot cadence, and north-up. A camera ease in flight wins
         // the frame; once it ends, per-frame tracking resumes silently.
         const dtMs = lastRenderAtRef.current > 0 ? Math.min(250, now - lastRenderAtRef.current) : 16;
         lastRenderAtRef.current = now;
@@ -717,6 +763,7 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
         if (
           follow.target &&
           followRef.current.following &&
+          !buffer.current?.trip?.completed &&
           now >= easeGuardUntilRef.current &&
           // An animation in flight counts as "moving" in MapLibre, and while we
           // are following the only thing that can move the map is an animation we
@@ -798,8 +845,8 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
           ...networkTrafficLayers,
           ...routeLayers,
           ...networkSignalLayers,
-          ...cityVehicleLayers,
           ...challengeTopLayers,
+          ...cityVehicleLayers,
         ];
         overlayRef.current?.setProps({ layers });
 
@@ -990,7 +1037,10 @@ export function CityMap({ scaleIndex, frames, live, onHandle }: CityMapProps) {
       </div>
       {loadError !== null && (
         <div className="surface-overlay absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 px-4 py-3">
-          <span className="text-meta text-ink-70">Map data failed to load: {loadError}</span>
+          <span className="text-meta text-ink-70">{loadError}</span>
+          <button type="button" className="ml-3 text-meta underline" onClick={() => { setLoadError(null); setLoadAttempt((value) => value + 1); }}>
+            Retry map
+          </button>
         </div>
       )}
     </>

@@ -201,6 +201,35 @@ describe("turn interpolation", () => {
     expect(pastJunction.y).toBeCloseTo(2, 6);
   });
 
+  it("releases from the rendered stop line instead of jumping to the junction", () => {
+    const previous = {
+      ...snapshot(0, [{ id: 7, roadId: 0, progress: 99, speed: 0 }]),
+      routeControls: [{ intersectionId: 1, phaseIndex: 0, stage: "all-red" as const }],
+    };
+    const current = snapshot(100, [{ id: 7, roadId: 2, progress: 2, speed: 4 }]);
+    const halfway = interpolateVehicles(
+      indexes,
+      previous,
+      current,
+      0.5,
+      options(city, laneOffsets),
+    )[0];
+
+    const stop =
+      100 -
+      stopLineSetbackMetres(city.roads[0].lanes) -
+      VEHICLE_LENGTH_M.car / 2 -
+      STOP_LINE_CLEARANCE_M;
+    const expectedProgress = stop + ((100 - stop) + 2) * 0.5;
+
+    // The transition's distance calculation and its sampled starting progress
+    // must use the same presentation-space stop-line position. Mixing the raw
+    // 99 m simulation progress with a remaining distance measured from ~90 m
+    // clamps the car to x=100 immediately, which looks like a launch/jump.
+    expect(halfway.x).toBeCloseTo(expectedProgress, 5);
+    expect(halfway.x).toBeLessThan(100);
+  });
+
   it("rotates the heading the short way around", () => {
     expect(angleDelta(0, Math.PI / 2)).toBeCloseTo(Math.PI / 2, 6);
     expect(angleDelta(Math.PI / 2, 0)).toBeCloseTo(-Math.PI / 2, 6);

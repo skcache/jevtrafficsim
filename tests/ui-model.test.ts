@@ -76,7 +76,6 @@ describe("UI store phases", () => {
   beforeEach(() => {
     useUiStore.setState({
       phase: "landing",
-      citySize: "large",
       trafficLevel: "everyday",
       tripId: "soldier-field-to-navy-pier",
       controller: "adaptive",
@@ -92,12 +91,11 @@ describe("UI store phases", () => {
     });
   });
 
-  it("selecting a curated trip pins public setup to Metro", () => {
+  it("selects a curated trip without retaining dead city-size state", () => {
     const store = useUiStore.getState();
-    store.setCitySize("medium");
     store.setTripId("streeterville-to-south-loop");
     expect(useUiStore.getState().tripId).toBe("streeterville-to-south-loop");
-    expect(useUiStore.getState().citySize).toBe("large");
+    expect("citySize" in useUiStore.getState()).toBe(false);
   });
 
   it("walks landing -> config -> entering -> city", () => {
@@ -113,7 +111,6 @@ describe("UI store phases", () => {
 
   it("applies READY state without resetting selections", () => {
     const store = useUiStore.getState();
-    store.setCitySize("large");
     store.setTrafficLevel("rush-hour");
     store.applyReady(
       { citySize: "large", trafficLevel: "rush-hour", tripId: "willis-tower-to-near-west-side", controller: "adaptive", driver: "tourist", seed: 77, durationMs: 600_000 },
@@ -124,7 +121,6 @@ describe("UI store phases", () => {
     expect(state.running).toBe(true);
     expect(state.seed).toBe(77);
     expect(state.scaleLabel).toBe("Metro");
-    expect(state.citySize).toBe("large");
     expect(state.trafficLevel).toBe("rush-hour");
     expect(state.tripId).toBe("willis-tower-to-near-west-side");
   });
@@ -197,7 +193,7 @@ describe("comparison panel (Issue #28, three columns since #15)", () => {
     expect(byLabel.get("Stopped")?.adaptive).toBe("1m 38s");
     expect(byLabel.get("Stopped")?.jev).toBe("2m 10s");
     expect(byLabel.get("Trips done")?.fixed).toBe("1,084");
-    expect(byLabel.get("Gridlock")?.adaptive).toBe("16%");
+    expect(byLabel.get("Queued time")?.adaptive).toBe("16%");
     expect(byLabel.get("Reroutes")?.fixed).toBe("2");
     // Every row is a field of a real run, so no column is ever blank.
     for (const row of rows) {

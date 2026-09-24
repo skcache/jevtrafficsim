@@ -361,6 +361,14 @@ export function buildDocument(
   runs: readonly BenchmarkRunRecord[],
   jevAdapter: JevAdapterChoice = "mock",
 ): BenchmarkDocument {
+  for (const run of runs) {
+    if (run.controller === "jev" && run.provenance?.controller !== "jev") {
+      throw new Error("cannot emit a Jev benchmark artifact without provenance");
+    }
+    if (run.controller !== "jev" && run.provenance !== undefined) {
+      throw new Error("baseline artifact cannot carry Jev provenance");
+    }
+  }
   return {
     version: 1,
     // The document says which adapter produced its jev rows, so the artifact is

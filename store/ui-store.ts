@@ -7,7 +7,7 @@
  * frames live in refs near the map.
  */
 import { create } from "zustand";
-import type { CitySize, TrafficLevel } from "@/sim/types";
+import type { TrafficLevel } from "@/sim/types";
 import type { CuratedTripId } from "@/cities/chicago-trips";
 import type {
   PresentationMetrics,
@@ -35,12 +35,11 @@ export interface BaselineState {
 
 export type UiPhase = "landing" | "config" | "entering" | "city";
 
-/** Avg-wait samples kept for the sparkline (2 Hz × 150 = 75 s of history). */
+/** Avg-wait samples: 150 worker frames; wall-clock duration varies with tick cost. */
 export const METRICS_HISTORY_LIMIT = 150;
 
 export interface UiState {
   phase: UiPhase;
-  citySize: CitySize;
   trafficLevel: TrafficLevel;
   tripId: CuratedTripId;
   controller: ControllerChoice;
@@ -55,7 +54,7 @@ export interface UiState {
   liveResult: ChallengeResult | null;
   /** Who governed the signals in the visible run (live | replay | fallback). */
   policy: PresentationPolicy | null;
-  /** Developer controls (?debug) only: controller choice, raw seed, city scale. */
+  /** Developer controls (?debug) only: controller choice and raw seed. */
   debug: boolean;
   seed: number;
   ready: boolean;
@@ -108,7 +107,6 @@ export interface UiState {
    */
   cameraFramedFor: string | null;
   markCameraFramed: (fingerprint: string) => void;
-  setCitySize: (citySize: CitySize) => void;
   setTrafficLevel: (trafficLevel: TrafficLevel) => void;
   setTripId: (tripId: CuratedTripId) => void;
   setController: (controller: ControllerChoice) => void;
@@ -166,7 +164,6 @@ function sameWorldFinished(state: UiState, fingerprint: string | undefined): boo
 export const useUiStore = create<UiState>()((set) => ({
   phase: "landing",
   cameraFramedFor: null,
-  citySize: "large",
   trafficLevel: "everyday",
   tripId: "soldier-field-to-navy-pier",
   /** Jev is the product's visible run; Fixed/Adaptive are the baselines. */
@@ -208,9 +205,8 @@ export const useUiStore = create<UiState>()((set) => ({
       // Leaving the city puts the camera back in play for the next run.
       ...(phase === "config" || phase === "landing" ? { cameraFramedFor: null } : {}),
     }),
-  setCitySize: (citySize) => set({ citySize }),
   setTrafficLevel: (trafficLevel) => set({ trafficLevel }),
-  setTripId: (tripId) => set({ tripId, citySize: "large" }),
+  setTripId: (tripId) => set({ tripId }),
   setController: (controller) => set({ controller }),
   setDriver: (driver) => set({ driver }),
   setScenarioFingerprint: (scenarioFingerprint) => set({ scenarioFingerprint }),

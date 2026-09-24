@@ -39,6 +39,7 @@ import {
 import { CURATED_TRIP_IDS } from "@/cities/chicago-trips";
 import { createJevController, type JevController } from "@/controllers/jev";
 import { createHttpJevClient, createMockJevClient } from "@/jev/client";
+import { jevProvenance } from "@/jev/provenance";
 import { liveRunCapError } from "@/benchmark/cli";
 import { buildScenarioRun, runComparison } from "@/worker/challenge-compare";
 import { resolveScenarioWorld } from "@/worker/challenge-scenario";
@@ -64,7 +65,7 @@ function record(overrides: {
   trafficLevel?: string;
   driver?: string;
   seed?: number;
-  controller?: string;
+  controller?: "fixed" | "adaptive";
   completed?: boolean;
   tripTimeMs?: number;
   averageWaitMs?: number;
@@ -78,7 +79,7 @@ function record(overrides: {
       driver: (overrides.driver ?? "tourist") as BenchmarkRunRecord["scenario"]["driver"],
       durationMs: SMOKE_HORIZON_MS,
     },
-    controller: (overrides.controller ?? "fixed") as BenchmarkRunRecord["controller"],
+    controller: overrides.controller ?? "fixed",
     world: { demandSeed: 1, incidentSeed: 2, incidentEntries: 0, spawns: 10 },
     trip: {
       completed: overrides.completed ?? true,
@@ -457,10 +458,12 @@ describe("benchmark runs Jev through the same seam", () => {
   function jevFactories(): {
     controllers: { jev: () => JevController };
     controllersSeen: JevController[];
+    describeController: (controller: string) => ReturnType<typeof jevProvenance> | undefined;
   } {
     const controllersSeen: JevController[] = [];
     return {
       controllersSeen,
+      describeController: (controller) => controller === "jev" ? jevProvenance(controllersSeen.at(-1)!.meta()) : undefined,
       controllers: {
         jev: () => {
           const controller = createJevController({ client: createMockJevClient(), scenarioFingerprint: "bench-mock" });
@@ -557,6 +560,7 @@ describe("benchmark runs Jev through the same seam", () => {
           return controller;
         },
       },
+      describeController: () => jevProvenance(controllersSeen[0].meta()),
     });
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((url) => url === "https://jev.invalid/policy")).toBe(true);
@@ -592,6 +596,7 @@ describe("benchmark runs Jev through the same seam", () => {
           return controller;
         },
       },
+      describeController: () => jevProvenance(controllersSeen[0].meta()),
     });
     expect(record.controller).toBe("jev");
     const status = controllersSeen[0].status();

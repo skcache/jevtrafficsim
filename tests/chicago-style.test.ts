@@ -60,6 +60,14 @@ const byId = new Map(layers.map((layer) => [layer.id as string, layer]));
 const paint = (id: string) => byId.get(id)?.paint as Record<string, unknown>;
 const minzoom = (id: string) => byId.get(id)?.minzoom as number | undefined;
 
+describe("coastal presentation repairs", () => {
+  it("does not stroke the lake extract's non-coastal diagonals", () => {
+    expect(byId.get("water-shore")?.filter).toEqual(["!=", ["get", "kind"], "lake"]);
+    expect(layers.findIndex((layer) => layer.id === "coastal-land"))
+      .toBeGreaterThan(layers.findIndex((layer) => layer.id === "water"));
+  });
+});
+
 /* ------------------------------- palette -------------------------------- */
 
 describe("restrained basemap palette", () => {
@@ -140,7 +148,7 @@ describe("subtraction at city zoom", () => {
     // so the first screen of the product showed a city with empty roads. The
     // floor must stay below the opening framing while still keeping true city
     // zoom (whole metro, ~11-12) free of per-vehicle detail.
-    expect(VEHICLE_MINZOOM).toBeGreaterThan(12);
+    expect(VEHICLE_MINZOOM).toBeGreaterThanOrEqual(14);
     expect(VEHICLE_MINZOOM).toBeLessThan(14.1);
   });
 });

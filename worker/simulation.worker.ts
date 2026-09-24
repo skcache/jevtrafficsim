@@ -167,6 +167,7 @@ function policyProvenance(): PresentationPolicy | null {
       fallbackMs: meta.fallbackMs,
       accepted: meta.accepted,
       rejected: meta.rejected,
+      refreshes: meta.refreshes,
     };
   } catch {
     return null;

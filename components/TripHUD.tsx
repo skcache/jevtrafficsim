@@ -27,6 +27,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export function TripHUD() {
   const phase = useUiStore((state) => state.phase);
+  const runComplete = useUiStore((state) => state.runComplete);
   const trip = useUiStore((state) => state.trip);
   const egoState = useUiStore((state) => state.egoState);
   const egoSpeedMps = useUiStore((state) => state.egoSpeedMps);
@@ -39,11 +40,11 @@ export function TripHUD() {
 
   return (
     <motion.div
-      className="pointer-events-none absolute bottom-4 left-4 z-10 w-[204px]"
+      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[204px] sm:bottom-4"
       initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: live ? 1 : 0, y: live ? 0 : 6 }}
+      animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
       transition={{ duration: 0.32, delay: live ? 0.18 : 0, ease: [0.22, 1, 0.36, 1] }}
-      aria-hidden={!live}
+      aria-hidden={!live || runComplete}
     >
       <div className="surface flex flex-col gap-2 px-3 py-2.5" role="status" aria-label="Trip">
         <div className="flex items-baseline justify-between gap-3">

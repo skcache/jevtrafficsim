@@ -131,6 +131,7 @@ export interface PresentationPolicy {
   readonly fallbackMs: number;
   readonly accepted: number;
   readonly rejected: number;
+  readonly refreshes: number;
 }
 
 /** Fraction of a policy run that its fallback had to cover, in [0,1]. */

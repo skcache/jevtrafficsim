@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { assignQueueRanks } from "@/worker/presentation-snapshot";
 import { buildVehicleLayers } from "@/render/deck-layers";
+import { TRAFFIC_SCALE } from "@/render/scale";
 import { buildIncidentLayers } from "@/render/deck-layers";
 import { buildDirectedPathIndexes, type DirectedPathIndexes } from "@/render/map-geometry";
 import { interpolateVehicles, type RenderedVehicle } from "@/render/interpolate";
@@ -94,6 +95,10 @@ const rendered = (id: number, blockedWaitMs = 0): RenderedVehicle => ({
 });
 
 describe("vehicle zoom strategy", () => {
+  it("keeps background cars legible without giving them the ego scale", () => {
+    expect(TRAFFIC_SCALE.minPixelsByClass.car).toBeGreaterThanOrEqual(10);
+    expect(TRAFFIC_SCALE.minPixelsByClass.car).toBeLessThan(TRAFFIC_SCALE.maxPixelsByClass.car);
+  });
   it("never adds a per-vehicle wait halo layer", () => {
     const fleet = [rendered(1, 9000), rendered(2, 0)];
     const layers = buildVehicleLayers(chicagoModel(2).projection, fleet, {

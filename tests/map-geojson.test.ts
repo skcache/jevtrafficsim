@@ -4,12 +4,76 @@
  */
 import { describe, expect, it } from "vitest";
 import { buildShowcaseGeoJson, toLngLat } from "@/render/map-geojson";
-import { lngLatToMetric } from "@/cities/map-model";
+import { lngLatToMetric, pointInPolygon } from "@/cities/map-model";
+import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NORTHERLY_ISLAND_PARK } from "@/render/coastal-corrections";
 import { chicagoAsset, chicagoModel } from "./chicago-support";
 
 const ALL_SCALES = [0, 1, 2, 3, 4];
 
 describe("Chicago GeoJSON", () => {
+  it("repairs the metro lake gap and preserves a dry Navy Pier and Museum Campus", () => {
+    const geo = buildShowcaseGeoJson(chicagoModel(4));
+    expect(geo.coastalLand.features).toHaveLength(1);
+    expect(geo.coastalLand.features[0].geometry.coordinates[0]).toEqual(NAVY_PIER_LAND);
+    expect(geo.water.features.some((feature) =>
+      feature.properties.id === "lake-michigan" &&
+      feature.geometry.coordinates[0] === LAKE_MICHIGAN_WATER,
+    )).toBe(true);
+    expect(geo.water.features.filter((feature) => feature.properties.kind === "lake")
+      .map((feature) => feature.properties.id)).toEqual(["lake-michigan"]);
+    expect(geo.water.features.some((feature) => feature.properties.id === "chicago-river-arm")).toBe(true);
+    expect(geo.parks.features.some((feature) =>
+      feature.properties.id === "museum-campus-green" &&
+      feature.geometry.coordinates[0] === MUSEUM_CAMPUS_PARK,
+    )).toBe(true);
+    expect(geo.parks.features.some((feature) =>
+      feature.properties.id === "northerly-island-green" &&
+      feature.geometry.coordinates[0] === NORTHERLY_ISLAND_PARK,
+    )).toBe(true);
+    expect(geo.parks.features.some((feature) =>
+      feature.geometry.coordinates[0].length <= 4 &&
+      feature.geometry.coordinates[0].some(([lon, lat]) =>
+        lon > -87.606 && lon < -87.602 && lat > 41.893 && lat < 41.897,
+      ),
+    )).toBe(false);
+    expect(geo.layerOrder.indexOf("water")).toBeLessThan(geo.layerOrder.indexOf("coastal-land"));
+    expect(geo.layerOrder.indexOf("coastal-land")).toBeLessThan(geo.layerOrder.indexOf("parks"));
+    expect(pointInPolygon([-87.6055, 41.8916], NAVY_PIER_LAND)).toBe(true);
+    expect(pointInPolygon([-87.5986, 41.8918], NAVY_PIER_LAND)).toBe(true);
+    // The old hand-drawn southeast spike put a large fake land triangle in the lake.
+    expect(pointInPolygon([-87.5985, 41.8912], NAVY_PIER_LAND)).toBe(false);
+    expect(pointInPolygon([-87.6055, 41.8900], LAKE_MICHIGAN_WATER)).toBe(true);
+    expect(pointInPolygon([-87.6055, 41.8916], LAKE_MICHIGAN_WATER)).toBe(false);
+    expect(pointInPolygon([-87.605, 41.895], LAKE_MICHIGAN_WATER)).toBe(false);
+    expect(pointInPolygon([-87.601, 41.8927], LAKE_MICHIGAN_WATER)).toBe(true);
+    // Fitting the whole trip must not expose the clipped lake's east/south edge.
+    expect(pointInPolygon([-87.58, 41.89], LAKE_MICHIGAN_WATER)).toBe(true);
+    expect(pointInPolygon([-87.58, 41.85], LAKE_MICHIGAN_WATER)).toBe(true);
+    expect(pointInPolygon([-87.6055, 41.8900], NAVY_PIER_LAND)).toBe(false);
+    expect(pointInPolygon([-87.6170, 41.8640], MUSEUM_CAMPUS_PARK)).toBe(true);
+    expect(pointInPolygon([-87.6150, 41.8620], MUSEUM_CAMPUS_PARK)).toBe(false);
+    expect(pointInPolygon([-87.6162, 41.8590], MUSEUM_CAMPUS_PARK)).toBe(true);
+    expect(pointInPolygon([-87.608, 41.863], NORTHERLY_ISLAND_PARK)).toBe(true);
+    expect(pointInPolygon([-87.6115, 41.863], NORTHERLY_ISLAND_PARK)).toBe(false);
+    expect(geo.parks.features.some((feature) =>
+      feature.properties.id !== "northerly-island-green" &&
+      feature.geometry.coordinates[0].some(([lon, lat]) => lon > -87.609 && lat < 41.865),
+    )).toBe(false);
+    expect(buildShowcaseGeoJson(chicagoModel(2)).coastalLand.features).toHaveLength(0);
+  });
+  it("keeps the repaired lake shore from crossing itself", () => {
+    const ring = LAKE_MICHIGAN_WATER;
+    const turn = (a: readonly number[], b: readonly number[], c: readonly number[]) =>
+      (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    for (let i = 0; i < ring.length - 1; i += 1) {
+      for (let j = i + 2; j < ring.length - 1; j += 1) {
+        if (i === 0 && j === ring.length - 2) continue;
+        const intersects = turn(ring[i], ring[i + 1], ring[j]) * turn(ring[i], ring[i + 1], ring[j + 1]) < 0 &&
+          turn(ring[j], ring[j + 1], ring[i]) * turn(ring[j], ring[j + 1], ring[i + 1]) < 0;
+        expect(intersects, `shore segments ${i} and ${j} cross`).toBe(false);
+      }
+    }
+  });
   it("emits valid GeoJSON for every scale", () => {
     for (const scale of ALL_SCALES) {
       const model = chicagoModel(scale);

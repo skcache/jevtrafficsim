@@ -29,7 +29,6 @@ import { useUiStore } from "@/store/ui-store";
 import {
   BASELINES_REGRACE_MS,
   COMPARISON_COLUMNS,
-  JEV_FALLBACK_NOTICE_SHARE,
   comparisonRows,
   debugMode,
   policyLabel,
@@ -110,9 +109,10 @@ describe("the public setup", () => {
     expect(state.controller).toBe("jev");
     // A preview must not spend live model calls; the challenge must use Jev.
     const simulator = source("components/TrafficSimulator.tsx");
-    expect(simulator).toContain('return debugEnabled() ? store.controller : "adaptive";');
+    expect(simulator).toContain('function previewController(): ControllerChoice {\n  return "adaptive";');
     expect(simulator).toContain("controller: previewController(),");
-    expect(simulator).toContain("Enter City");
+    expect(simulator).toContain("const enterCity = useCallback(() => {");
+    expect(simulator).toContain("startRun();");
   });
 });
 
@@ -207,11 +207,12 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
   it("renames the third column for whoever actually governed", () => {
     const cleanRun: PresentationPolicy = {
       source: "live",
-      liveMs: 595_000,
+      liveMs: 600_000,
       replayMs: 0,
-      fallbackMs: 5_000,
+      fallbackMs: 0,
       accepted: 118,
       rejected: 2,
+      refreshes: 120,
     };
     const onFallback: PresentationPolicy = { ...cleanRun, fallbackMs: 120_000, accepted: 3 };
     const noPolicy: PresentationPolicy = {
@@ -221,7 +222,9 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
       fallbackMs: 600_000,
       accepted: 0,
       rejected: 9,
+      refreshes: 9,
     };
+    expect(policyLabel("jev", null)?.text).toBe("Checking Jev");
     expect(policyLabel("jev", cleanRun)?.text).toBe("Jev");
     expect(policyLabel("jev", onFallback)?.text).toBe("Jev · fallback used");
     expect(policyLabel("jev", noPolicy)?.text).toBe("Adaptive fallback");
@@ -237,7 +240,7 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
 /* --------------------------------------------- 3. fallback is visible --- */
 
 describe("fallback is never presented as pure live Jev", () => {
-  it("notices the moment the fallback stops being a rounding error", () => {
+  it("names every nonzero fallback share, including a sub-percent share", () => {
     const at = (fallbackMs: number): PresentationPolicy => ({
       source: "live",
       liveMs: 600_000 - fallbackMs,
@@ -245,20 +248,20 @@ describe("fallback is never presented as pure live Jev", () => {
       fallbackMs,
       accepted: 100,
       rejected: 1,
+      refreshes: 101,
     });
-    // Under the notice share: still Jev, and it says how many policies ran.
-    const quiet = policyLabel("jev", at(600_000 * JEV_FALLBACK_NOTICE_SHARE - 1));
-    expect(quiet?.text).toBe("Jev");
-    expect(quiet?.detail).toContain("live policies");
-    // Over it: the label changes and the detail carries the share.
-    const loud = policyLabel("jev", at(600_000 * JEV_FALLBACK_NOTICE_SHARE + 1));
-    expect(loud?.text).toBe("Jev · fallback used");
-    expect(loud?.detail).toContain("5% of the run on the adaptive fallback");
+    const small = policyLabel("jev", at(100));
+    expect(small?.text).toBe("Jev · fallback used");
+    expect(small?.detail).toContain("<1% of the run on the adaptive fallback");
+    expect(policyLabel("jev", at(0))?.text).toBe("Jev");
     // Half the run: still named, never hidden.
     expect(policyLabel("jev", at(300_000))?.detail).toContain("50%");
     expect(fallbackShare(at(300_000))).toBeCloseTo(0.5, 6);
     // A run that never had a live answer is not a Jev run at all.
     expect(policyLabel("jev", { ...at(600_000), accepted: 0, source: "fallback" })?.text).toBe(
+      "Adaptive fallback",
+    );
+    expect(policyLabel("jev", { ...at(600_000), accepted: 1, liveMs: 0, source: "fallback" })?.text).toBe(
       "Adaptive fallback",
     );
   });
@@ -296,6 +299,7 @@ describe("fallback is never presented as pure live Jev", () => {
       fallbackMs: meta.fallbackMs,
       accepted: meta.accepted,
       rejected: meta.rejected,
+      refreshes: meta.refreshes,
     };
     const snapshot = buildPresentationSnapshot(engine, 0, SCENARIO.tripId, policy);
     expect(snapshot.policy).toEqual(policy);

@@ -9,11 +9,11 @@
  *
  *   { model, state: <any JSON>, questions: { <id>: {
  *       type: "choice",            // choice | score | boolean
- *       question: "...",
+ *       instructions: "...",
  *       criteria: { <optionId>: "<what this option means>" }   // a record
  *   } } }
  *   -> { answers: { <id>: { type: "choice", choice: "<optionId>",
- *                           probabilities: {...}, confidence: 0..1 } },
+ *                           probabilities: {...} } },
  *        usage: { inputTokens, outputTokens }, ... }
  *
  * ## Why this client only asks CHOICE questions
@@ -95,13 +95,13 @@ const WEIGHT_MEANINGS: Record<keyof typeof JEV_WEIGHT_BUCKETS, string> = {
 /**
  * Confidence policy for evaluation answers.
  *
- * The model reports a confidence per answer. An answer we cannot trust must not
- * become a policy opinion, so an answer is USABLE only when its confidence is a
- * finite number in [0, 1] AND at least `MIN_ANSWER_CONFIDENCE`. An unusable
- * answer is dropped, and the schema's neutral default takes its place: the
- * policy stays valid and bounded, it simply carries no opinion there. If nothing
- * survives, the result is the neutral policy — degraded, never assertive by
- * accident.
+ * Gateway reports a probability for each choice. An answer we cannot trust
+ * must not become a policy opinion, so the selected choice is USABLE only when
+ * its probability is a finite number in [0, 1] AND at least
+ * `MIN_ANSWER_CONFIDENCE`. An unusable answer is dropped, and the schema's
+ * neutral default takes its place: the policy stays valid and bounded, it
+ * simply carries no opinion there. If nothing survives, the result is the
+ * neutral policy — degraded, never assertive by accident.
  *
  * This is the ONE place the threshold lives. Callers may raise it per client
  * (`minConfidence`), and the route and the benchmark read JEV_MIN_CONFIDENCE
@@ -146,13 +146,19 @@ export interface GatewayJevClientOptions {
   readonly fetchImpl?: typeof fetch;
 }
 
-export const JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS = 8;
-export const JEV_GATEWAY_DEFAULT_REGION_QUESTIONS = 6;
+// Live Gateway verification with the production 18 KB state accepted six
+// questions. Eight succeeded once directly but failed twice through the
+// deployed relay; ten and twelve returned 503 directly. Keep the default at
+// the smaller proven budget; the complete city state is still provided.
+export const JEV_GATEWAY_DEFAULT_CORRIDOR_QUESTIONS = 1;
+export const JEV_GATEWAY_DEFAULT_REGION_QUESTIONS = 1;
 export const JEV_GATEWAY_TIMEOUT_MS = 15_000;
+/** The Gateway's evaluated state is a citywide digest, never vehicle-level data. */
+export const JEV_GATEWAY_STATE_LIMITS = { corridors: 8, regions: 6, hotspots: 4 } as const;
 
 interface EvaluationsQuestion {
   readonly type: "choice";
-  readonly question: string;
+  readonly instructions: string;
   readonly criteria: Record<string, string>;
 }
 
@@ -192,19 +198,19 @@ export function buildEvaluationsBody(
   const questions: Record<string, EvaluationsQuestion> = {
     pressure: {
       type: "choice",
-      question: "How should citywide signal pressure be adjusted for the next few seconds?",
+      instructions: "How should citywide signal pressure be adjusted for the next few seconds?",
       criteria: PRESSURE_MEANINGS,
     },
     hint: {
       type: "choice",
-      question: "How should the controller behave when deciding whether to change phases?",
+      instructions: "How should the controller behave when deciding whether to change phases?",
       criteria: HINT_MEANINGS,
     },
   };
 
   const intentQuestion = (label: string, zone: string): EvaluationsQuestion => ({
     type: "choice",
-    question: `${label} ${zone}: should the city coordinate it as a whole, and how?`,
+    instructions: `${label} ${zone}: should the city coordinate it as a whole, and how?`,
     criteria: JEV_INTENT_MEANINGS,
   });
 
@@ -215,7 +221,7 @@ export function buildEvaluationsBody(
   )) {
     questions[`corridor:${corridor.corridorId}`] = {
       type: "choice",
-      question:
+      instructions:
         `Corridor ${corridor.corridorId} (${corridor.kind}) has ${corridor.queuedVehicles} vehicles queued ` +
         `and a worst wait of ${Math.round(corridor.maxWaitMs / 1000)}s. How should it be weighted?`,
       criteria: WEIGHT_MEANINGS,
@@ -233,7 +239,7 @@ export function buildEvaluationsBody(
   )) {
     questions[`region:${region.regionId}`] = {
       type: "choice",
-      question:
+      instructions:
         `Region ${region.regionId} has ${region.queuedVehicles} vehicles queued across ` +
         `${region.signalizedIntersections} signals. How should it be weighted?`,
       criteria: WEIGHT_MEANINGS,
@@ -246,7 +252,23 @@ export function buildEvaluationsBody(
 
   return {
     model: options.model ?? JEV_GATEWAY_MODEL,
-    state: request,
+    // The relay validates the full request and its ids. The evaluation model
+    // only needs the city totals and the busiest aggregate witnesses: sending
+    // every bounded entry (18 KB in rush hour) made the live Gateway return
+    // 503 even for two questions. This digest remains deterministic, citywide,
+    // and free of the watched car's identity, route or destination.
+    state: {
+      schemaVersion: request.schemaVersion,
+      timeMs: request.timeMs,
+      windowMs: request.windowMs,
+      city: request.city,
+      totalCorridors: request.corridors.length,
+      totalRegions: request.regions.length,
+      totalHotspots: request.hotspots.length,
+      corridors: busiest(request.corridors, JEV_GATEWAY_STATE_LIMITS.corridors, (entry) => entry.corridorId),
+      regions: busiest(request.regions, JEV_GATEWAY_STATE_LIMITS.regions, (entry) => entry.regionId),
+      hotspots: busiest(request.hotspots, JEV_GATEWAY_STATE_LIMITS.hotspots, (entry) => entry.intersectionId),
+    },
     questions,
   };
 }
@@ -255,6 +277,7 @@ interface EvaluationsAnswer {
   readonly type?: string;
   readonly choice?: unknown;
   readonly confidence?: unknown;
+  readonly probabilities?: unknown;
 }
 
 export interface PolicyTranslationOptions {
@@ -286,14 +309,19 @@ export function policyFromEvaluations(
     if (answer === null || typeof answer !== "object") {
       return null;
     }
-    // Low-confidence and malformed-confidence answers are indistinguishable in
-    // effect, on purpose: neither becomes an opinion. The schema's neutral
-    // default covers the field instead.
-    if (!answerConfidenceUsable(answer.confidence, minConfidence)) {
-      return null;
-    }
     const choice = answer.choice;
-    return typeof choice === "string" ? choice : null;
+    if (typeof choice !== "string") return null;
+    // Current Gateway choices report a probability for each option, not a
+    // separate confidence. Use the selected option's own probability; only
+    // legacy responses without probabilities may use confidence. Missing or
+    // malformed evidence stays neutral rather than becoming a policy opinion.
+    const probabilities = answer.probabilities;
+    const confidence = probabilities === undefined
+      ? answer.confidence
+      : probabilities !== null && typeof probabilities === "object" && Object.hasOwn(probabilities, choice)
+        ? (probabilities as Record<string, unknown>)[choice]
+        : undefined;
+    return answerConfidenceUsable(confidence, minConfidence) ? choice : null;
   };
 
   const bucket = <K extends string>(

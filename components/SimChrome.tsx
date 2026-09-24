@@ -278,7 +278,7 @@ export function SimChrome(props: SimChromeProps) {
     <>
       {/* Top-left: run identity. */}
       <AnimatePresence>
-        {live && (
+        {live && !runComplete && (
           <motion.div
             key="identity"
             className="pointer-events-none absolute left-4 top-4 z-10"
@@ -303,12 +303,14 @@ export function SimChrome(props: SimChromeProps) {
                   {(policyLabel(controller, policy) ?? { text: controller }).text}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="label-micro text-ink-38">Scenario</span>
-                <span className="value-num text-micro leading-none text-ink-70">
-                  {scenarioFingerprint ?? "—"}
-                </span>
-              </div>
+              {props.debug && (
+                <div className="flex items-center gap-2">
+                  <span className="label-micro text-ink-38">Scenario</span>
+                  <span className="value-num text-micro leading-none text-ink-70">
+                    {scenarioFingerprint ?? "—"}
+                  </span>
+                </div>
+              )}
               {runShowsNonComparable({ modified, manualIncidents }) && (
                 <div className="flex items-center gap-2" role="status">
                   <span className="label-micro text-ink-38">Run</span>
@@ -331,16 +333,16 @@ export function SimChrome(props: SimChromeProps) {
 
       {/* Top-centre: utilities. */}
       <AnimatePresence>
-        {live && (
+        {live && !runComplete && (
           <motion.div
             key="utilities"
-            className="absolute left-1/2 top-4 z-20 -translate-x-1/2"
+            className="absolute left-4 right-4 top-[180px] z-20 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 lg:top-4"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.34, delay: 0.06, ease: EASE }}
           >
-            <div className="surface flex items-center gap-[3px] p-[3px]">
+            <div className="surface flex w-fit max-w-full items-center gap-[3px] overflow-x-auto p-[3px]">
               {/*
                 The visible run is Jev. Choosing another controller by hand is a
                 developer control, so the picker only exists behind ?debug — a
@@ -388,13 +390,14 @@ export function SimChrome(props: SimChromeProps) {
                   <circle cx="6.5" cy="6.5" r="2.1" />
                   <path d="M6.5 1.4v1.9M6.5 9.7v1.9M1.4 6.5h1.9M9.7 6.5h1.9" />
                 </svg>
-                {props.following ? "Following" : "Recenter"}
+                <span className="hidden sm:inline">{props.following ? "Following" : "Recenter"}</span>
               </button>
               <span className="mx-[3px] h-4 w-px bg-hair" aria-hidden="true" />
               <button
                 type="button"
                 onClick={() => setScenarioOpen(!scenarioOpen)}
                 aria-expanded={scenarioOpen}
+                aria-label="Scenario"
                 className={`flex h-[30px] items-center gap-[6px] rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
                   scenarioOpen ? "bg-ink/[0.06] text-ink" : "text-ink-70 hover:bg-ink/[0.05] hover:text-ink"
                 } focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/25`}
@@ -405,7 +408,7 @@ export function SimChrome(props: SimChromeProps) {
                   <circle cx="8.4" cy="6.5" r="1.2" fill="currentColor" stroke="none" />
                   <circle cx="5.8" cy="9" r="1.2" fill="currentColor" stroke="none" />
                 </svg>
-                Scenario
+                <span className="hidden sm:inline">Scenario</span>
               </button>
             </div>
             <AnimatePresence>
@@ -445,7 +448,7 @@ export function SimChrome(props: SimChromeProps) {
         {live && runComplete && (
           <motion.div
             key="complete"
-            className="surface-overlay absolute bottom-20 left-1/2 z-20 max-h-[calc(100vh-160px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto p-4"
+            className="surface-overlay absolute left-1/2 top-1/2 z-20 max-h-[calc(100vh-48px)] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 sm:p-5"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
@@ -563,10 +566,11 @@ export function SimChrome(props: SimChromeProps) {
 
       {/* Bottom-right: camera stack (replaces MapLibre's default control). */}
       <motion.div
-        className="absolute bottom-4 right-4 z-10"
+        aria-hidden={!live || runComplete}
+        className={`absolute bottom-4 right-4 z-10 ${live && !runComplete ? "" : "invisible"}`}
         initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: live ? 1 : 0, y: live ? 0 : 6 }}
-        transition={{ duration: 0.34, delay: live ? 0.24 : 0, ease: EASE }}
+        animate={{ opacity: live && !runComplete ? 1 : 0, y: live && !runComplete ? 0 : 6 }}
+        transition={{ duration: 0.34, delay: live && !runComplete ? 0.24 : 0, ease: EASE }}
       >
         <div className="surface pointer-events-auto flex flex-col items-center divide-y divide-hair p-[3px]">
           <IconButton label="Zoom in" onClick={props.onZoomIn}>

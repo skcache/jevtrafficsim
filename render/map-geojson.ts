@@ -8,8 +8,10 @@
  * Framework-free and deterministic.
  */
 import { metricToLngLat, type MapModel, type Projection } from "@/cities/map-model";
+import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import type { Point } from "@/cities/paths";
 import { isExpresswayClass, pieceCrossesWater, roadPresentationClass } from "./road-hierarchy";
+import { LAKE_MICHIGAN_WATER, MUSEUM_CAMPUS_PARK, NAVY_PIER_LAND, NORTHERLY_ISLAND_PARK } from "./coastal-corrections";
 
 export type LngLat = readonly [number, number];
 
@@ -162,9 +164,26 @@ function compactnessOf(ring: readonly (readonly number[])[]): number {
   return perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 1;
 }
 
+/** The frozen Navy Pier extract includes two large triangular park fragments. */
+function isNavyParkFragment(projection: Projection, ring: readonly Point[]): boolean {
+  if (ring.length > 4) return false;
+  const [lon, lat] = toLngLat(projection, ring[0]);
+  return lon >= -87.613 && lon <= -87.602 && lat >= 41.893 && lat <= 41.897;
+}
+
+/** Metro clipping splits the Museum Campus and Northerly Island into wedges. */
+function isClippedMuseumPark(projection: Projection, ring: readonly Point[]): boolean {
+  const points = ring.map((point) => toLngLat(projection, point));
+  const lons = points.map(([lon]) => lon);
+  const lats = points.map(([, lat]) => lat);
+  return Math.min(...lons) >= -87.619 && Math.max(...lons) <= -87.605 &&
+    Math.min(...lats) >= 41.861 && Math.max(...lats) <= 41.8673;
+}
+
 export interface ShowcaseGeoJson {
   readonly land: FeatureCollection<PolygonGeometry>;
   readonly water: FeatureCollection<PolygonGeometry>;
+  readonly coastalLand: FeatureCollection<PolygonGeometry>;
   readonly parks: FeatureCollection<PolygonGeometry>;
   /** Urban blocks: the city fabric between meaningful streets. */
   readonly blocks: FeatureCollection<PolygonGeometry>;
@@ -183,6 +202,29 @@ export interface ShowcaseGeoJson {
 
 export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   const projection = model.projection;
+  const metro = model.scaleIndex === METRO_SCALE_INDEX;
+  const coastalLand: FeatureCollection<PolygonGeometry> = {
+    type: "FeatureCollection",
+    features: metro
+      ? [{
+          type: "Feature",
+          properties: { kind: "navy-pier-land" },
+          geometry: { type: "Polygon", coordinates: [NAVY_PIER_LAND] },
+        }]
+      : [],
+  };
+  // The frozen extract's largest lake ring loops through the river and across
+  // the pier. Split its river arm from the bad lake fill, then draw one coherent
+  // lake presentation polygon. The underlying model is not mutated.
+  const foldedLake = metro
+    ? model.water.find((entry) => entry.kind === "lake" && entry.rings[0].length > 60)
+    : undefined;
+  const riverArm = foldedLake
+    ? [
+        ...foldedLake.rings[0].slice(0, 31),
+        ...foldedLake.rings[0].slice(52),
+      ]
+    : null;
   const land: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
     features: [
@@ -202,48 +244,76 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   };
   const water: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.water
-      .filter((entry) => {
-        // The Chicago River is intentionally long and thin, so compactness is
-        // the wrong metric for the major water that actually orients the city.
-        // Keep named semantic water and polygons with islands/holes; only apply
-        // debris filtering to generic extracted water fragments.
-        if (entry.kind === "lake" || entry.kind === "river" || entry.rings.length > 1) {
-          return true;
-        }
-        const outer = entry.rings[0];
-        return (
-          entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
-          outer.length >= 6 &&
-          compactnessOf(outer) >= PRESENTATION_WATER_COMPACTNESS
-        );
-      })
-      .map((entry, index) =>
-      polygonFeature(projection, entry.rings, {
-        id: `water-${index}`,
-        kind: entry.kind,
-        areaM2: Math.round(entry.areaM2),
-      }),
-    ),
+    features: [
+      ...model.water
+        .filter((entry) => entry !== foldedLake)
+        .filter((entry) => {
+          // The Chicago River is intentionally long and thin, so compactness is
+          // the wrong metric for the major water that actually orients the city.
+          // Keep named semantic water and polygons with islands/holes; only apply
+          // debris filtering to generic extracted water fragments.
+          if (entry.kind === "lake" || entry.kind === "river" || entry.rings.length > 1) {
+            return true;
+          }
+          const outer = entry.rings[0];
+          return (
+            entry.areaM2 >= PRESENTATION_WATER_MIN_AREA_M2 &&
+            outer.length >= 6 &&
+            compactnessOf(outer) >= PRESENTATION_WATER_COMPACTNESS
+          );
+        })
+        .map((entry, index) =>
+          polygonFeature(projection, entry.rings, {
+            id: `water-${index}`,
+            kind: entry.kind,
+            areaM2: Math.round(entry.areaM2),
+          }),
+        ),
+      ...(riverArm && riverArm.length >= 4
+        ? [polygonFeature(projection, [riverArm], { id: "chicago-river-arm", kind: "river", areaM2: 250_000 })]
+        : []),
+      ...(metro
+        ? [{
+            type: "Feature" as const,
+            properties: { id: "lake-michigan", kind: "lake", areaM2: 5_000_000 },
+            geometry: { type: "Polygon" as const, coordinates: [LAKE_MICHIGAN_WATER] },
+          }]
+        : []),
+    ],
   };
   const parks: FeatureCollection<PolygonGeometry> = {
     type: "FeatureCollection",
-    features: model.parks
-      // Only orientation-scale green space belongs in a traffic simulator.
-      // Pocket parks and clipped land-use wedges are real data, but they are
-      // not part of the experiment and previously read as random triangles.
-      .filter(
-        (entry) =>
-          entry.areaM2 >= PRESENTATION_PARK_MIN_AREA_M2 &&
-          compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS,
-      )
-      .map((entry, index) =>
-        polygonFeature(projection, entry.rings, {
-          id: `park-${index}`,
-          kind: entry.kind,
-          areaM2: Math.round(entry.areaM2),
-        }),
-      ),
+    features: [
+      ...model.parks
+        // Only orientation-scale green space belongs in a traffic simulator.
+        // Pocket parks and clipped land-use wedges are real data, but they are
+        // not part of the experiment and previously read as random triangles.
+        .filter(
+          (entry) =>
+            entry.areaM2 >= PRESENTATION_PARK_MIN_AREA_M2 &&
+            compactnessOf(entry.rings[0]) >= PRESENTATION_PARK_COMPACTNESS &&
+            !(metro && (isNavyParkFragment(projection, entry.rings[0]) ||
+              isClippedMuseumPark(projection, entry.rings[0]))),
+        )
+        .map((entry, index) =>
+          polygonFeature(projection, entry.rings, {
+            id: `park-${index}`,
+            kind: entry.kind,
+            areaM2: Math.round(entry.areaM2),
+          }),
+        ),
+      ...(metro
+        ? [{
+            type: "Feature" as const,
+            properties: { id: "museum-campus-green", kind: "major", areaM2: 300_000 },
+            geometry: { type: "Polygon" as const, coordinates: [MUSEUM_CAMPUS_PARK] },
+          }, {
+            type: "Feature" as const,
+            properties: { id: "northerly-island-green", kind: "major", areaM2: 500_000 },
+            geometry: { type: "Polygon" as const, coordinates: [NORTHERLY_ISLAND_PARK] },
+          }]
+        : []),
+    ],
   };
 
   const blocks: FeatureCollection<PolygonGeometry> = {
@@ -337,6 +407,7 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
   return {
     land,
     water,
+    coastalLand,
     parks,
     blocks,
     buildings,
@@ -443,6 +514,7 @@ export function buildShowcaseGeoJson(model: MapModel): ShowcaseGeoJson {
       "land",
       "blocks",
       "water",
+      "coastal-land",
       "parks",
       "buildings",
       "roads-local-casing",

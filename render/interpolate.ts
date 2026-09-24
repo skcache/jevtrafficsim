@@ -1,5 +1,5 @@
 /**
- * Frame interpolation between worker snapshots (~10 Hz) at display rate.
+ * Frame interpolation between worker snapshots (one per real tick) at display rate.
  *
  * Two things here are physical rather than cosmetic:
  *
@@ -145,7 +145,7 @@ export interface RenderedVehicle {
 /**
  * Display-time ego road progress.
  *
- * The map runs at rAF while worker snapshots arrive at 5 Hz. Route trimming
+ * The map runs at rAF while worker snapshots arrive at the worker tick cadence. Route trimming
  * and contextual-control distance must follow the same interpolated progress as
  * the visible car or the band/light visibly step every 200 ms. Across a road
  * transition the current road wins; same-road motion is a scalar lerp.
@@ -385,11 +385,14 @@ function transitionPosition(
     return null;
   }
 
-  const remaining = Math.max(
-    0,
-    previousIndex.total -
-      heldProgress(previousSnapshot, before, before.roadId, before.progress, options.city),
+  const previousProgress = heldProgress(
+    previousSnapshot,
+    before,
+    before.roadId,
+    before.progress,
+    options.city,
   );
+  const remaining = Math.max(0, previousIndex.total - previousProgress);
   const travelled = Math.max(0, current.progress);
   const total = remaining + travelled;
   if (total <= 0) {
@@ -414,7 +417,11 @@ function transitionPosition(
   // guaranteeing a continuous path through the shared node.
   const laneTaperM = 8;
   if (distance <= remaining) {
-    const progress = before.progress + distance;
+    // Start from the SAME presentation progress used to calculate
+    // `remaining`. A red-light snapshot can be physically capped several metres
+    // before the graph node; mixing that capped remaining distance with the raw
+    // simulation progress jumps the car straight to the junction on release.
+    const progress = previousProgress + distance;
     const distanceToJunction = Math.max(0, previousIndex.total - progress);
     const taper = Math.min(1, distanceToJunction / laneTaperM);
     const position = applyLaneOffset(

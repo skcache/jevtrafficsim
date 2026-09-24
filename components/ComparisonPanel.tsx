@@ -35,8 +35,10 @@ export function ComparisonPanel({
   const [open, setOpen] = useState(false);
   const rows = comparisonRows(baselines.fixed, baselines.adaptive, live);
   const verdict = comparisonVerdictAll([baselines.fixed, baselines.adaptive, live]);
-  const visible = policyLabel("jev", policy);
-  const liveLabel = visible?.text ?? "Jev";
+  const visible = policyLabel(live.controller, policy);
+  const liveLabel = live.controller === "jev"
+    ? visible?.text ?? "Checking Jev"
+    : `Watched ${visible?.text ?? live.controller}`;
 
   if (!verdict.comparable) {
     return (
@@ -57,43 +59,44 @@ export function ComparisonPanel({
 
   const entries = raceEntries(baselines.fixed, baselines.adaptive, live, liveLabel);
   const delta = raceDelta(entries, liveLabel);
+  const completedTimes = entries.filter((entry) => !entry.incomplete).map((entry) => entry.tripTimeMs);
+  const fastestTimeMs = completedTimes.length > 0 ? Math.min(...completedTimes) : null;
   const columns = ["Fixed", "Adaptive", liveLabel] as const;
 
   return (
-    <div>
+    <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="label-micro">Who got there first</span>
         <span className="value-num text-micro text-ink-38">{live.fingerprint}</span>
       </div>
 
       <div className="mt-2.5 flex flex-col">
-        {entries.map((entry, index) => (
-          <div
-            key={entry.key}
-            className={`flex items-baseline justify-between gap-3 py-1.5 ${
-              index === 0 ? "" : "border-t border-hairline"
-            }`}
-          >
-            <span
-              className={
-                entry.live
-                  ? "text-meta font-medium uppercase tracking-wide text-ink"
-                  : "text-meta font-medium uppercase tracking-wide text-ink-52"
-              }
-            >
-              {entry.label}
-            </span>
-            <span
-              className={`value-num tabular-nums ${
-                entry.live
-                  ? "text-[26px] font-semibold leading-none tracking-tight text-ink"
-                  : "text-[18px] leading-none text-ink-70"
+        {entries.map((entry, index) => {
+          const fastest = !entry.incomplete && fastestTimeMs !== null && entry.tripTimeMs === fastestTimeMs;
+          return (
+            <div
+              key={entry.key}
+              className={`flex items-baseline justify-between gap-3 py-1.5 ${
+                index === 0 ? "" : "border-t border-hairline"
               }`}
             >
-              {entry.incomplete ? "—" : entry.formatted}
-            </span>
-          </div>
-        ))}
+              <span
+                className={`text-meta uppercase tracking-wide ${
+                  fastest ? "font-semibold text-ink" : "font-medium text-ink-52"
+                }`}
+              >
+                {entry.label}
+              </span>
+              <span
+                className={`value-num text-[22px] leading-none tracking-tight tabular-nums ${
+                  fastest ? "font-semibold text-ink" : "font-medium text-ink-70"
+                }`}
+              >
+                {entry.incomplete ? "—" : entry.formatted}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {delta !== null && (

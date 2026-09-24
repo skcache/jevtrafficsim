@@ -267,8 +267,9 @@ describe("refresh cadence and hold", () => {
   });
 
   it("has a coarse default cadence and a TTL of several windows", () => {
-    expect(JEV_RUNTIME_DEFAULTS.REFRESH_MS).toBe(5_000);
+    expect(JEV_RUNTIME_DEFAULTS.REFRESH_MS).toBe(20_000);
     expect(JEV_RUNTIME_DEFAULTS.TTL_MS).toBeGreaterThanOrEqual(JEV_RUNTIME_DEFAULTS.REFRESH_MS * 2);
+    expect(600_000 / JEV_RUNTIME_DEFAULTS.REFRESH_MS).toBe(30);
     expect(refreshDue(5_000, 5_000)).toBe(true);
     expect(refreshDue(5_100, 5_000)).toBe(false);
   });

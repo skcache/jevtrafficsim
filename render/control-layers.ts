@@ -85,6 +85,13 @@ export function buildControlLayers(
       getIcon: (control) => controlSpriteFor(control),
       getPosition: (control) => toLngLat(projection, control.x, control.y) as LngLat,
       getSize: (control) => sizeFor(control),
+      // A screen-space kerb clearance keeps the icon off the oversized ego
+      // sprite even at the follow camera's lower zooms. Rotate it with the
+      // approach so the sign remains on the same side of every road.
+      getPixelOffset: (control) => [
+        16 * Math.sin(control.bearing),
+        16 * Math.cos(control.bearing),
+      ],
       getColor: (control) => [255, 255, 255, Math.round(opacityFor(control) * 255)],
       sizeUnits: "meters",
       sizeMinPixels: CONTROL_SCALE.minPixels,

@@ -27,16 +27,11 @@ export const MID_TIER_MINZOOM = 11.8;
 /** Crosswalk hints only appear at the closest zoom. */
 /** Wait-heat halos are a close-zoom instrument; further out they are confetti. */
 /**
- * Individual vehicles start here.
- *
- * This used to sit at 14.4, just above the framing the app opens on (the title
- * city view is ~14.1) — so the first thing any visitor saw was a city with no
- * traffic on it at all, and the follow view only came alive after clicking
- * through onboarding. The map is not decoration: it is the product. Vehicles now
- * start at the zoom the product actually opens at, and the road-level congestion
- * overlay keeps carrying the far band beyond that.
+ * Individual vehicles start at the title framing (~14.1) and remain clear at
+ * the street follow zoom (~15.4). The completed-trip city fit is wider: there,
+ * thousands of glyphs obscure geography, so road pressure carries traffic.
  */
-export const VEHICLE_MINZOOM = 13.0;
+export const VEHICLE_MINZOOM = 14.0;
 
 export function detailTier(zoom: number): DetailTier {
   if (zoom >= CLOSE_TIER_MINZOOM) {

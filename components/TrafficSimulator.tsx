@@ -13,9 +13,9 @@
 import { MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
 import { loadChicagoCity } from "@/cities/chicago-assets";
-import type { CuratedTripId } from "@/cities/chicago-trips";
+import { METRO_SCALE_INDEX, type CuratedTripId } from "@/cities/chicago-trips";
 import type { DriverStrategy } from "@/sim/driver";
-import type { CitySize, TrafficLevel } from "@/sim/types";
+import type { TrafficLevel } from "@/sim/types";
 import type { IncidentKind } from "@/sim/incidents";
 import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { useUiStore } from "@/store/ui-store";
@@ -37,7 +37,6 @@ import {
   CLEAN_RUN_LOST_NOTICE,
   debugMode,
   discardNeedsConfirm,
-  scaleIndexForSize,
   shouldReaskBaselines,
   type DiscardAction,
 } from "./ui-model";
@@ -77,8 +76,7 @@ function debugEnabled(): boolean {
  * calls. "Enter City" starts the real thing.
  */
 function previewController(): ControllerChoice {
-  const store = useUiStore.getState();
-  return debugEnabled() ? store.controller : "adaptive";
+  return "adaptive";
 }
 
 function updateDebugHook(event: WorkerEvent): void {
@@ -169,7 +167,6 @@ export function TrafficSimulator() {
   const mapHandleRef = useRef<MapHandle | null>(null);
   const lastScaleRef = useRef<number | null>(null);
   const phase = useUiStore((state) => state.phase);
-  const citySize = useUiStore((state) => state.citySize);
   /** True while the landing's background run is the one on screen. */
   const prewarmRef = useRef(false);
 
@@ -227,9 +224,16 @@ export function TrafficSimulator() {
           store.setScenarioFingerprint(data.scenarioFingerprint);
           // The frozen Chicago geography loads asynchronously (same committed
           // bytes the worker compiled); frames only start once it is in place.
-          void loadChicagoCity(data.scaleIndex).then((model) => {
-            setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
-          });
+          void loadChicagoCity(data.scaleIndex)
+            .then((model) => {
+              setFrameModel(framesRef.current, model, buildDirectedPathIndexes(model));
+            })
+            .catch(() => {
+              // The map's own Retry control can recover the asset cache. Keep
+              // this companion load bounded and handled, never an unhandled
+              // rejection that poisons the browser session.
+              store.setError("Chicago map data is temporarily unavailable. Retry the map or run.");
+            });
           if (
             prewarmRef.current &&
             (store.phase === "landing" || store.phase === "config")
@@ -292,7 +296,7 @@ export function TrafficSimulator() {
           // The worker's account of whether this run still matches the scenario
           // it started as (Issue #39) — read, never inferred from clicks.
           store.setGovernance(data.snapshot.governance);
-          // Trip HUD source: the ego's own progress, at frame rate (5 Hz).
+          // Trip HUD source: the ego's own progress, at worker frame cadence.
           store.setTripFrame({
             trip: data.snapshot.trip,
             egoState: data.snapshot.ego?.state ?? null,
@@ -307,6 +311,7 @@ export function TrafficSimulator() {
         case "RUN_COMPLETE": {
           store.setRunning(false);
           store.setRunComplete(true);
+          mapHandleRef.current?.frameCompletedTrip();
           // Remember WHICH world finished, so a READY for that same world cannot
           // erase the outcome (see applyReady).
           store.setCompletedFingerprint(store.scenarioFingerprint);
@@ -356,7 +361,7 @@ export function TrafficSimulator() {
     prewarmRef.current = true;
     worker.postMessage({
       type: "INIT",
-      citySize: defaults.citySize,
+      citySize: "large",
       trafficLevel: defaults.trafficLevel,
       tripId: defaults.tripId,
       controller: previewController(),
@@ -378,7 +383,6 @@ export function TrafficSimulator() {
   const startRun = useCallback(
     (
       overrides: Partial<{
-        citySize: CitySize;
         trafficLevel: TrafficLevel;
         tripId: CuratedTripId;
         controller: ControllerChoice;
@@ -390,7 +394,7 @@ export function TrafficSimulator() {
       state.setRunComplete(false);
       send({
         type: "INIT",
-        citySize: overrides.citySize ?? state.citySize,
+        citySize: "large",
         trafficLevel: overrides.trafficLevel ?? state.trafficLevel,
         tripId: overrides.tripId ?? state.tripId,
         controller: overrides.controller ?? state.controller,
@@ -406,14 +410,13 @@ export function TrafficSimulator() {
     // next READY as prewarm-only so changing trip/traffic/controller/seed
     // refreshes the city behind the setup panel without entering the challenge.
     prewarmRef.current = true;
-    startRun({ citySize: "large", controller: previewController() });
+    startRun({ controller: previewController() });
   }, [startRun]);
 
   const enterCity = useCallback(() => {
     const store = useUiStore.getState();
-    store.setCitySize("large");
     store.setPhase("entering");
-    startRun({ citySize: "large" });
+    startRun();
   }, [startRun]);
 
   const onPause = useCallback(() => {
@@ -478,7 +481,7 @@ export function TrafficSimulator() {
       guardDiscard("trip", () => {
         const store = useUiStore.getState();
         store.setTripId(tripId);
-        startRun({ citySize: "large", tripId });
+        startRun({ tripId });
       });
     },
     [guardDiscard, startRun],
@@ -513,7 +516,7 @@ export function TrafficSimulator() {
         store.setDriver(driver);
         // The driver defines what the run IS, so this is a fresh run of the same
         // scenario with a different human at the wheel — never a live mutation.
-        startRun({ citySize: "large" });
+        startRun();
       });
     },
     [guardDiscard, startRun],
@@ -537,6 +540,7 @@ export function TrafficSimulator() {
       store.resetMetrics();
       send({ type: "RESET", mode: "same-seed" });
       store.setRunning(true);
+      mapHandleRef.current?.flyToCentral();
     });
   }, [guardDiscard, send]);
 
@@ -548,6 +552,7 @@ export function TrafficSimulator() {
       store.resetMetrics();
       send({ type: "RESET", mode: "new-seed" });
       store.setRunning(true);
+      mapHandleRef.current?.flyToCentral();
     });
   }, [guardDiscard, send]);
 
@@ -634,7 +639,7 @@ export function TrafficSimulator() {
     mapHandleRef.current?.followEgo();
   }, []);
 
-  const scaleIndex = scaleIndexForSize(citySize);
+  const scaleIndex = METRO_SCALE_INDEX; // Metro is the sole public geography.
   const live = phase === "city";
 
   return (

@@ -187,19 +187,20 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     if (option !== null) fire(option);
   };
 
-  const live = phase === "city";
+  const live = phase === "city" && !runComplete;
   // Queued feedback outranks the hover hint: after a click the cursor is
   // still on the button, and the confirmation is what matters.
   const line = pending === null ? (feedback ?? hint) : null;
 
   return (
     <motion.div
-      className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-2"
+      aria-hidden={!live}
+      className={`pointer-events-none absolute bottom-4 left-4 right-4 z-10 flex flex-col items-center gap-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 ${live ? "" : "invisible"}`}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: live ? 1 : 0, y: live ? 0 : 8 }}
       transition={{ duration: 0.32, delay: live ? 0.12 : 0, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="surface pointer-events-auto flex flex-col p-[3px]">
+      <div className="surface pointer-events-auto flex w-full max-w-full flex-col p-[3px] sm:w-auto">
         <div
           className="grid h-5 items-center px-2 text-micro font-medium text-ink-52"
           aria-live="polite"
@@ -220,7 +221,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
           </AnimatePresence>
         </div>
         {pending === null ? (
-          <div className="flex items-center gap-[2px]">
+          <div className="grid grid-cols-3 items-center gap-[2px] sm:flex">
             {INCIDENTS.map((option) => {
               const availability = incidentAvailability(option.kind, capabilities);
               const Icon = option.icon;
@@ -251,7 +252,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
                     onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
                     onFocus={() => setHint(unavailableHint ?? option.hint)}
                     onBlur={() => setHint((current) => (current === option.hint ? null : current))}
-                    className={`flex h-8 items-center gap-[6px] whitespace-nowrap rounded-[6px] px-2.5 text-meta font-medium transition-colors duration-150 ${
+                  className={`flex h-8 w-full items-center justify-center gap-[6px] whitespace-nowrap rounded-[6px] px-1.5 text-[11px] font-medium transition-colors duration-150 sm:w-auto sm:px-2.5 sm:text-meta ${
                       isArmed
                         ? "bg-ink text-surface"
                         : availability.applicable
@@ -270,7 +271,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
           <div
             role="group"
             aria-label={INCIDENT_WARNING_TITLE}
-            className="flex items-center gap-2 px-2 py-[5px]"
+            className="flex flex-wrap items-center justify-center gap-2 px-2 py-[5px]"
           >
             <span className="max-w-[320px] text-micro leading-snug text-ink-70">
               {INCIDENT_WARNING_TITLE} — {CLEAN_RUN_LOST_NOTICE}

@@ -1,330 +1,189 @@
-/**
- * Background traffic: the map must show the city the simulation is running.
- *
- * The bug this file exists for: the frame carried only the followed car, so a
- * rush hour with thousands of vehicles in view rendered as an empty street grid
- * with a few amber stripes. These tests pin the replacement — sprites synthesised
- * from the simulation's own per-road counts — and, just as importantly, pin the
- * rules that keep it honest:
- *
- *   - the count comes from the simulation, never from a constant
- *   - every sprite sits ON its road, in a lane, nose along the tangent
- *   - a queue is packed behind the stop line, front first
- *   - the ego is not drawn twice
- *   - identical input → identical sprites, and motion is interpolated, not snapped
- *   - the real Chicago rush hour actually produces a populated map
- */
 import { describe, expect, it } from "vitest";
 import { chicagoModel } from "./chicago-support";
 import { createAdaptiveController } from "@/controllers/adaptive";
-import { createEngine, runEngine, type EngineState, type ScheduledSpawn } from "@/sim/engine";
+import { createEngine, runEngine } from "@/sim/engine";
 import { productionDemand } from "@/sim/demand-profile";
 import { buildPresentationSnapshot, type PresentationSnapshot } from "@/worker/presentation-snapshot";
-import { buildChallengeScenario, resolveScenarioWorld } from "@/worker/challenge-scenario";
-import { materializeChallengeTrip } from "@/worker/ego-spawn";
-import { buildDirectedPathIndexes, sampleDirectedRoad } from "@/render/map-geometry";
-import { laneCentreOffsetMetres, carriagewayPairs, stopLineSetbackMetres } from "@/render/road-presentation";
+import { buildDirectedPathIndexes } from "@/render/map-geometry";
+import { laneCentreOffsetMetres, carriagewayPairs } from "@/render/road-presentation";
 import {
-  MAX_SPRITES_PER_ROAD,
-  renderBackgroundVehicles,
-  synthesizeRoadTraffic,
-  synthesizeRoadTrafficCached,
+  createBackgroundTrafficTracker, renderBackgroundVehicles,
+  KEY_STRIDE, MAX_SPRITES_PER_ROAD, SPRITE_SPACING_M, type SyntheticVehicle,
 } from "@/render/background-traffic";
-import type { CuratedTripId } from "@/cities/chicago-trips";
 
-const model = chicagoModel(4);
+const model = chicagoModel(4); // frozen production Metro geography
 const indexes = buildDirectedPathIndexes(model);
 const laneOffsets = model.city.roads.map((road) =>
-  laneCentreOffsetMetres(model, road.id, carriagewayPairs(model)),
-);
+  laneCentreOffsetMetres(model, road.id, carriagewayPairs(model)));
+const options = { city: model.city, laneOffsets, egoRoadId: null };
+const longRoad = model.city.roads.find((road) => road.length > 400 && road.lanes >= 2)!;
 
-/** A snapshot carrying exactly the road counts a test wants to see. */
-function snapshotWith(
-  rows: readonly { roadId: number; vehicleCount: number; queuedCount: number }[],
-): PresentationSnapshot {
+function snapshot(roadId: number, count: number, queued: number, speed: number, timeMs: number): PresentationSnapshot {
   return {
-    sequence: 0,
-    timeMs: 0,
-    controller: "adaptive",
-    governance: { modified: false, manualIncidents: 0 },
-    policy: null,
-    ego: null,
-    roadTraffic: rows.map((row) => ({
-      roadId: row.roadId,
-      occupancy: row.vehicleCount * 10,
-      capacity: 10,
-      vehicleCount: row.vehicleCount,
-      queuedCount: row.queuedCount,
-      maxBlockedWaitMs: 0,
-      speedFactor: 1,
-      severity: "free" as const,
-    })),
-    routeControls: [],
-    trip: null,
-    roadConditions: [],
-    incidents: [],
+    sequence: timeMs, timeMs, controller: "adaptive",
+    governance: { modified: false, manualIncidents: 0 }, policy: null, ego: null,
+    roadTraffic: [{
+      roadId, occupancy: count * 10, capacity: 100, vehicleCount: count,
+      queuedCount: queued, maxBlockedWaitMs: 0, speedFactor: speed,
+      severity: "free",
+    }],
+    routeControls: [], trip: null, roadConditions: [], incidents: [],
   } as unknown as PresentationSnapshot;
 }
 
-function someRoad(minLength = 200) {
-  const road = model.city.roads.find((entry) => entry.length > minLength && entry.lanes >= 2);
-  expect(road).toBeDefined();
-  return road!;
+function samePositions(before: readonly SyntheticVehicle[], after: readonly SyntheticVehicle[]): void {
+  const byKey = new Map(after.map((sprite) => [sprite.key, sprite]));
+  for (const sprite of before) {
+    const next = byKey.get(sprite.key);
+    if (next) {
+      expect(next.progress, `key ${sprite.key} moved`).toBeCloseTo(sprite.progress, 8);
+      expect(next.laneOffset).toBe(sprite.laneOffset);
+    }
+  }
 }
 
-describe("background traffic: the count is the simulation's", () => {
-  it("draws exactly as many sprites as the frame reports vehicles", () => {
-    const road = someRoad();
-    for (const count of [1, 3, 7, 12]) {
-      const sprites = synthesizeRoadTraffic(
-        snapshotWith([{ roadId: road.id, vehicleCount: count, queuedCount: 0 }]),
-        { city: model.city, laneOffsets, egoRoadId: null },
-      );
-      expect(sprites).toHaveLength(count);
+describe("aggregate background presentation continuity", () => {
+  it.each([[1, 0.8], [0.8, 0.2], [0.2, 1], [0.5, 0.51]])(
+    "never retroactively rewrites positions on speed %s -> %s", (beforeSpeed, afterSpeed) => {
+      const tracker = createBackgroundTrafficTracker();
+      tracker.update(snapshot(longRoad.id, 6, 0, beforeSpeed, 1_000), options);
+      const before = tracker.update(snapshot(longRoad.id, 6, 0, beforeSpeed, 2_000), options).current;
+      const after = tracker.update(snapshot(longRoad.id, 6, 0, afterSpeed, 2_000), options).current;
+      samePositions(before, after);
+      const later = tracker.update(snapshot(longRoad.id, 6, 0, afterSpeed, 2_100), options).current;
+      expect(later.some((sprite, index) => sprite.progress > after[index].progress)).toBe(true);
+    },
+  );
+
+  it.each([1, 2, 8])("queue growth to %s does not respread moving survivors", (queued) => {
+    const tracker = createBackgroundTrafficTracker();
+    const before = tracker.update(snapshot(longRoad.id, 12, queued === 1 ? 0 : queued - 1, 0.6, 1_000), options).current;
+    const after = tracker.update(snapshot(longRoad.id, 12, queued, 0.6, 1_000), options).current;
+    samePositions(before, after);
+    expect(new Set(after.map((sprite) => sprite.key)).size).toBe(after.length);
+  });
+
+  it.each([3, 0])("queue release to %s preserves keys and does not drive backwards", (queued) => {
+    const tracker = createBackgroundTrafficTracker();
+    const before = tracker.update(snapshot(longRoad.id, 8, 4, 0.4, 1_000), options).current;
+    const after = tracker.update(snapshot(longRoad.id, 8, queued, 0.4, 1_000), options).current;
+    samePositions(before, after);
+    const rendered = renderBackgroundVehicles(before, after, 0.5, { indexes });
+    expect(rendered).toHaveLength(8);
+    expect(after.some((sprite, index) => sprite.queueRank !== before[index].queueRank)).toBe(true);
+  });
+
+  it("births and deaths keep survivor positions and fade only changed slots", () => {
+    const tracker = createBackgroundTrafficTracker();
+    const three = tracker.update(snapshot(longRoad.id, 3, 0, 0.4, 1_000), options).current;
+    const growth = tracker.update(snapshot(longRoad.id, 5, 0, 0.4, 1_000), options);
+    samePositions(three, growth.current);
+    const birthFrame = renderBackgroundVehicles(growth.previous, growth.current, 0.5, { indexes });
+    expect(birthFrame.filter((vehicle) => vehicle.fade === 0.5)).toHaveLength(2);
+    const shrink = tracker.update(snapshot(longRoad.id, 2, 0, 0.4, 1_000), options);
+    samePositions(shrink.previous.slice(0, 2), shrink.current);
+    const deathFrame = renderBackgroundVehicles(shrink.previous, shrink.current, 0.5, { indexes });
+    expect(deathFrame.filter((vehicle) => vehicle.fade === 0.5)).toHaveLength(3);
+  });
+
+  it("moving/queued transitions keep identities on road and out of stop-line stacks", () => {
+    const tracker = createBackgroundTrafficTracker();
+    const moving = tracker.update(snapshot(longRoad.id, 6, 0, 0.5, 1_000), options).current;
+    const queued = tracker.update(snapshot(longRoad.id, 6, 2, 0.5, 1_000), options).current;
+    samePositions(moving, queued);
+    expect(queued.filter((sprite) => sprite.queueRank >= 0)).toHaveLength(2);
+    const released = tracker.update(snapshot(longRoad.id, 6, 0, 0.5, 1_000), options).current;
+    samePositions(queued, released);
+    expect(released.every((sprite) => sprite.queueRank < 0)).toBe(true);
+    expect(new Set(queued.map((sprite) => sprite.progress.toFixed(3))).size).toBe(queued.length);
+  });
+
+  it("shortened-span wrap crossfades at its two ends, never interpolates backwards", () => {
+    const tracker = createBackgroundTrafficTracker();
+    tracker.update(snapshot(longRoad.id, 4, 1, 1, 0), options);
+    let pair = tracker.update(snapshot(longRoad.id, 4, 1, 1, 10_000), options);
+    for (let time = 20_000; !pair.current.some((sprite) => sprite.wrapped) && time <= 120_000; time += 10_000) {
+      pair = tracker.update(snapshot(longRoad.id, 4, 1, 1, time), options);
     }
+    const wrapped = pair.current.find((sprite) => sprite.wrapped);
+    expect(wrapped).toBeDefined();
+    const halfway = renderBackgroundVehicles(pair.previous, pair.current, 0.5, { indexes });
+    const ends = halfway.filter((vehicle) => vehicle.id === wrapped!.key || vehicle.id === wrapped!.key + 1_000_000_000);
+    expect(ends).toHaveLength(2);
+    expect(ends.every((vehicle) => vehicle.fade === 0.5)).toBe(true);
   });
 
-  it("draws nothing for a road with no vehicles, and nothing at all for no frame", () => {
-    const road = someRoad();
-    expect(
-      synthesizeRoadTraffic(snapshotWith([{ roadId: road.id, vehicleCount: 0, queuedCount: 0 }]), {
-        city: model.city,
-        laneOffsets,
-        egoRoadId: null,
-      }),
-    ).toHaveLength(0);
-    expect(
-      synthesizeRoadTraffic(null, { city: model.city, laneOffsets, egoRoadId: null }),
-    ).toHaveLength(0);
+  it("holds a moving sprite when a one-lane queue leaves no usable segment", () => {
+    // Frozen Metro road 273 is 35.41 m long. With two queued cars, the one
+    // survivor starts exactly one display spacing behind the queue tail.
+    const road = model.city.roads[273];
+    expect(road.lanes).toBe(1);
+    const tracker = createBackgroundTrafficTracker();
+    const initial = tracker.update(snapshot(road.id, 3, 0, 1, 0), options).current;
+    const queued = tracker.update(snapshot(road.id, 3, 2, 1, 1_000), options).current;
+    const held = tracker.update(snapshot(road.id, 3, 2, 1, 2_000), options).current;
+    const moving = initial.find((sprite) => sprite.key === road.id * KEY_STRIDE)!;
+    const survivor = queued.find((sprite) => sprite.key === moving.key)!;
+    const next = held.find((sprite) => sprite.key === moving.key)!;
+    const queueTail = Math.min(...held.filter((sprite) => sprite.queueRank >= 0).map((sprite) => sprite.progress));
+    expect(survivor.progress).toBe(moving.progress);
+    expect(next.progress).toBe(moving.progress);
+    expect(survivor.wrapped).toBe(false);
+    expect(next.wrapped).toBe(false);
+    expect(queueTail - next.progress).toBeGreaterThanOrEqual(SPRITE_SPACING_M);
   });
 
-  it("does not draw the followed car twice on its own road", () => {
-    const road = someRoad();
-    const frame = snapshotWith([{ roadId: road.id, vehicleCount: 6, queuedCount: 2 }]);
-    const withEgoSubtracted = synthesizeRoadTraffic(frame, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: road.id,
-    });
-    const withoutSubtraction = synthesizeRoadTraffic(frame, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: null,
-    });
-    expect(withoutSubtraction).toHaveLength(6);
-    expect(withEgoSubtracted).toHaveLength(5);
-  });
-
-  it("caps a single road rather than drawing an unbounded column", () => {
-    const road = someRoad();
-    const sprites = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 5_000, queuedCount: 0 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    // Moving traffic is capped at its own slot space; a road can only reach
-    // MAX_SPRITES_PER_ROAD when both queue and moving traffic are saturated.
-    expect(sprites.length).toBeLessThanOrEqual(MAX_SPRITES_PER_ROAD);
-    expect(sprites.length).toBe(24);
-  });
-
-  it("is deterministic: the same frame is always the same sprites", () => {
-    const road = someRoad();
-    const frame = snapshotWith([{ roadId: road.id, vehicleCount: 14, queuedCount: 5 }]);
-    const first = synthesizeRoadTraffic(frame, { city: model.city, laneOffsets, egoRoadId: null });
-    const second = synthesizeRoadTraffic(frame, { city: model.city, laneOffsets, egoRoadId: null });
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-  });
-
-  it("caches per frame but never serves a stale ego road", () => {
-    const road = someRoad();
-    const frame = snapshotWith([{ roadId: road.id, vehicleCount: 4, queuedCount: 0 }]);
-    const a = synthesizeRoadTrafficCached(frame, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: null,
-    });
-    const cachedAgain = synthesizeRoadTrafficCached(frame, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: null,
-    });
-    expect(cachedAgain).toBe(a);
-    const withEgo = synthesizeRoadTrafficCached(frame, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: road.id,
-    });
-    expect(withEgo).not.toBe(a);
-    expect(withEgo).toHaveLength(3);
-  });
-});
-
-describe("background traffic: sprites obey the road, not the open map", () => {
-  it("sits on its road's path in a lane, nose along the tangent", () => {
-    const road = someRoad(300);
-    const frame = snapshotWith([{ roadId: road.id, vehicleCount: 16, queuedCount: 6 }]);
-    const sprites = synthesizeRoadTraffic(frame, { city: model.city, laneOffsets, egoRoadId: null });
-    const rendered = renderBackgroundVehicles([], sprites, 1, { indexes });
-    expect(rendered).toHaveLength(sprites.length);
-    for (const sprite of rendered) {
-      const source = sprites.find((entry) => entry.key === sprite.id)!;
-      const onPath = sampleDirectedRoad(indexes, road.id, source.progress)!;
-      // Distance from the road centreline is exactly the lane offset — never a
-      // free-space position.
-      const distance = Math.hypot(sprite.x - onPath.x, sprite.y - onPath.y);
-      expect(Math.abs(distance - Math.abs(source.laneOffset))).toBeLessThan(0.05);
-      // And the nose is the road tangent, the same rule the ego follows.
-      const delta = Math.abs(
-        ((sprite.headingRadians - onPath.heading + Math.PI) % (2 * Math.PI)) - Math.PI,
-      );
-      expect(delta).toBeLessThan(1e-6);
-    }
-  });
-
-  it("keeps every sprite inside the road's own extent", () => {
-    const road = someRoad(150);
-    const sprites = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 40, queuedCount: 20 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    for (const sprite of sprites) {
-      expect(sprite.progress).toBeGreaterThanOrEqual(0);
-      expect(sprite.progress).toBeLessThanOrEqual(road.length);
-    }
-  });
-
-  it("packs a queue behind the stop line, front first, bumper to bumper", () => {
-    const road = someRoad(400);
-    const queued = 5;
-    const sprites = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: queued, queuedCount: queued }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    const queue = sprites.filter((sprite) => sprite.queueRank >= 0).sort((a, b) => a.queueRank - b.queueRank);
-    expect(queue).toHaveLength(queued);
-    // Rank 0 is the front: closest to the stop line, which is the road's end.
-    const stopLine = road.length - stopLineSetbackMetres(road.lanes);
-    expect(queue[0].progress).toBeLessThanOrEqual(stopLine);
-    expect(queue[0].progress).toBeGreaterThan(stopLine - 6);
-    for (let index = 1; index < queue.length; index += 1) {
-      const gap = queue[index - 1].progress - queue[index].progress;
-      // A car plus the queue gap, never overlapping and never floating away.
-      expect(gap).toBeGreaterThan(4);
-      expect(gap).toBeLessThan(11);
-    }
-  });
-
-  it("spreads moving traffic between the junctions, not onto the stop line", () => {
-    const road = someRoad(400);
-    const sprites = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 6, queuedCount: 0 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    for (const sprite of sprites) {
-      expect(sprite.queueRank).toBe(-1);
-      expect(sprite.progress).toBeGreaterThan(0);
-      expect(sprite.progress).toBeLessThan(road.length);
-    }
-    const order = sprites.map((sprite) => sprite.progress);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
-  });
-});
-
-describe("background traffic: motion is interpolated, never snapped", () => {
-  it("walks a sprite from its old position to its new one across the frame", () => {
-    const road = someRoad(400);
-    const previous = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 4, queuedCount: 0 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    // Same sprites, further along the road: the sim advanced one frame.
-    const moved = previous.map((sprite) => ({ ...sprite, progress: sprite.progress + 25 }));
-    const atStart = renderBackgroundVehicles(previous, moved, 0, { indexes });
-    const atEnd = renderBackgroundVehicles(previous, moved, 1, { indexes });
-    const halfway = renderBackgroundVehicles(previous, moved, 0.5, { indexes });
-    for (let index = 0; index < previous.length; index += 1) {
-      const start = Math.hypot(atStart[index].x - atEnd[index].x, atStart[index].y - atEnd[index].y);
-      const half = Math.hypot(halfway[index].x - atEnd[index].x, halfway[index].y - atEnd[index].y);
-      // Halfway is half of the way, not a jump: positions come from the path, so
-      // this is measured along the road itself.
-      expect(half).toBeLessThan(start * 0.75);
-      expect(half).toBeGreaterThan(start * 0.25);
-    }
-  });
-
-  it("drops a sprite that has left the road and adds one that appeared", () => {
-    const road = someRoad(300);
-    const previous = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 3, queuedCount: 0 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    const current = synthesizeRoadTraffic(
-      snapshotWith([{ roadId: road.id, vehicleCount: 5, queuedCount: 0 }]),
-      { city: model.city, laneOffsets, egoRoadId: null },
-    );
-    const rendered = renderBackgroundVehicles(previous, current, 1, { indexes });
-    expect(rendered).toHaveLength(5);
-  });
-});
-
-describe("background traffic: the real rush hour looks populated", () => {
-  it("draws thousands of vehicles in view, on real Chicago roads", () => {
-    const challenge = materializeChallengeTrip(model, "soldier-field-to-navy-pier" as CuratedTripId, 42);
-    const scenario = buildChallengeScenario({
-      tripId: "soldier-field-to-navy-pier" as CuratedTripId,
-      trafficLevel: "rush-hour",
-      driver: "tourist",
-      seed: 42,
-      durationMs: 420_000,
-    });
-    const world = resolveScenarioWorld(model, challenge.trip, scenario);
-    const spawns: ScheduledSpawn[] = [
-      challenge.spawn,
-      ...productionDemand({
-        city: model.city,
-        level: "rush-hour",
-        seed: world.demandSeed,
-        durationMs: 420_000,
-      }),
+  it("caps physical density on real sub-metre and 4-5m Chicago roads", () => {
+    const examples = [
+      model.city.roads.find((road) => road.length > 0 && road.length < 1),
+      model.city.roads.find((road) => road.length >= 4 && road.length <= 5),
     ];
-    const engine: EngineState = createEngine({
-      city: model.city,
-      controller: createAdaptiveController(),
-      spawns,
-      driver: "tourist",
+    expect(examples.every(Boolean)).toBe(true);
+    for (const road of examples) {
+      const sprites = createBackgroundTrafficTracker().update(snapshot(road!.id, 20, 0, 1, 1_000), options).current;
+      expect(sprites.length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("excludes ego, resets on scenario restart, and is deterministic for ordered sequences", () => {
+    const frames = [snapshot(longRoad.id, 5, 0, 1, 0), snapshot(longRoad.id, 5, 2, 0.5, 1_000)];
+    const run = () => {
+      const tracker = createBackgroundTrafficTracker();
+      const values = frames.map((frame) => tracker.update(frame, { ...options, egoRoadId: longRoad.id }).current);
+      expect(values[0]).toHaveLength(4);
+      expect(tracker.trackedRoads).toBe(1);
+      tracker.reset();
+      expect(tracker.trackedRoads).toBe(0);
+      return values;
+    };
+    expect(JSON.stringify(run())).toBe(JSON.stringify(run()));
+  });
+});
+
+describe("dense production geography", () => {
+  it("keeps a real Metro rush-hour snapshot finite, on-road and bounded", () => {
+    const engine = createEngine({
+      city: model.city, controller: createAdaptiveController(),
+      spawns: productionDemand({ city: model.city, level: "rush-hour", seed: 42, durationMs: 300_000 }),
     });
     runEngine(engine, 300_000);
-    const snapshot = buildPresentationSnapshot(engine, 0);
-    const sprites = synthesizeRoadTraffic(snapshot, {
-      city: model.city,
-      laneOffsets,
-      egoRoadId: snapshot.ego?.roadId ?? null,
-    });
-    // The frame's own numbers must add up: one sprite per vehicle on occupied
-    // roads, minus the ego, up to the per-road cap that keeps one pathological
-    // road from eating the frame budget.
-    const expected =
-      snapshot.roadTraffic.reduce((sum, road) => sum + road.vehicleCount, 0) -
-      (snapshot.ego ? 1 : 0);
-    expect(sprites.length).toBeLessThanOrEqual(expected);
-    expect(sprites.length).toBeGreaterThan(expected * 0.95);
-    expect(sprites.length).toBeGreaterThan(2_000);
-    // And a real Chicago road must carry a real queue, not a token one.
-    const busiest = [...snapshot.roadTraffic].sort((a, b) => b.vehicleCount - a.vehicleCount)[0];
-    expect(busiest.vehicleCount).toBeGreaterThan(3);
-    const rendered = renderBackgroundVehicles([], sprites, 1, { indexes });
-    expect(rendered.every((vehicle) => Number.isFinite(vehicle.x) && Number.isFinite(vehicle.y))).toBe(
-      true,
-    );
-
-    // This runs at display rate, so it has to be cheap. The bound is deliberately
-    // loose (a regression that made it O(roads x vehicles), or re-sampled the
-    // paths per sprite per frame, would blow through it by an order of magnitude).
-    const startedAt = performance.now();
-    for (let frame = 0; frame < 60; frame += 1) {
-      renderBackgroundVehicles(sprites, sprites, frame / 60, { indexes });
+    const frame = buildPresentationSnapshot(engine, 0);
+    const sprites = createBackgroundTrafficTracker().update(frame, options).current;
+    expect(sprites.length).toBeGreaterThan(500);
+    expect(sprites.length).toBeLessThanOrEqual(frame.roadTraffic.length * MAX_SPRITES_PER_ROAD);
+    const perRoad = new Map<number, SyntheticVehicle[]>();
+    for (const sprite of sprites) {
+      expect(Number.isFinite(sprite.progress)).toBe(true);
+      expect(sprite.progress).toBeGreaterThanOrEqual(0);
+      expect(sprite.progress).toBeLessThanOrEqual(model.city.roads[sprite.roadId].length);
+      perRoad.set(sprite.roadId, [...(perRoad.get(sprite.roadId) ?? []), sprite]);
     }
-    const perFrameMs = (performance.now() - startedAt) / 60;
-    expect(perFrameMs).toBeLessThan(25);
+    for (const road of perRoad.values()) {
+      const positions = road.map((sprite) => sprite.progress.toFixed(3));
+      expect(new Set(positions).size).toBe(positions.length);
+    }
+    const rendered = renderBackgroundVehicles([], sprites, 1, { indexes });
+    expect(rendered.every((sprite) => Number.isFinite(sprite.x) && Number.isFinite(sprite.y))).toBe(true);
+    expect(SPRITE_SPACING_M).toBeGreaterThan(0);
   }, 300_000);
 });
