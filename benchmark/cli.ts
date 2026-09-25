@@ -20,6 +20,7 @@ import {
   JEV_DEFAULT_TIMEOUT_MS,
   type JevClient,
 } from "@/jev/client";
+import { JEV_GATEWAY_TIMEOUT_MS } from "@/jev/gateway";
 import {
   createGatewayJevClient,
   JEV_GATEWAY_ENDPOINT,
@@ -464,8 +465,11 @@ function liveJevClientFromEnv(
         "fabricated without it (use --jev mock to exercise the seam)",
     };
   }
-  const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
+  // JEV_TIMEOUT_MS overrides; without it each transport keeps its own default,
+  // so the gateway's 15 s is not silently replaced by the generic 4 s (issue #57).
+  const configured = Number(process.env.JEV_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS;
+  const gatewayTimeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_GATEWAY_TIMEOUT_MS;
 
   if (adapter === "gateway") {
     // Only the configured model is ever asked (TypeSafe AI's jev by default).
@@ -474,7 +478,7 @@ function liveJevClientFromEnv(
         token,
         endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
         model: process.env.JEV_MODEL?.trim() || JEV_GATEWAY_MODEL,
-        timeoutMs,
+        timeoutMs: gatewayTimeoutMs,
         minConfidence: readMinConfidenceEnv(),
       }),
     };

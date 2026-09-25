@@ -34,6 +34,14 @@ export type TrafficSeverity = "free" | "slower" | "severe";
 export const ROAD_TRAFFIC = {
   /** A fully jammed road still creeps; it never becomes a wall. */
   minSpeedFactor: MIN_TRAFFIC_SPEED_FACTOR,
+  /**
+   * Smallest capacity the occupancy ratio is divided by. Real roads carry a
+   * capacity of 2 in this network, where ONE arrival swings the ratio by 0.5 and
+   * a measured single-tick change of 1.000 turned a road red instantly. The floor
+   * keeps the pressure signal proportional to sustained load rather than to a
+   * single vehicle (issue #57).
+   */
+  minPressureCapacity: 8,
   /** Occupancy ratio below which traffic is free. */
   freeOccupancyRatio: 0.45,
   /** Occupancy ratio at which traffic is treated as fully jammed. */
@@ -42,10 +50,14 @@ export const ROAD_TRAFFIC = {
   severeQueueShare: 0.6,
   /** Longest blocked wait that counts as jammed. */
   severeWaitMs: 25_000,
-  /** Congestion builds quickly... */
-  buildTauMs: 5_000,
-  /** ...and clears slowly: recovery lag is the anti-flash hysteresis. */
-  recoverTauMs: 30_000,
+  /**
+   * Congestion builds over a sustained interval, not on one tick. Measured
+   * before this change: the amber dwell averaged 14.8 s of simulated time
+   * (median 12.8 s), which reads as flicker at the simulation's pace.
+   */
+  buildTauMs: 20_000,
+  /** ...and clears more slowly still: recovery lag is the anti-flash hysteresis. */
+  recoverTauMs: 90_000,
   /** Severity boundaries on the speed factor (single source for all colours). */
   slowerFactor: 0.72,
   severeFactor: 0.42,
@@ -161,7 +173,8 @@ export function stepRoadTraffic(state: TrafficState, city: City, dtMs: number): 
       continue;
     }
     const units = occupancy.get(roadId) ?? 0;
-    const ratio = road.capacity > 0 ? units / road.capacity : 0;
+    const pressureCapacity = Math.max(road.capacity, ROAD_TRAFFIC.minPressureCapacity);
+    const ratio = pressureCapacity > 0 ? units / pressureCapacity : 0;
     const target = targetSpeedFactor(
       ratio,
       queued.get(roadId) ?? 0,

@@ -15,7 +15,7 @@
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import { createJevController } from "@/controllers/jev";
-import { createRelayJevClient } from "@/jev/client";
+import { createRelayJevClient, JEV_RELAY_TIMEOUT_MS } from "@/jev/client";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
@@ -135,7 +135,7 @@ function makeController(choice: ControllerChoice, identity: string) {
     // Browser path: the relay client asks our own route, which is the only
     // place the service credential lives. Nothing secret reaches this worker.
     return createJevController({
-      client: createRelayJevClient(),
+      client: createRelayJevClient({ timeoutMs: JEV_RELAY_TIMEOUT_MS }),
       scenarioFingerprint: identity,
     });
   }

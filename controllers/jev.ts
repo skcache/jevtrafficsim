@@ -138,9 +138,14 @@ export function zoneMargin(
 const NEUTRAL_WEIGHTS = resolveJevWeights(neutralJevPolicy());
 
 /**
- * Effective bounded weight for one phase: the global scale times the phase's
- * most important corridor times its signal's region weight, clamped to
- * JEV_LIMITS' combined bounds. Pure; exported for tests.
+ * Effective bounded weight for one phase: the phase's most important corridor
+ * weight, clamped to JEV_LIMITS' combined bounds. Pure; exported for tests.
+ *
+ * This is the PHASE-DIFFERENTIATING part of the policy - the only part that can
+ * change which of two competing movements is served. The intersection-common
+ * part (the global scale and the signal's region weight) deliberately does NOT
+ * live here: multiplying both sides of the advance comparison by it cancels, so
+ * it is spent on the margin instead (see jevCommonWeight).
  */
 export function jevPhaseWeight(
   phase: PhaseObservation,
@@ -157,10 +162,26 @@ export function jevPhaseWeight(
       }
     }
   }
+  return clampWeight(corridor, JEV_LIMITS.COMBINED_WEIGHT_MIN, JEV_LIMITS.COMBINED_WEIGHT_MAX);
+}
+
+/**
+ * The intersection-common half of the policy: the global scale times this
+ * signal's region weight, bounded the same way. It says "this place is under
+ * citywide pressure", which is a statement about the SIGNAL rather than about
+ * either movement, so it is applied to the release margin - one-sided, and
+ * therefore able to decide. A weight above 1 holds greens longer, below 1
+ * releases them sooner. Pure; exported for tests.
+ */
+export function jevCommonWeight(
+  intersectionId: IntersectionId,
+  partition: CityPartition,
+  weights: JevWeights,
+): number {
   const regionId = partition.intersectionRegion.get(intersectionId);
   const region = regionId === undefined ? 1 : weights.regionWeight.get(regionId) ?? 1;
   return clampWeight(
-    weights.pressureScale * corridor * region,
+    weights.pressureScale * region,
     JEV_LIMITS.COMBINED_WEIGHT_MIN,
     JEV_LIMITS.COMBINED_WEIGHT_MAX,
   );
@@ -177,6 +198,7 @@ export function jevDirective(
   observation: IntersectionObservation,
   weightOf: (phaseIndex: number) => number,
   marginScale: number,
+  commonWeight = 1,
 ): SignalDirective | undefined {
   if (signal.groups.length < 2) {
     return undefined; // single-axis intersection: nothing to switch to
@@ -209,8 +231,15 @@ export function jevDirective(
     return "advance";
   }
   const ageFraction = Math.min(1, signal.stageElapsedMs / signal.timing.maxGreenMs);
+  // The citywide part of the policy is spent here rather than on both pressures:
+  // `marginScale` carries the global hint, `commonWeight` the global scale and
+  // this signal's region weight. Both are one-sided in the comparison below, so
+  // unlike a symmetric multiplier they cannot cancel out.
   const margin =
-    JEV_CONSTANTS.SWITCH_MARGIN * (1 - JEV_CONSTANTS.AGE_MARGIN_DECAY * ageFraction) * marginScale;
+    JEV_CONSTANTS.SWITCH_MARGIN *
+    (1 - JEV_CONSTANTS.AGE_MARGIN_DECAY * ageFraction) *
+    marginScale *
+    commonWeight;
   return nextPressure > currentPressure + margin ? "advance" : "hold";
 }
 
@@ -384,6 +413,9 @@ export function createJevController(options: JevControllerOptions): JevControlle
               weights,
             ),
           weights.marginScale * intentMargin,
+          // The citywide half of the policy: global scale x this signal's
+          // region weight, spent on the margin so it cannot cancel.
+          jevCommonWeight(intersectionId, context.partition, weights)
         );
         if (directive !== undefined) {
           directives.set(intersectionId, directive);

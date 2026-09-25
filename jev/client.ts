@@ -84,6 +84,15 @@ export interface HttpJevClientOptions {
 export const JEV_DEFAULT_TIMEOUT_MS = 4_000;
 
 /**
+ * The browser's budget for asking OUR relay route, which then calls the model
+ * gateway. It must exceed the server's own gateway budget (15 s) or the browser
+ * aborts a request the server is still working on and records a fallback the
+ * deployment never actually needed - measured: aborted at 4 004 ms against a
+ * healthy call (issue #57).
+ */
+export const JEV_RELAY_TIMEOUT_MS = 20_000;
+
+/**
  * Server-side HTTP client. Callers pass credentials in; this module never reads
  * process.env, and the token is only ever placed in the Authorization header —
  * never in the body, a URL, a log line or an error message.

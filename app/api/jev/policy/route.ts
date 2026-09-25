@@ -46,6 +46,7 @@
 import { unstable_checkRateLimit as checkRateLimit } from "@vercel/firewall";
 import { getVercelOidcTokenSync } from "@vercel/oidc";
 import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
+import { JEV_GATEWAY_TIMEOUT_MS } from "@/jev/gateway";
 import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
 import { jevPolicyContext } from "@/jev/request";
 import { JEV_LIMITS, parseJevPolicy, validateJevPolicyRequest } from "@/jev/schema";
@@ -233,8 +234,14 @@ export function failureReason(error: unknown): string {
 
 export function readJevEnvironment(gatewayOidcToken?: string): JevEnvironment | null {
   const configuredToken = process.env.JEV_TOKEN?.trim();
-  const configured = Number(process.env.JEV_TIMEOUT_MS ?? JEV_DEFAULT_TIMEOUT_MS);
-  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : JEV_DEFAULT_TIMEOUT_MS;
+  // JEV_TIMEOUT_MS overrides both transports when an operator sets it. WITHOUT
+  // it each transport gets its own honest default: a live model call through the
+  // gateway takes seconds, a direct HTTP relay answers in milliseconds. The
+  // generic 4 s default used to be resolved here and then passed into the
+  // gateway client, where the transport's own 15 s default could never apply -
+  // so slow-but-healthy calls were recorded as `timeout` fallbacks (issue #57).
+  const configured = Number(process.env.JEV_TIMEOUT_MS);
+  const overrideMs = Number.isFinite(configured) && configured > 0 ? configured : null;
 
   const model = process.env.JEV_MODEL?.trim();
   if (model) {
@@ -242,7 +249,7 @@ export function readJevEnvironment(gatewayOidcToken?: string): JevEnvironment | 
     if (!token) return null;
     return {
       token,
-      timeoutMs,
+      timeoutMs: overrideMs ?? JEV_GATEWAY_TIMEOUT_MS,
       gateway: {
         endpoint: process.env.JEV_GATEWAY_URL?.trim() || JEV_GATEWAY_ENDPOINT,
         model,
@@ -257,7 +264,7 @@ export function readJevEnvironment(gatewayOidcToken?: string): JevEnvironment | 
   if (!endpoint) {
     return null;
   }
-  return { token: configuredToken, timeoutMs, gateway: null, endpoint };
+  return { token: configuredToken, timeoutMs: overrideMs ?? JEV_DEFAULT_TIMEOUT_MS, gateway: null, endpoint };
 }
 
 /** The one place a client is built from configuration. */
