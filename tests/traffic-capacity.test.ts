@@ -106,7 +106,8 @@ describe("queueing", () => {
     // 10 m/s): the 30 m approach lets the waiter cruise, brake and stop AT the
     // line (tick 40 = 30 + 10, see tools/model-timing.py) while the 80 m
     // downstream road keeps its lone occupant aboard long enough to hold the
-    // waiter there.
+    // waiter there. Timings re-derived with tools/model-timing.py for the
+    // 9 s congestion build interval: the blocker clears on tick 83.
     const { city } = makeStreet([
       { length: 30, speedLimit: 10, capacity: 4 },
       // Capacity 2 with one car aboard: the spillback headroom (1.8) admits
@@ -123,57 +124,66 @@ describe("queueing", () => {
     expect(waiting.queuedSinceMs).toBe(40 * DT);
     expect(roadOccupancy(state, 0)).toBe(1);
 
-    stepChecked(city, state, 44); // road-1 car arrives on tick 84
+    stepChecked(city, state, 43); // road-1 car arrives on tick 83
     expect(waiting.state).toBe("queued");
-    expect(waiting.waitTimeMs).toBe(45 * DT);
-    expect(waiting.tripTimeMs).toBe(84 * DT);
+    expect(waiting.waitTimeMs).toBe(44 * DT);
+    expect(waiting.tripTimeMs).toBe(83 * DT);
 
-    stepChecked(city, state, 1); // capacity visible from tick 85
+    stepChecked(city, state, 1); // capacity visible from tick 84
     expect(waiting.state).toBe("moving");
     expect(waiting.roadId).toBe(1);
     expect(roadOccupancy(state, 0)).toBe(0);
     expect(roadOccupancy(state, 1)).toBe(1);
-    expect(waiting.waitTimeMs).toBe(45 * DT); // release tick does not wait
+    expect(waiting.waitTimeMs).toBe(44 * DT); // release tick does not wait
 
-    stepChecked(city, state, 100); // arrives at tick 185 after 100 more
+    stepChecked(city, state, 99); // arrives at tick 183 after 99 more
     expect(waiting.state).toBe("arrived");
-    expect(waiting.tripTimeMs).toBe(185 * DT);
-    expect(waiting.waitTimeMs).toBe(45 * DT);
+    expect(waiting.tripTimeMs).toBe(183 * DT);
+    expect(waiting.waitTimeMs).toBe(44 * DT);
   });
 
   it("releases waiters in queue order without jumping", () => {
+    // Timings re-derived with tools/model-timing.py (scenario "derived") for the
+    // 9 s congestion build interval: the blocker clears on tick 41, the first
+    // waiter leaves on 42, the second on 99, the newcomer on 156.
     const { city } = makeStreet([
       { length: 30, speedLimit: 10, capacity: 8 },
       // Capacity 2 with one car aboard: no second car may be admitted.
       { length: 40, speedLimit: 10, capacity: 2 },
     ]);
     const state = createTrafficState();
-    spawn(city, state, 0, "car", [1], 1, 2); // blocks road 1 until tick 42
+    spawn(city, state, 0, "car", [1], 1, 2); // blocks road 1 until tick 41
     spawn(city, state, 1, "car", [0, 1], 0, 2); // first waiter
     spawn(city, state, 2, "car", [0, 1], 0, 2); // second waiter
-    stepChecked(city, state, 42);
+    stepChecked(city, state, 41);
     const [blocker, first, second] = state.vehicles;
     expect(blocker.state).toBe("arrived");
     expect(first.state).toBe("queued");
     expect(second.state).toBe("queued");
 
-    stepChecked(city, state, 1); // tick 43: release
+    stepChecked(city, state, 1); // tick 42: release
     expect(first.state).toBe("moving");
     expect(first.roadId).toBe(1);
     expect(second.state).toBe("queued");
-    expect(first.waitTimeMs).toBe(3 * DT);
+    expect(first.waitTimeMs).toBe(2 * DT);
+    expect(second.waitTimeMs).toBe(3 * DT);
+
+    stepChecked(city, state, 1); // tick 43: the second waiter still holds
+    expect(first.state).toBe("moving");
+    expect(second.state).toBe("queued");
+    expect(first.waitTimeMs).toBe(2 * DT);
     expect(second.waitTimeMs).toBe(4 * DT);
 
     // A vehicle spawning later must not overtake the waiters.
     spawn(city, state, 3, "car", [0, 1], 0, 2);
-    stepChecked(city, state, 56); // tick 99: first arrives on road 1
+    stepChecked(city, state, 55); // tick 98: first arrives on road 1
     expect(first.state).toBe("arrived");
-    stepChecked(city, state, 1); // tick 100: second released, newcomer still behind
+    stepChecked(city, state, 1); // tick 99: second released, newcomer still behind
     expect(second.state).toBe("moving");
     expect(state.vehicles[3].state).toBe("queued");
-    stepChecked(city, state, 56); // second arrives at tick 156
+    stepChecked(city, state, 56); // second arrives at tick 155
     expect(second.state).toBe("arrived");
-    stepChecked(city, state, 1); // tick 157: newcomer finally released
+    stepChecked(city, state, 1); // tick 156: newcomer finally released
     expect(state.vehicles[3].state).toBe("moving");
     expect(state.vehicles[3].waitTimeMs).toBe(73 * DT);
   });

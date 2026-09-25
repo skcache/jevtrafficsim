@@ -181,10 +181,16 @@ describe("a live Jev controller is bound to the real scenario fingerprint", () =
 
   it("binds every controller in the worker to a real identity, never a placeholder", () => {
     const worker = code(readSource("worker/simulation.worker.ts"));
-    // Every construction site passes an identity derived from the run config.
+    // Every construction site passes an identity derived from the run config,
+    // and the browser relay client is built with the relay timeout budget that
+    // must exceed the server's gateway budget (issue #57) — the generic 4 s
+    // default used to abort healthy calls and be recorded as a fallback.
     const constructions = [...worker.matchAll(/createJevController\(\{/g)];
     expect(constructions.length).toBeGreaterThan(0);
-    expect(worker).toMatch(/createJevController\(\{\s*\n\s*client: createRelayJevClient\(\),\s*\n\s*scenarioFingerprint: identity,/);
+    expect(worker).toMatch(
+      /createJevController\(\{[\s\S]*?client: createRelayJevClient\(\{\s*timeoutMs: JEV_RELAY_TIMEOUT_MS\s*\}\),[\s\S]*?scenarioFingerprint: identity,/,
+    );
+    expect(worker).toContain("JEV_RELAY_TIMEOUT_MS");
     // The worker's controller factory takes the identity as an argument.
     expect(worker).toMatch(/function makeController\(choice: ControllerChoice, identity: string\)/);
     // Both call sites give it a real one: the scenario just built (INIT/RESET)

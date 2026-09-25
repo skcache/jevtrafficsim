@@ -109,11 +109,11 @@ describe("signalized intersection traffic", () => {
     expect(state.vehicles[0].roadId).toBe(exit);
     expect(state.vehicles[1].state).toBe("queued"); // green && downstream full => blocked
 
-    stepChecked(edited, state, 35); // tick 74: A arrives on the 30 m exit; capacity visible next tick
+    stepChecked(edited, state, 34); // tick 73: A arrives on the 30 m exit; capacity visible next tick
     expect(state.vehicles[0].state).toBe("arrived");
-    stepChecked(edited, state, 17); // ticks 75..91: green1 [65..74] is over, B goes on the next group-1 green
+    stepChecked(edited, state, 1); // tick 74: still inside the group-1 green [65..75], B goes
     expect(state.vehicles[1].state).toBe("moving");
-    expect(state.vehicles[1].waitTimeMs).toBe(57 * DT);
+    expect(state.vehicles[1].waitTimeMs).toBe(41 * DT);
   });
 
   it("is deterministic across identical runs including signal state", () => {

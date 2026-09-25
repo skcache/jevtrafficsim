@@ -178,11 +178,11 @@ describe("stop-controlled intersections", () => {
     expect(state.vehicles[2].state).toBe("moving"); // feasible B crosses at tick 55
     expect(state.vehicles[2].waitTimeMs).toBe(15 * DT);
 
-    stepChecked(city, state, 29); // ticks 56..84: C clears its exit road on tick 84
+    stepChecked(city, state, 28); // ticks 56..83: C clears its exit road on tick 83
     expect(state.vehicles[1].state).toBe("queued");
-    stepChecked(city, state, 1); // tick 85: A finally feasible
+    stepChecked(city, state, 1); // tick 84: A finally feasible
     expect(state.vehicles[1].state).toBe("moving");
-    expect(state.vehicles[1].waitTimeMs).toBe(45 * DT);
+    expect(state.vehicles[1].waitTimeMs).toBe(44 * DT);
   });
 
   it("keeps a blocked head vehicle waiting and never lets the follower through", () => {
@@ -208,22 +208,22 @@ describe("stop-controlled intersections", () => {
     expect(state.vehicles[1].state).toBe("queued");
     expect(state.vehicles[2].state).toBe("queued");
 
-    stepChecked(edited, state, 44); // ticks 41..84: C reaches the exit end on tick 84
+    stepChecked(edited, state, 43); // ticks 41..83: C reaches the exit end on tick 83
     expect(state.vehicles[0].state).toBe("arrived");
     expect(state.vehicles[1].state).toBe("queued"); // capacity visible next tick
     expect(state.vehicles[2].state).toBe("queued");
 
-    stepChecked(edited, state, 1); // tick 85: head of the queue proceeds
+    stepChecked(edited, state, 1); // tick 84: head of the queue proceeds
     expect(state.vehicles[1].state).toBe("moving");
     expect(state.vehicles[1].roadId).toBe(exitRoad.id);
     expect(state.vehicles[2].state).toBe("queued");
 
-    stepChecked(edited, state, 100); // ticks 86..185: A traverses the 80m exit road
+    stepChecked(edited, state, 99); // ticks 85..183: A traverses the 80m exit road
     expect(state.vehicles[1].state).toBe("arrived");
-    stepChecked(edited, state, 1); // tick 186: follower finally crosses
+    stepChecked(edited, state, 1); // tick 184: follower finally crosses
     expect(state.vehicles[2].state).toBe("moving");
-    expect(state.vehicles[1].waitTimeMs).toBe(45 * DT);
-    expect(state.vehicles[2].waitTimeMs).toBe(146 * DT);
+    expect(state.vehicles[1].waitTimeMs).toBe(44 * DT);
+    expect(state.vehicles[2].waitTimeMs).toBe(144 * DT);
   });
 
   it("treats uncontrolled intersections as permissive (Task 05 behaviour)", () => {

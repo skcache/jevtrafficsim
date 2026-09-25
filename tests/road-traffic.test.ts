@@ -68,9 +68,18 @@ describe("road traffic state", () => {
 
     const recoverState = createTrafficState();
     recoverState.occupancy.set(0, 4);
-    while (roadSeverity(recoverState.roadTraffic, 0) !== "severe") {
+    // BOTH loops that wait for a severity are bounded. An unbounded wait here
+    // does not fail — it hangs: the loop runs inside one synchronous test, so
+    // vitest's testTimeout can never fire and CI burns its whole budget with no
+    // output (measured: 25 min, zero test results). The bounds make a model
+    // change that makes "severe" unreachable from sustained occupancy FAIL
+    // loudly instead.
+    let severeTicks = 0;
+    while (roadSeverity(recoverState.roadTraffic, 0) !== "severe" && severeTicks < 2_000) {
       stepTraffic(city, recoverState, 100);
+      severeTicks += 1;
     }
+    expect(severeTicks).toBeLessThan(2_000);
     recoverState.occupancy.set(0, 0);
     let recoverTicks = 0;
     while (roadSeverity(recoverState.roadTraffic, 0) !== "free" && recoverTicks < 5_000) {
@@ -82,6 +91,7 @@ describe("road traffic state", () => {
     // lag is what stops a road flashing as one car crosses an intersection.
     expect(buildTicks).toBeGreaterThan(0);
     expect(buildTicks).toBeLessThan(2_000);
+    expect(recoverTicks).toBeLessThan(5_000);
     expect(recoverTicks).toBeGreaterThan(buildTicks);
   });
 

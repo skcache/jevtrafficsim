@@ -296,10 +296,13 @@ describe("closure-triggered rerouting", () => {
 
   it("uses occupancy-aware A* for the replacement route", () => {
     const make = (withParkers: boolean) => {
-      // Long road 0 (100 m): the vehicle is still 70 m into it when the
-      // closure lands at 7 s, by which time road 2's three parkers have built
-      // its authoritative factor.
-      const city = extendedRouteCity(100);
+      // Long road 0 (105 m): the vehicle is still ~95 m into it when the
+      // closure lands at 10 s, by which time road 2's three parkers have built
+      // its authoritative factor. Both numbers are derived from the 9 s
+      // congestion build interval: the load needs a sustained interval before
+      // it is material, and road 0 must stay under the 110 m where the direct
+      // path (road 0 + road 4 = 155 m) would lose to the detour (160 m).
+      const city = extendedRouteCity(105);
       const spawns: ScheduledSpawn[] = [{ timeMs: 0, type: CAR, origin: 0, destination: 3 }];
       if (withParkers) {
         // Three cars park on road 2 (origin 0 -> destination 2), loading it.
@@ -313,20 +316,20 @@ describe("closure-triggered rerouting", () => {
         spawns,
         incidents: {
           seed: 1,
-          script: [{ atMs: 7_000, kind: "close-road", targetRoadId: 4, durationMs: 60_000 }],
+          script: [{ atMs: 10_000, kind: "close-road", targetRoadId: 4, durationMs: 60_000 }],
         },
       });
     };
-    // Control: B (16) beats C (20) -> the moving vehicle reroutes through B.
+    // Control: B (21) beats C (25) -> the moving vehicle reroutes through B.
     const clear = make(false);
-    runEngine(clear, 7_100);
+    runEngine(clear, 10_100);
     expect(clear.traffic.vehicles[0].route).toEqual([0, 1, 2, 6]);
-    // Loaded road 2: after 7 s of three-car load the authoritative factor has
-    // fallen to ~0.60 (3 of 4 units, build tau 5 s), so B's tail costs
-    // 5 + 8/0.60 + 8 ≈ 26.3 > C's 25 -> path C wins. Occupancy reaches the
+    // Loaded road 2: after 10 s of three-car load the authoritative factor has
+    // fallen to ~0.64 (3 of 4 units, build tau 9 s), so B's tail costs
+    // 5 + 8/0.64 + 8 ≈ 25.5 > C's 25 -> path C wins. Occupancy reaches the
     // router ONLY through the same factor that slows vehicles and paints roads.
     const loaded = make(true);
-    runEngine(loaded, 7_100);
+    runEngine(loaded, 10_100);
     expect(loaded.traffic.vehicles[0].route).toEqual([0, 1, 8, 9]);
   });
 

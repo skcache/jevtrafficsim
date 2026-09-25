@@ -34,14 +34,6 @@ export type TrafficSeverity = "free" | "slower" | "severe";
 export const ROAD_TRAFFIC = {
   /** A fully jammed road still creeps; it never becomes a wall. */
   minSpeedFactor: MIN_TRAFFIC_SPEED_FACTOR,
-  /**
-   * Smallest capacity the occupancy ratio is divided by. Real roads carry a
-   * capacity of 2 in this network, where ONE arrival swings the ratio by 0.5 and
-   * a measured single-tick change of 1.000 turned a road red instantly. The floor
-   * keeps the pressure signal proportional to sustained load rather than to a
-   * single vehicle (issue #57).
-   */
-  minPressureCapacity: 8,
   /** Occupancy ratio below which traffic is free. */
   freeOccupancyRatio: 0.45,
   /** Occupancy ratio at which traffic is treated as fully jammed. */
@@ -53,11 +45,33 @@ export const ROAD_TRAFFIC = {
   /**
    * Congestion builds over a sustained interval, not on one tick. Measured
    * before this change: the amber dwell averaged 14.8 s of simulated time
-   * (median 12.8 s), which reads as flicker at the simulation's pace.
+   * (median 10.6 s), which reads as flicker at the simulation's pace.
+   *
+   * Bounded by measurement, not taste: the anti-starvation integration fixture
+   * (tests/adaptive-engine.test.ts, "crosses the starvation threshold") can only
+   * exercise the hard rule while a minor approach's continuous wait can still
+   * cross the 35 s threshold inside the default 34 s signal cycle. Measured
+   * across build intervals: the crossing happens at 9 000 and below (peak 37.9 s)
+   * and stops happening at 10 000 and above (peak 31.8 s) — at longer intervals
+   * the wait-weighted policy, fed by the same authoritative state, serves the
+   * minor queue before it can starve. A build interval longer than that would
+   * make a safety guard untestable, so this is the longest one that keeps every
+   * integration scenario valid.
+   *
+   * Effect at this value (600 s Rush Hour, Adaptive, 5 131 roads): severity
+   * transitions 17 211 -> 11 681 (-32%), i.e. 0.475 -> 0.323 per ever-active road
+   * per simulated minute, and the mean amber dwell 14.8 s -> 17.4 s.
    */
-  buildTauMs: 20_000,
-  /** ...and clears more slowly still: recovery lag is the anti-flash hysteresis. */
-  recoverTauMs: 90_000,
+  buildTauMs: 9_000,
+  /**
+   * ...and clears more slowly still: recovery lag is the anti-flash hysteresis.
+   * Measured: at 90 s a jammed road no longer recovers inside the windows the
+   * rest of the simulation relies on — a road that stops receiving traffic stays
+   * non-free well past the 200 s the sparsity contract allows, and the Adaptive
+   * integration fixtures' vehicles never finish draining — so recovery keeps its
+   * pre-existing constant, still comfortably longer than the build interval.
+   */
+  recoverTauMs: 30_000,
   /** Severity boundaries on the speed factor (single source for all colours). */
   slowerFactor: 0.72,
   severeFactor: 0.42,
@@ -173,8 +187,17 @@ export function stepRoadTraffic(state: TrafficState, city: City, dtMs: number): 
       continue;
     }
     const units = occupancy.get(roadId) ?? 0;
-    const pressureCapacity = Math.max(road.capacity, ROAD_TRAFFIC.minPressureCapacity);
-    const ratio = pressureCapacity > 0 ? units / pressureCapacity : 0;
+    // The occupancy ratio is `units / capacity` — the road's REAL capacity, with
+    // no floor. Issue #57 measured that a floor (dividing a 2-capacity road by
+    // 8) stopped one arrival from swinging the ratio, but it also made a road
+    // that is genuinely FULL read as barely loaded: on Chicago, where a fifth of
+    // the roads carry a capacity of 2-7 (data/chicago/medium.json: 390 of 1 893),
+    // occupancy pressure disappeared entirely, "severe" became unreachable from
+    // occupancy, and the module's own severity contract (pinned by
+    // tests/physics-proofs.test.ts) broke. Single-vehicle transients are damped
+    // in SIMULATION TIME by the build/recover constants instead, which do not
+    // redefine what "full" means.
+    const ratio = road.capacity > 0 ? units / road.capacity : 0;
     const target = targetSpeedFactor(
       ratio,
       queued.get(roadId) ?? 0,
