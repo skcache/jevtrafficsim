@@ -42,7 +42,7 @@ import {
   scenarioFingerprint,
 } from "@/worker/challenge-scenario";
 import { comparisonVerdictAll, type ChallengeResult } from "@/worker/challenge-result";
-import { buildPresentationSnapshot, fallbackShare, type PresentationPolicy } from "@/worker/presentation-snapshot";
+import { buildPresentationSnapshot, ungovernedShare, type PresentationPolicy } from "@/worker/presentation-snapshot";
 import { LIVE_RUN_HORIZON_MS, parseBaselinesCommand } from "@/worker/protocol";
 import { productionDemand } from "@/sim/demand-profile";
 import { buildChallengeIncidentPlan } from "@/worker/challenge-incidents";
@@ -216,18 +216,30 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
     };
     const onFallback: PresentationPolicy = { ...cleanRun, fallbackMs: 120_000, accepted: 3 };
     const noPolicy: PresentationPolicy = {
-      source: "fallback",
+      source: "waiting",
       liveMs: 0,
       replayMs: 0,
-      fallbackMs: 600_000,
+      fallbackMs: 0,
       accepted: 0,
-      rejected: 9,
-      refreshes: 9,
+      rejected: 0,
+      refreshes: 1,
+      cause: "first-policy",
+    };
+    const invalidated: PresentationPolicy = {
+      ...cleanRun,
+      source: "invalidated",
+      liveMs: 420_000,
+      invalidMs: 180_000,
+      invalidation: { atSimMs: 420_000, reason: "expired" },
+      cause: "expired",
     };
     expect(policyLabel("jev", null)?.text).toBe("Checking Jev");
     expect(policyLabel("jev", cleanRun)?.text).toBe("Jev");
+    // The contract forbids fallback time; if a run ever reported it, the label
+    // says so rather than hiding it behind the plain word Jev.
     expect(policyLabel("jev", onFallback)?.text).toBe("Jev · fallback used");
-    expect(policyLabel("jev", noPolicy)?.text).toBe("Adaptive fallback");
+    expect(policyLabel("jev", noPolicy)?.text).toBe("Waiting for Jev");
+    expect(policyLabel("jev", invalidated)?.text).toBe("Jev · run invalidated");
     expect(policyLabel("jev", { ...cleanRun, source: "replay", liveMs: 0, replayMs: 595_000 })?.text).toBe(
       "Replay",
     );
@@ -237,33 +249,41 @@ describe("Fixed, Adaptive and Jev run the same world", () => {
   });
 });
 
-/* --------------------------------------------- 3. fallback is visible --- */
+/* --------------------------------------- 3. ungoverned time is visible --- */
 
-describe("fallback is never presented as pure live Jev", () => {
-  it("names every nonzero fallback share, including a sub-percent share", () => {
-    const at = (fallbackMs: number): PresentationPolicy => ({
+describe("ungoverned time is never presented as pure live Jev", () => {
+  it("names every nonzero ungoverned share, including a sub-percent share", () => {
+    const at = (invalidMs: number): PresentationPolicy => ({
       source: "live",
-      liveMs: 600_000 - fallbackMs,
+      liveMs: 600_000 - invalidMs,
       replayMs: 0,
-      fallbackMs,
+      fallbackMs: 0,
+      invalidMs,
       accepted: 100,
       rejected: 1,
       refreshes: 101,
     });
     const small = policyLabel("jev", at(100));
-    expect(small?.text).toBe("Jev · fallback used");
-    expect(small?.detail).toContain("<1% of the run on the adaptive fallback");
+    expect(small?.text).toBe("Jev · ungoverned time");
+    expect(small?.detail).toContain("<1% of the run had no Jev policy in force");
     expect(policyLabel("jev", at(0))?.text).toBe("Jev");
     // Half the run: still named, never hidden.
     expect(policyLabel("jev", at(300_000))?.detail).toContain("50%");
-    expect(fallbackShare(at(300_000))).toBeCloseTo(0.5, 6);
-    // A run that never had a live answer is not a Jev run at all.
-    expect(policyLabel("jev", { ...at(600_000), accepted: 0, source: "fallback" })?.text).toBe(
-      "Adaptive fallback",
+    expect(ungovernedShare(at(300_000))).toBeCloseTo(0.5, 6);
+    // A run that never had a live answer is not a Jev run at all: it is either
+    // still waiting for its first policy, or invalidated.
+    expect(policyLabel("jev", { ...at(600_000), accepted: 0, source: "waiting" })?.text).toBe(
+      "Waiting for Jev",
     );
-    expect(policyLabel("jev", { ...at(600_000), accepted: 1, liveMs: 0, source: "fallback" })?.text).toBe(
-      "Adaptive fallback",
-    );
+    expect(
+      policyLabel("jev", {
+        ...at(600_000),
+        accepted: 1,
+        liveMs: 0,
+        source: "invalidated",
+        invalidation: { atSimMs: 0, reason: "expired" },
+      })?.text,
+    ).toBe("Jev · run invalidated");
   });
 
   it("carries the provenance on every frame and on the final result", () => {
@@ -283,6 +303,15 @@ describe("fallback is never presented as pure live Jev", () => {
     const controller = createJevController({ client, scenarioFingerprint: fingerprintForRun(SCENARIO), refreshMs: 500 });
     const engine = createEngine({ city: built.city, controller, spawns: [] });
     const partition = buildCityPartition(built.city);
+    // The startup gate: the run begins under the accepted policy, so no
+    // simulated instant is ever ungoverned.
+    const started = controller.start({
+      frame: buildObservationFrame(engine.city, engine.traffic, engine.arrivals),
+      partition,
+      intersections: engine.city.intersections.length,
+      activeVehicles: engine.traffic.vehicles.length,
+    });
+    expect(typeof started === "object" && "state" in started && started.state).toBe("ready");
     for (let tick = 0; tick < 20; tick += 1) {
       controller.directives(engine.city, engine.traffic, {
         observations: buildObservationFrame(engine.city, engine.traffic, engine.arrivals),
@@ -297,19 +326,33 @@ describe("fallback is never presented as pure live Jev", () => {
       liveMs: meta.liveMs,
       replayMs: meta.replayMs,
       fallbackMs: meta.fallbackMs,
+      invalidMs: meta.invalidMs,
+      heldMs: meta.heldMs,
+      maxHoldMs: meta.maxHoldMs,
+      adaptiveTicks: meta.adaptiveTicks,
       accepted: meta.accepted,
       rejected: meta.rejected,
       refreshes: meta.refreshes,
+      cause: meta.cause,
+      causes: meta.causes,
+      clamped: meta.clamped,
+      dropped: meta.dropped,
+      invalidation: meta.invalidation,
     };
     const snapshot = buildPresentationSnapshot(engine, 0, SCENARIO.tripId, policy);
     expect(snapshot.policy).toEqual(policy);
-    expect(["live", "replay", "fallback"]).toContain(snapshot.policy?.source);
-    for (const value of [policy.liveMs, policy.replayMs, policy.fallbackMs]) {
+    expect(["live", "replay", "waiting", "invalidated"]).toContain(snapshot.policy?.source);
+    for (const value of [policy.liveMs, policy.replayMs, policy.fallbackMs, policy.invalidMs]) {
       expect(Number.isFinite(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
     }
     expect(policy.accepted).toBeGreaterThan(0);
-    expect(policy.fallbackMs).toBeGreaterThan(0); // the first window is always the fallback
+    // The gate means the run starts under Jev: no fallback time, no Adaptive
+    // tick, no ungoverned instant — and the label may say plain Jev.
+    expect(policy.fallbackMs).toBe(0);
+    expect(policy.adaptiveTicks).toBe(0);
+    expect(policy.invalidMs).toBe(0);
+    expect(policyLabel("jev", policy)?.text).toBe("Jev");
     // A controller with no external policy reports nothing at all.
     const plain = createEngine({ city: built.city, controller: createAdaptiveController(), spawns: [] });
     expect(buildPresentationSnapshot(plain, 0, SCENARIO.tripId).policy).toBeNull();

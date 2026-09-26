@@ -52,8 +52,14 @@ export interface UiState {
   baselinesRunning: boolean;
   /** The visible run's own outcome, published when it finishes. */
   liveResult: ChallengeResult | null;
-  /** Who governed the signals in the visible run (live | replay | fallback). */
+  /** Who governs the signals (live | replay | waiting | invalidated). */
   policy: PresentationPolicy | null;
+  /**
+   * A live Jev run is waiting for its FIRST policy (Issue #61): no simulated
+   * time is passing, and the run will not start until one is accepted. Distinct
+   * from `running`, which means the clock is actually advancing.
+   */
+  starting: boolean;
   /** Developer controls (?debug) only: controller choice and raw seed. */
   debug: boolean;
   seed: number;
@@ -122,6 +128,7 @@ export interface UiState {
   cancelDiscard: () => void;
   setLiveResult: (result: ChallengeResult | null) => void;
   setPolicy: (policy: PresentationPolicy | null) => void;
+  setStarting: (starting: boolean) => void;
   setDebug: (debug: boolean) => void;
   setSeed: (seed: number) => void;
   setScenarioOpen: (open: boolean) => void;
@@ -180,6 +187,7 @@ export const useUiStore = create<UiState>()((set) => ({
   pendingDiscard: null,
   liveResult: null,
   policy: null,
+  starting: false,
   debug: false,
   seed: 42,
   ready: false,
@@ -220,6 +228,7 @@ export const useUiStore = create<UiState>()((set) => ({
   cancelDiscard: () => set({ pendingDiscard: null }),
   setLiveResult: (liveResult) => set({ liveResult }),
   setPolicy: (policy) => set({ policy }),
+  setStarting: (starting) => set({ starting }),
   setDebug: (debug) => set({ debug }),
   setSeed: (seed) => set({ seed }),
   setScenarioOpen: (scenarioOpen) => set({ scenarioOpen }),
@@ -244,6 +253,8 @@ export const useUiStore = create<UiState>()((set) => ({
       runComplete: sameWorldFinished(state, fingerprint) ? state.runComplete : false,
       liveResult: sameWorldFinished(state, fingerprint) ? state.liveResult : null,
       running: true,
+      // A new run starts gated: the worker says when its first policy arrived.
+      starting: false,
       metrics: null,
       metricsHistory: [],
       trip: null,

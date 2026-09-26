@@ -273,15 +273,17 @@ describe("in-flight request ownership survives a reset", () => {
     runtime.observe(observation(engine, partition)); // t=1000: a refresh boundary
     expect(runtime.status().refreshes, "a third request overlapped").toBe(1);
 
-    // B settles: it owns the slot, so it releases it.
+    // B settles: it owns the slot, so it releases it. It is the run's FIRST
+    // policy, so it is adopted at once and governs from its own instant — the
+    // same rule a replayed trace's first event follows.
     resolvers[1]({ schemaVersion: JEV_SCHEMA_VERSION, pressureScale: 1.1 });
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(runtime.status().inFlight).toBe(false);
-    // A policy takes effect from the tick AFTER its acceptance instant, so the
-    // count lands on the next observation.
-    expect(runtime.status().accepted).toBe(0);
+    expect(runtime.status().accepted).toBe(1);
+    expect(runtime.effective().source).toBe("live");
 
-    // The next boundary both adopts B and is free to ask again.
+    // The next boundary is free to ask again, and the accepted policy still
+    // governs the run.
     for (let tick = 0; tick < 5; tick += 1) {
       stepEngine(engine);
     }

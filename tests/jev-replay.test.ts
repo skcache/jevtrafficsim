@@ -233,19 +233,64 @@ describe("replay refuses the wrong trace", () => {
         },
       ],
     };
-    const replay = runReplay(SCENARIO, other);
-    const status = replay.controller.status();
+    let created: JevController | null = null;
+    const run = buildScenarioRun(model, requestOf(SCENARIO), {
+      controllers: {
+        jev: (context: ControllerFactoryContext) => {
+          created = createJevController({
+            client: null,
+            mode: "replay",
+            trace: other,
+            scenarioFingerprint: context.fingerprint,
+            refreshMs: 1_000,
+          });
+          return created;
+        },
+      },
+    });
+    // A replay with nothing valid to replay does not start at all: the wrong
+    // trace is refused, and NOTHING is substituted for it.
+    expect(() => run.runUnder("jev")).toThrow(/could not start/);
+    if (created === null) {
+      throw new Error("the jev controller was never built");
+    }
+    const controller: JevController = created;
+    const status = controller.status();
     expect(status.accepted).toBe(0);
     expect(status.lastRejection?.kind).toBe("stale-fingerprint");
-    expect(status.source).toBe("fallback");
-    expect(replay.controller.trace().events).toHaveLength(0);
+    expect(status.source).toBe("waiting");
+    expect(status.start?.state).toBe("unable");
+    expect(status.fallbackMs).toBe(0);
+    expect(controller.trace().events).toHaveLength(0);
   });
 
-  it("treats a missing trace as nothing to replay", () => {
-    const replay = runReplay(SCENARIO, null);
-    expect(replay.controller.status().accepted).toBe(0);
-    expect(replay.controller.status().source).toBe("fallback");
-    expect(replay.controller.status().fallbackMs).toBeGreaterThan(0);
+  it("treats a missing trace as nothing to replay, and says so", () => {
+    let created: JevController | null = null;
+    const run = buildScenarioRun(model, requestOf(SCENARIO), {
+      controllers: {
+        jev: (context: ControllerFactoryContext) => {
+          created = createJevController({
+            client: null,
+            mode: "replay",
+            trace: null,
+            scenarioFingerprint: context.fingerprint,
+            refreshMs: 1_000,
+          });
+          return created;
+        },
+      },
+    });
+    expect(() => run.runUnder("jev")).toThrow(/could not start/);
+    if (created === null) {
+      throw new Error("the jev controller was never built");
+    }
+    const controller: JevController = created;
+    const status = controller.status();
+    expect(status.accepted).toBe(0);
+    expect(status.source).toBe("waiting");
+    expect(status.start?.state).toBe("unable");
+    expect(status.fallbackMs).toBe(0);
+    expect(status.invalidMs).toBe(0);
   });
 });
 
@@ -282,7 +327,7 @@ describe("benchmark seam carries replay metadata", () => {
     expect(provenance.replayMs).toBeGreaterThan(0);
   });
 
-  it("marks a mocked live run as live, and a fallback run as fallback", () => {
+  it("marks a mocked live run as live, and refuses an unconfigured one", () => {
     let liveController: JevController | null = null;
     const liveRecords = runBenchmarkScenario(model, SCENARIO, ["jev"], {
       controllers: {
@@ -303,24 +348,30 @@ describe("benchmark seam carries replay metadata", () => {
     expect(liveRecords[0].provenance?.label).toBe("jev-mock");
     expect(liveRecords[0].provenance?.modelInvolved).toBe(false);
 
-    let fallbackController: JevController | null = null;
-    const fallbackRecords = runBenchmarkScenario(model, SCENARIO, ["jev"], {
-      controllers: {
-        jev: (context: ControllerFactoryContext) => {
-          fallbackController = createJevController({
-            client: null,
-            scenarioFingerprint: context.fingerprint,
-          });
-          return fallbackController;
+    // A Jev run wired with NO client cannot obtain its first policy, so it never
+    // starts and produces no artifact at all — never a fallback one.
+    let unconfigured: JevController | null = null;
+    expect(() =>
+      runBenchmarkScenario(model, SCENARIO, ["jev"], {
+        controllers: {
+          jev: (context: ControllerFactoryContext) => {
+            unconfigured = createJevController({
+              client: null,
+              scenarioFingerprint: context.fingerprint,
+            });
+            return unconfigured;
+          },
         },
-      },
-      describeController: () =>
-        fallbackController === null ? undefined : jevProvenance(fallbackController.meta()),
-    });
-    const fallbackProvenance = fallbackRecords[0].provenance;
-    expect(fallbackProvenance?.adapter).toBe("unconfigured");
-    expect(fallbackProvenance?.accepted).toBe(0);
-    expect(fallbackProvenance?.fallbackMs).toBeGreaterThan(0);
+      }),
+    ).toThrow(/could not start/);
+    if (unconfigured === null) {
+      throw new Error("the jev controller was never built");
+    }
+    const refused: JevController = unconfigured;
+    expect(refused.meta().adapter).toBe("unconfigured");
+    expect(refused.meta().accepted).toBe(0);
+    expect(refused.meta().fallbackMs).toBe(0);
+    expect(refused.meta().start?.state).toBe("unable");
   });
 });
 

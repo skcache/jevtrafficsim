@@ -5,7 +5,9 @@
  * The credibility rule this exists for: an artifact must be readable on its own.
  * A hostile reader with no repository context has to be able to tell, from the
  * JSON alone, whether a `controller: "jev"` record came from the real service, a
- * deterministic stand-in, a replay, or the Adaptive fallback — and a mock run
+ * deterministic stand-in or a replay — and, under the pure-Jev execution
+ * contract (Issue #61), that no Adaptive controller decided any part of it: the
+ * record STATES its Adaptive zeros rather than leaving them implied. A mock run
  * must never be able to present itself as a live one.
  *
  * Every producer of a Jev result goes through `jevProvenance`: the controller's
@@ -29,7 +31,7 @@ export type { JevAdapter };
  * What a recorded run was, kept inside the trace it produced (Issue #38).
  *
  * A trace records only ACCEPTED policies, so without this a replay would launder
- * the original run's refusals and fallback time into a pristine-looking result.
+ * the original run's refusals and ungoverned time into a pristine-looking result.
  * Recorded at `--trace-out` time from the live run's own meta().
  */
 export type JevRecordedRun = JevTraceRecordedRun;
@@ -62,7 +64,25 @@ export interface JevProvenance {
   readonly traceEvents: number;
   readonly liveMs: number;
   readonly replayMs: number;
+  /**
+   * Simulated ms an Adaptive controller governed. A HARD ZERO for a Jev run:
+   * there is no Adaptive path in the live Jev controller, at any stage, so this
+   * can never be anything else. Present so the zero is STATED by the artifact
+   * rather than left to be inferred from a document that simply omits it.
+   */
   readonly fallbackMs: number;
+  /**
+   * Simulated ms NO Jev policy governed, or null when the producing code
+   * predates the field (unknown, never zero). Non-zero means the run did not
+   * control part of its own simulated time, and the artifact says so.
+   */
+  readonly invalidMs: number | null;
+  /**
+   * Ticks an Adaptive controller decided, or null when the producer predates the
+   * field. A HARD ZERO for a Jev run, for the same reason as `fallbackMs`: this
+   * is the artifact's own statement that no Adaptive decision happened.
+   */
+  readonly adaptiveTicks: number | null;
   /**
    * The part of the governed time a policy covered AFTER its freshness window,
    * or null when the producing code predates the field (unknown, never zero).
@@ -70,19 +90,25 @@ export interface JevProvenance {
    * arrived in time — an artifact must be able to say so.
    */
   readonly heldMs: number | null;
-  /** Why the safety net covered the run, when it did. Null = it never did. */
-  readonly fallbackReason: string | null;
   /**
-   * The fallback time per classified cause, in simulated ms (absent when the
-   * producer predates the field). This is the answer to "why did it fall back",
-   * measured rather than asserted.
+   * Why Jev did not govern the whole run, when it did not: a classified cause
+   * (today, the policy in force outlived its maximum hold). Null = it governed
+   * every simulated instant.
    */
-  readonly fallbackCauses?: Readonly<Record<string, number>>;
+  readonly ungovernedReason: string | null;
+  /**
+   * Non-null once Jev was LOST: the simulated instant the policy in force
+   * outlived its maximum hold, and the classified reason. The run stopped there
+   * with its measurements kept; it was never continued under another controller,
+   * and an artifact that carries this is NOT a completed Jev result.
+   */
+  readonly invalidation: { readonly atSimMs: number; readonly reason: string } | null;
   /**
    * How many refresh WINDOWS ended live, were held, or needed the safety net
    * (absent when the producer predates the field). The totals above say how much
    * time each source governed; these say how many refreshes went each way, which
-   * is the difference between "one long fallback" and "twenty short ones".
+   * is the difference between "one long ungoverned stretch" and "twenty short
+   * ones".
    */
   readonly refreshOutcomes?: Readonly<Record<string, number>>;
   /** Why each non-live refresh window was not live, by classified reason. */
@@ -112,15 +138,22 @@ export interface JevRunMeta {
   readonly traceEvents: number;
   readonly liveMs: number;
   readonly replayMs: number;
+  /**
+   * Simulated ms an Adaptive controller governed. A HARD ZERO for a Jev run, and
+   * required rather than optional: an artifact that omits it would leave "no
+   * Adaptive time" to be inferred instead of stated.
+   */
   readonly fallbackMs: number;
   /** Optional so a producer that cannot know it says so instead of "zero". */
   readonly heldMs?: number | null;
-  /** The classified cause behind the fallback, when one governed. */
-  readonly fallbackReason?: string | null;
-  /** Simulated ms of fallback per cause, when the producer knows it. */
-  readonly fallbackCauseMs?: Readonly<Record<string, number>>;
-  /** The cause that covered the most fallback time, when the producer knows it. */
-  readonly dominantFallbackCause?: string | null;
+  /** Simulated ms NO Jev policy governed, when the producer knows it. */
+  readonly invalidMs?: number | null;
+  /** Ticks an Adaptive controller decided, when the producer knows it. */
+  readonly adaptiveTicks?: number | null;
+  /** Why Jev did not govern the whole run, when it did not. */
+  readonly ungovernedReason?: string | null;
+  /** The instant Jev was lost, and the classified reason, when it was. */
+  readonly invalidation?: { readonly atSimMs: number; readonly reason: string } | null;
   /**
    * The per-refresh record's counters, when the producer has them (see
    * jev/telemetry.ts). Only counts are taken from it: a provenance document is
@@ -160,10 +193,17 @@ export function jevProvenance(
     fallbackMs: meta.fallbackMs,
     heldMs:
       typeof meta.heldMs === "number" && Number.isFinite(meta.heldMs) ? meta.heldMs : null,
-    fallbackReason: meta.dominantFallbackCause ?? meta.fallbackReason ?? null,
-    ...(meta.fallbackCauseMs === undefined || meta.fallbackCauseMs === null
-      ? {}
-      : { fallbackCauses: { ...meta.fallbackCauseMs } }),
+    invalidMs:
+      typeof meta.invalidMs === "number" && Number.isFinite(meta.invalidMs) ? meta.invalidMs : null,
+    adaptiveTicks:
+      typeof meta.adaptiveTicks === "number" && Number.isFinite(meta.adaptiveTicks)
+        ? meta.adaptiveTicks
+        : null,
+    ungovernedReason: meta.ungovernedReason ?? null,
+    invalidation:
+      meta.invalidation === undefined || meta.invalidation === null
+        ? null
+        : { atSimMs: meta.invalidation.atSimMs, reason: meta.invalidation.reason },
     ...(telemetry === null
       ? {}
       : {
@@ -197,28 +237,36 @@ export function provenanceLine(provenance: JevProvenance): string {
       ` refreshes ${provenance.refreshes}, expiries ${provenance.expiries}`,
     `governed: live ${(provenance.liveMs / 1000).toFixed(1)}s,` +
       ` replay ${(provenance.replayMs / 1000).toFixed(1)}s,` +
-      ` fallback ${(provenance.fallbackMs / 1000).toFixed(1)}s`,
+      ` ungoverned ${(((provenance.invalidMs ?? 0) + provenance.fallbackMs) / 1000).toFixed(1)}s` +
+      `, adaptive ticks ${provenance.adaptiveTicks ?? "unknown"}`,
   ];
-  // Held time and the reason a fallback ran are part of the same account: a run
-  // whose policy went stale is not the same artifact as a freshly-driven one,
-  // and "it fell back" without a cause is not an answer.
+  // Held time, the reason Jev stopped governing and the fact of an invalidation
+  // are part of the same account: a run whose policy went stale is not the same
+  // artifact as a freshly-driven one, and "it stopped" without a cause is not an
+  // answer.
   if (provenance.heldMs !== null && provenance.heldMs > 0) {
     parts.push(`held ${(provenance.heldMs / 1000).toFixed(1)}s past the refresh window`);
   }
-  if (provenance.fallbackReason !== null) {
-    parts.push(`fallback reason: ${provenance.fallbackReason}`);
+  if (provenance.ungovernedReason !== null) {
+    parts.push(`ungoverned reason: ${provenance.ungovernedReason}`);
+  }
+  if (provenance.invalidation !== null) {
+    parts.push(
+      `INVALIDATED at ${(provenance.invalidation.atSimMs / 1000).toFixed(1)}s` +
+        ` (${provenance.invalidation.reason}) — not a completed Jev result`,
+    );
   }
   // How many refresh WINDOWS went each way, and why the ones that did not go
   // live did not. A reason with no count beside it cannot say whether it
   // happened once or twenty times, which is the whole point of the record.
   const outcomes = provenance.refreshOutcomes;
-  if (outcomes !== undefined && (outcomes.held ?? 0) + (outcomes.fallback ?? 0) > 0) {
+  if (outcomes !== undefined && (outcomes.held ?? 0) + (outcomes.ungoverned ?? 0) > 0) {
     const reasons = Object.entries(provenance.refreshReasons ?? {})
       .map(([reason, count]) => `${reason} x${count}`)
       .join(", ");
     parts.push(
       `windows: ${outcomes.live ?? 0} live, ${outcomes.held ?? 0} held,` +
-        ` ${outcomes.fallback ?? 0} fallback${reasons.length === 0 ? "" : ` (${reasons})`}`,
+        ` ${outcomes.ungoverned ?? 0} ungoverned${reasons.length === 0 ? "" : ` (${reasons})`}`,
     );
   }
   const refusedFields = Object.entries(provenance.refreshFields ?? {})

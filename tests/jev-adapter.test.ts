@@ -849,11 +849,13 @@ describe("refresh cadence", () => {
       partition,
     });
     const status = controller.status();
-    // No policy yet: the Adaptive fallback is what governs the city.
-    expect(status.source).toBe("fallback");
+    // No policy yet: the run is WAITING for its first one. Nothing else is
+    // deciding, and no simulated time should be passing.
+    expect(status.source).toBe("waiting");
     expect(status.acceptedAtSimMs).toBeNull();
     expect(controller.policy()).toBeNull();
-    expect(status.fallbackMs).toBeGreaterThan(0);
+    expect(status.fallbackMs).toBe(0);
+    expect(status.invalidMs).toBeGreaterThan(0);
   });
 });
 

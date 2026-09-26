@@ -12,9 +12,14 @@ function result(controller: ChallengeResult["controller"], tripTimeMs: number, c
   };
 }
 
-function policy(accepted: number, liveMs: number, fallbackMs: number): PresentationPolicy {
-  return { source: "live", accepted, rejected: 0, refreshes: accepted,
-    liveMs, replayMs: 0, fallbackMs };
+function policy(
+  accepted: number,
+  liveMs: number,
+  invalidMs: number,
+  source: PresentationPolicy["source"] = "live",
+): PresentationPolicy {
+  return { source, accepted, rejected: 0, refreshes: accepted,
+    liveMs, replayMs: 0, fallbackMs: 0, invalidMs, adaptiveTicks: 0 };
 }
 
 describe("final comparison states", () => {
@@ -29,9 +34,19 @@ describe("final comparison states", () => {
     expect(entries.map((entry) => entry.tripTimeMs)).toEqual([jevMs, adaptiveMs, fixedMs]);
   });
 
-  it("makes fallback-only and mixed provenance explicit", () => {
-    expect(policyLabel("jev", policy(0, 0, 600_000))?.text).toBe("Adaptive fallback");
-    expect(policyLabel("jev", policy(2, 450_000, 150_000))?.text).toBe("Jev · fallback used");
+  it("makes a stopped run and mixed provenance explicit", () => {
+    // A run still waiting for its first policy, and one that LOST Jev: neither
+    // is a Jev result, and neither is presented as one.
+    expect(policyLabel("jev", policy(0, 0, 0, "waiting"))?.text).toBe("Waiting for Jev");
+    expect(
+      policyLabel("jev", {
+        ...policy(2, 450_000, 150_000, "invalidated"),
+        invalidation: { atSimMs: 450_000, reason: "expired" },
+      })?.text,
+    ).toBe("Jev · run invalidated");
+    // Ungoverned time that did not end the run is still named, never hidden.
+    expect(policyLabel("jev", policy(2, 450_000, 150_000))?.text).toBe("Jev · ungoverned time");
+    expect(policyLabel("jev", policy(2, 600_000, 0))?.text).toBe("Jev");
   });
 
   it("marks an incomplete controller instead of presenting its horizon as an arrival", () => {

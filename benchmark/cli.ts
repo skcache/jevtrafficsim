@@ -426,10 +426,11 @@ export function adapterBanner(options: { readonly jevAdapter: JevAdapterChoice }
         `jev: ${jevLabel(options)} — REPLAY adapter: ${trace?.events.length ?? 0} recorded policies, ` +
         `zero network calls; it reproduces a run recorded from client "${trace?.client ?? "unknown"}"` +
         (trace?.recorded == null
-          ? " (that run's fallback history is NOT recorded — treat refusals as unknown)"
+          ? " (that run's own history is NOT recorded — treat its refusals as unknown)"
           : ` (recorded run used ${provenanceLabel(trace.recorded.adapter)}: ` +
             `${trace.recorded.accepted} accepted, ${trace.recorded.rejected} rejected, ` +
-            `${(trace.recorded.fallbackMs / 1000).toFixed(1)}s on the Adaptive fallback)`)
+            `${(trace.recorded.fallbackMs / 1000).toFixed(1)}s on the Adaptive fallback` +
+            " — under the pre-#61 contract, so a pre-#61 trace can carry it)")
       );
     case "gateway":
       return (
@@ -501,9 +502,13 @@ export function describeJevStatus(controllers: readonly JevController[]): string
   let rejected = 0;
   let expiries = 0;
   let fallbackMs = 0;
+  let invalidMs = 0;
+  let adaptiveTicks = 0;
+  let heldMs = 0;
   let policyMs = 0;
   const adapters = new Set<string>();
   const errors = new Set<string>();
+  const stopped: string[] = [];
   for (const controller of controllers) {
     const status = controller.status();
     refreshes += status.refreshes;
@@ -511,19 +516,36 @@ export function describeJevStatus(controllers: readonly JevController[]): string
     rejected += status.rejected;
     expiries += status.expiries;
     fallbackMs += status.fallbackMs;
+    invalidMs += status.invalidMs;
+    adaptiveTicks += status.adaptiveTicks;
+    heldMs += status.heldMs;
     policyMs += status.liveMs + status.replayMs;
     adapters.add(provenanceLabel(controller.meta().adapter));
     if (status.lastRejection !== null) {
       errors.add(`${status.lastRejection.kind}: ${status.lastRejection.detail}`);
+    }
+    if (status.start?.state === "unable") {
+      stopped.push(`a run could not start (${status.start.reason})`);
+    }
+    if (status.invalidation !== null) {
+      stopped.push(
+        `a run was INVALIDATED at ${(status.invalidation.atSimMs / 1000).toFixed(1)}s ` +
+          `(${status.invalidation.reason}): not a completed Jev result`,
+      );
     }
   }
   const lines = [
     `jev adapter [${[...adapters].join(", ")}]: ` +
       `${refreshes} policy refreshes, ` +
       `${accepted} accepted, ${rejected} rejected, ${expiries} expired`,
-    `  governed simulated time: ${(policyMs / 1000).toFixed(1)}s by Jev policy, ` +
-      `${(fallbackMs / 1000).toFixed(1)}s by the Adaptive fallback`,
+    `  governed simulated time: ${(policyMs / 1000).toFixed(1)}s by Jev policy` +
+      `${heldMs > 0 ? ` (${(heldMs / 1000).toFixed(1)}s of it HELD past the refresh window)` : ""}, ` +
+      `${((invalidMs + fallbackMs) / 1000).toFixed(1)}s ungoverned, ` +
+      `${adaptiveTicks} Adaptive decision ticks`,
   ];
+  if (stopped.length > 0) {
+    lines.push(`  ${stopped.join(" | ")}`);
+  }
   if (errors.size > 0) {
     lines.push(`  adapter errors: ${[...errors].join(" | ")}`);
   }
@@ -729,7 +751,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const controller = jevControllers[0];
     const meta = controller.meta();
     // The recorded run's own history travels WITH the trace: without it a replay
-    // would present the original's refusals and fallback time as a clean run.
+    // would present the original's refusals and ungoverned time as a clean run.
     writeFileSync(
       tracePath,
       serializeTrace({

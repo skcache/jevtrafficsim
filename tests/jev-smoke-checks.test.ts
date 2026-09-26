@@ -52,27 +52,59 @@ describe("deployed relay release gate", () => {
   });
 });
 
-describe("completed-run Jev participation gate", () => {
+describe("completed-run pure-Jev participation gate", () => {
   const live: PresentationPolicy = {
-    source: "live", liveMs: 590_000, replayMs: 0, fallbackMs: 10_000,
-    accepted: 3, rejected: 1, refreshes: 4,
+    source: "live", liveMs: 600_000, replayMs: 0, fallbackMs: 0, invalidMs: 0,
+    adaptiveTicks: 0, heldMs: 140_000, accepted: 3, rejected: 1, refreshes: 4,
   };
   it("passes an internally consistent live run with the public label", () => {
-    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 600_000)).not.toThrow();
-    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 600_100)).not.toThrow();
+    expect(() => checkLiveJevParticipation(live, "Jev · policy held", 600_000)).not.toThrow();
+    expect(() => checkLiveJevParticipation(live, "Jev · policy held", 600_100)).not.toThrow();
   });
-  it("keeps fallback functional and visibly named, but fails the release gate", () => {
-    const fallback: PresentationPolicy = {
-      source: "fallback", liveMs: 0, replayMs: 0, fallbackMs: 600_000,
-      accepted: 0, rejected: 3, refreshes: 3,
+  it("fails any run an Adaptive controller decided in, or left ungoverned", () => {
+    // The three ways a run could stop being a Jev run. Each one is named.
+    const withFallback: PresentationPolicy = { ...live, fallbackMs: 10_000, liveMs: 590_000 };
+    expect(policyLabel("jev", withFallback)?.text).toBe("Jev · fallback used");
+    expect(() => checkLiveJevParticipation(withFallback, "Jev · fallback used", 600_000))
+      .toThrow("fallback time");
+
+    const withAdaptiveTicks: PresentationPolicy = { ...live, adaptiveTicks: 2 };
+    expect(() => checkLiveJevParticipation(withAdaptiveTicks, "Jev · policy held", 600_000))
+      .toThrow("Adaptive controller decided");
+
+    const ungoverned: PresentationPolicy = { ...live, liveMs: 480_000, invalidMs: 120_000 };
+    expect(policyLabel("jev", ungoverned)?.text).toBe("Jev · ungoverned time");
+    expect(() => checkLiveJevParticipation(ungoverned, "Jev · ungoverned time", 600_000))
+      .toThrow("ungoverned time");
+
+    // A run that cannot STATE its ungoverned time cannot prove the contract.
+    const silent: PresentationPolicy = { ...live, invalidMs: undefined };
+    expect(() => checkLiveJevParticipation(silent, "Jev · policy held", 600_000))
+      .toThrow("does not state its ungoverned time");
+
+    // And an invalidated run is never a completed Jev result.
+    const stopped: PresentationPolicy = {
+      ...live,
+      source: "invalidated",
+      liveMs: 420_000,
+      invalidMs: 180_000,
+      invalidation: { atSimMs: 420_000, reason: "expired" },
     };
-    expect(policyLabel("jev", fallback)?.text).toBe("Adaptive fallback");
-    expect(() => checkLiveJevParticipation(fallback, "Adaptive fallback", 600_000)).toThrow("no live");
-    expect(() => checkLiveJevParticipation(fallback, "Jev", 600_000)).toThrow("public label");
+    expect(() => checkLiveJevParticipation(stopped, "Jev · run invalidated", 600_000))
+      .toThrow("not a completed Jev result");
+
+    // A run still waiting for its first policy is not a Jev run either.
+    const waiting: PresentationPolicy = {
+      source: "waiting", liveMs: 0, replayMs: 0, fallbackMs: 0, invalidMs: 600_000,
+      adaptiveTicks: 0, accepted: 0, rejected: 3, refreshes: 3,
+    };
+    expect(policyLabel("jev", waiting)?.text).toBe("Waiting for Jev");
+    expect(() => checkLiveJevParticipation(waiting, "Waiting for Jev", 600_000)).toThrow("no live");
+    expect(() => checkLiveJevParticipation(waiting, "Jev", 600_000)).toThrow("public label");
   });
   it("rejects inconsistent policy and time accounting", () => {
-    expect(() => checkLiveJevParticipation({ ...live, refreshes: 2 }, "Jev · fallback used", 600_000))
+    expect(() => checkLiveJevParticipation({ ...live, refreshes: 2 }, "Jev · policy held", 600_000))
       .toThrow("outcomes exceed");
-    expect(() => checkLiveJevParticipation(live, "Jev · fallback used", 599_000)).toThrow("governed time");
+    expect(() => checkLiveJevParticipation(live, "Jev · policy held", 599_000)).toThrow("governed time");
   });
 });

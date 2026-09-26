@@ -21,6 +21,7 @@ import type {
 } from "./challenge-incidents";
 import type { ChallengeResult, ComparisonVerdict } from "./challenge-result";
 import type { JevRefreshTelemetry } from "@/jev/telemetry";
+import type { JevCause } from "@/jev/runtime";
 
 /** Fixed simulation pacing: one 100 ms tick per scheduled worker iteration. */
 export const SIM_TICK_MS = 100;
@@ -191,6 +192,49 @@ export type WorkerEvent =
        * controller with no external policy. Diagnostic only — the main thread
        * keeps it behind `?debug`, so no reason vocabulary reaches the DOM.
        */
+      readonly telemetry: JevRefreshTelemetry | null;
+    }
+  | {
+      /**
+       * A Jev run is waiting for its FIRST policy (Issue #61). Simulated time is
+       * NOT advancing: the run has not started, and it will not start until a
+       * policy is accepted. The UI shows the wait.
+       */
+      readonly type: "JEV_STARTING";
+      /** True when this wait resumes a run already in progress (a controller switch). */
+      readonly resuming: boolean;
+    }
+  | {
+      /** The first policy was accepted: the run is now (or is again) stepping. */
+      readonly type: "JEV_READY";
+    }
+  | {
+      /**
+       * The run COULD NOT START: no policy was obtained before simulated time
+       * would have had to pass. Nothing was simulated and nothing was
+       * substituted — this is the whole account of the attempt.
+       */
+      readonly type: "JEV_UNABLE";
+      /** The classified reason, in a closed vocabulary (never upstream prose). */
+      readonly reason: JevCause;
+      /** This codebase's own bounded sentence. */
+      readonly detail: string;
+      readonly attempts: number;
+    }
+  | {
+      /**
+       * Jev was LOST mid-run: the policy in force outlived its maximum hold and
+       * nothing replaced it. The run stopped there — it was never continued
+       * under another controller — and this event carries the measurements
+       * collected so far, the truthful reason, and the run's own record. It is
+       * NOT a completed Jev result and must never be presented as one.
+       */
+      readonly type: "RUN_INVALIDATED";
+      readonly timeMs: number;
+      readonly invalidation: { readonly atSimMs: number; readonly reason: JevCause };
+      /** The measurements collected before the run stopped (partial, kept). */
+      readonly result: ChallengeResult;
+      readonly policy: PresentationPolicy | null;
       readonly telemetry: JevRefreshTelemetry | null;
     }
   | {

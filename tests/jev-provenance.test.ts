@@ -161,7 +161,7 @@ describe("a mock run is unmistakably a mock run", () => {
   });
 });
 
-describe("fallback and live time survive serialization", () => {
+describe("pure-Jev execution survives serialization", () => {
   it("records the funnel and the governed time for a run with a client", () => {
     const { record } = jevRecord({});
     const provenance = record.provenance!;
@@ -173,32 +173,58 @@ describe("fallback and live time survive serialization", () => {
       expect(Number.isFinite(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
     }
-    // The first window is always the fallback, so a live run shows both.
+    // The startup gate means the run BEGINS under the accepted policy: all of
+    // its simulated time is governed by Jev, and the Adaptive zeros are stated
+    // by the artifact rather than left implied.
     expect(provenance.accepted).toBeGreaterThan(0);
     expect(provenance.liveMs).toBeGreaterThan(0);
-    expect(provenance.fallbackMs).toBeGreaterThan(0);
+    expect(provenance.fallbackMs).toBe(0);
+    expect(provenance.adaptiveTicks).toBe(0);
+    expect(provenance.invalidMs).toBe(0);
+    expect(provenance.invalidation).toBeNull();
+    expect(provenance.ungovernedReason).toBeNull();
     expect(provenance.replayMs).toBe(0);
     expect(provenance.traceEvents).toBe(provenance.accepted);
   });
 
-  it("records a run that never had a policy source at all", () => {
-    const { record } = jevRecord({ client: null });
-    const provenance = record.provenance!;
-    expect(provenance.adapter).toBe("unconfigured");
-    expect(provenance.accepted).toBe(0);
-    expect(provenance.liveMs).toBe(0);
-    expect(provenance.fallbackMs).toBeGreaterThan(0);
+  it("refuses to produce a result at all when no policy source was wired", () => {
+    // A Jev run with no client can never obtain its first policy, so the
+    // startup gate stops it before a single simulated millisecond: there is no
+    // artifact to launder, and nothing is substituted for Jev.
+    let controller: JevController | null = null;
+    expect(() =>
+      runBenchmarkScenario(model, SCENARIO, ["jev"], {
+        controllers: {
+          jev: (context) => {
+            controller = createJevController({
+              client: null,
+              scenarioFingerprint: context.fingerprint,
+              refreshMs: 1_000,
+            });
+            return controller;
+          },
+        },
+      }),
+    ).toThrow(/could not start/);
+    const failed = controller as JevController | null;
+    expect(failed).not.toBeNull();
+    expect(failed!.status().accepted).toBe(0);
+    expect(failed!.status().fallbackMs).toBe(0);
+    expect(failed!.status().start?.state).toBe("unable");
   });
 
   it("keeps a saved record readable without any other file", () => {
-    // The whole standard: one record, no repository, answer every question.
-    const { record } = jevRecord({ client: null });
+    // The whole standard: one record, no repository, answer every question —
+    // including the ones this contract is about.
+    const { record } = jevRecord({});
     const parsed = JSON.parse(JSON.stringify(record)) as typeof record;
     const provenance = parsed.provenance!;
-    expect(provenance.accepted).toBe(0); // no live policy was ever accepted
-    expect(provenance.liveMs).toBe(0); // none of the run was live
-    expect(provenance.fallbackMs).toBeGreaterThan(0); // all of it was the fallback
-    expect(provenance.adapter).toBe("unconfigured"); // and no adapter produced it
+    expect(provenance.accepted).toBeGreaterThan(0); // a live policy governed
+    expect(provenance.liveMs).toBeGreaterThan(0); // the run's own time was governed
+    expect(provenance.fallbackMs).toBe(0); // no Adaptive controller decided anything
+    expect(provenance.adaptiveTicks).toBe(0);
+    expect(provenance.invalidMs).toBe(0); // and no instant was left ungoverned
+    expect(provenance.adapter).toBe("mock"); // the stand-in produced the policy
     expect(provenance.modelInvolved).toBe(false);
   });
 });
@@ -221,12 +247,12 @@ describe("replay preserves what it replayed, and what that run was", () => {
     expect(provenance.rejected).toBe(0);
     expect(provenance.replayMs).toBeGreaterThan(0);
     expect(provenance.liveMs).toBe(0);
-    // ...and the recorded run is not laundered: it was a mock run that used the
-    // fallback, and both facts survive into the replayed artifact.
+    // ...and the recorded run is not laundered: it was a mock run, and both
+    // facts survive into the replayed artifact.
     expect(provenance.trace?.client).toBe("mock");
     expect(provenance.trace?.events).toBe(trace.events.length);
     expect(provenance.recorded?.adapter).toBe("mock");
-    expect(provenance.recorded?.fallbackMs).toBeGreaterThan(0);
+    expect(provenance.recorded?.fallbackMs).toBe(0);
     expect(provenance.recorded?.accepted).toBe(trace.events.length);
     expect(provenance.modelInvolved).toBe(false);
   });
@@ -250,7 +276,7 @@ describe("replay preserves what it replayed, and what that run was", () => {
     expect(replay.record.provenance?.recorded).toBeNull();
     // Unknown, not clean: the banner says so in words.
     expect(adapterBanner({ jevAdapter: "replay" }, parsed.value)).toContain(
-      "fallback history is NOT recorded",
+      "that run's own history is NOT recorded",
     );
   });
 

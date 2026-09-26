@@ -1,6 +1,6 @@
 /**
- * Jev controller (Issues #13, #14): a citywide policy controller behind the same
- * `TrafficController` contract as Fixed and Adaptive.
+ * Jev controller (Issues #13, #14, #61): a citywide policy controller behind the
+ * same `TrafficController` contract as Fixed and Adaptive.
  *
  * ## Division of labour
  *
@@ -16,38 +16,62 @@
  * movement: corridor and region weights scale pressure, never service
  * guarantees.
  *
- * ## Lifecycle (Issue #14)
+ * ## The pure-Jev execution contract (Issue #61)
+ *
+ * A run labelled Jev means ONE thing: a Jev-derived policy controlled 100% of
+ * the simulated signal-decision time. This controller therefore has exactly one
+ * source of opinion — the policy the runtime accepted — and NO second
+ * controller to consult, at any stage of a run:
+ *
+ *   - NO STARTUP SUBSTITUTION: the run does not begin until the first live
+ *     policy is accepted (`start()`). Until then this controller says nothing at
+ *     all, and no simulated time passes.
+ *   - NO FAILURE SUBSTITUTION: a refresh that fails leaves the last accepted
+ *     policy in force, reported as HELD once it is past its freshness window.
+ *     Holding a real, previously accepted policy IS Jev control.
+ *   - NO EXPIRY SUBSTITUTION: if nothing replaces the policy before its maximum
+ *     hold expires, the run is INVALIDATED (`invalidation()`) — the driver stops
+ *     it and reports why. It is never continued under anything else.
+ *   - NO TRANSPORT-ERROR SUBSTITUTION: a client failure is classified, counted
+ *     and reported; it never changes who decides.
+ *
+ * `createAdaptiveController` is deliberately NOT imported here. There is no code
+ * path from this file to an Adaptive decision, and the pure-Jev test suite pins
+ * that: an Adaptive module whose constructor and `directives()` fail the test is
+ * loaded around a full Jev run, healthy and broken.
+ *
+ * ## Lifecycle (Issues #14, #61)
  *
  * Everything about when a policy is requested, accepted, held, superseded or
  * expired lives in `jev/runtime.ts`. This file is the thin seam between that
  * runtime and the engine: it feeds the runtime one observation per tick and, in
- * exchange, gets back either a policy in force or the instruction to run the
- * FALLBACK.
- *
- * The fallback is a real `createAdaptiveController()`, not a re-implementation
- * and not a "neutral policy": when Jev is unconfigured, has no answer yet, or
- * has outlived even the maximum hold of its last policy, the city is driven by
- * exactly the controller the benchmark and the app already know. In between —
- * while the model's last opinion is still the freshest one that exists — the
- * city keeps being driven by THAT policy, bounded and clamped like any other,
- * and the run reports it as held (`heldMs`) rather than as fresh or as fallback.
+ * exchange, gets back either a policy in force or the statement that NO policy
+ * is in force (the run is waiting to start, or it has lost Jev and must stop).
  * The runtime records how much simulated time each source governed, so a result
- * can never present fallback as live Jev, or a held opinion as a fresh one.
+ * can never present a held opinion as a fresh one, or ungoverned time as
+ * governed.
+ *
+ * Adaptive remains its own benchmark controller (the deterministic baseline the
+ * comparison runs) and is untouched by any of this.
  */
-import { createAdaptiveController, phasePressure, starvedPhaseIndex } from "./adaptive";
+import { phasePressure, starvedPhaseIndex } from "./adaptive";
 import { ADAPTIVE_CONSTANTS } from "./adaptive";
 import type { TrafficController, TrafficControllerContext } from "./contract";
 import type { JevClient } from "@/jev/client";
 import type { JevRequestOptions } from "@/jev/request";
 import {
   createJevPolicyRuntime,
+  isPromiseLike,
   JEV_RUNTIME_DEFAULTS,
   type JevCause,
   type JevCauseCounts,
   type JevEffectivePolicy,
+  type JevInvalidation,
   type JevRejection,
   type JevRuntime,
+  type JevRuntimeObservation,
   type JevRuntimeStatus,
+  type JevStartOutcome,
 } from "@/jev/runtime";
 import {
   JEV_HINT_MARGIN_SCALE,
@@ -257,21 +281,22 @@ export interface JevControllerMeta {
   /**
    * Which policy source this run used (Issue #38): "mock" for the deterministic
    * stand-in, "gateway" / "schema-service" for the real thing, "replay" for an
-   * offline trace, "unconfigured" when no client was ever supplied (the run was
-   * the Adaptive fallback from start to finish). It is part of the run's own
-   * account of itself, so no caller has to remember which adapter it wired.
+   * offline trace, "unconfigured" when no client was ever supplied (a run that
+   * cannot start). It is part of the run's own account of itself, so no caller
+   * has to remember which adapter it wired.
    */
   readonly adapter: JevAdapter;
   /**
-   * For a replay: what the RECORDED run was (its adapter, refusals and fallback
-   * time). Null when the trace predates #38 — unknown, never "clean".
+   * For a replay: what the RECORDED run was (its adapter, refusals and
+   * ungoverned time). Null when the trace predates #38 — unknown, never "clean".
    */
   readonly recorded: JevTraceRecordedRun | null;
   /** The source in force at the end of the run. */
   readonly source: JevPolicySource;
+  /** The startup gate's outcome, or null before it was attempted. */
+  readonly start: JevStartOutcome | null;
   readonly liveMs: number;
   readonly replayMs: number;
-  readonly fallbackMs: number;
   /**
    * The part of the governed time a policy covered AFTER its freshness window:
    * the model's opinion still decided the signals, but no fresher one arrived in
@@ -279,6 +304,21 @@ export interface JevControllerMeta {
    */
   readonly heldMs: number;
   readonly maxHoldMs: number;
+  /**
+   * Simulated ms NO Jev policy governed: the honest account of time this run did
+   * not control. Zero for a run that started under Jev and kept it.
+   */
+  readonly invalidMs: number;
+  /**
+   * Simulated ms the Adaptive fallback governed. A HARD ZERO: this controller
+   * has no Adaptive path at any stage of a run, so nothing can add to it. It is
+   * reported so a finished run can state the zero instead of implying it.
+   */
+  readonly fallbackMs: number;
+  /** Ticks an Adaptive controller decided. A HARD ZERO, for the same reason. */
+  readonly adaptiveTicks: number;
+  /** Non-null once Jev was lost: the run stopped rather than being substituted. */
+  readonly invalidation: JevInvalidation | null;
   readonly refreshes: number;
   readonly accepted: number;
   readonly rejected: number;
@@ -287,43 +327,49 @@ export interface JevControllerMeta {
   readonly lastRejection: { readonly kind: string; readonly cause: string; readonly detail: string } | null;
   /** The most recently classified cause, or null when nothing has failed. */
   readonly cause: JevCause | null;
-  /** Why the safety net is covering right now; null while a policy governs. */
-  readonly fallbackReason: JevCause | null;
   /** How many times each classified cause was seen. */
   readonly causes: JevCauseCounts;
-  /** Simulated ms of fallback PER CAUSE — the classification of the lost time. */
-  readonly fallbackCauseMs: JevCauseCounts;
-  /**
-   * The cause that covered the most fallback time: what the run should say when
-   * it has to explain why the safety net ran at all.
-   */
-  readonly dominantFallbackCause: JevCause | null;
   /** Values clamped to their bounds, and answers dropped below the floor. */
   readonly clamped: number;
   readonly dropped: number;
   /**
-   * The per-refresh record: which refreshes went live, were held, or needed the
-   * safety net, WHY each one that did not go live did not, and a bounded list
-   * of the most recent windows (see jev/telemetry.ts). This is the run's answer
-   * to "where did Jev fall back, and why" — inspectable after the fact, with
-   * nothing upstream-derived in it.
+   * The per-refresh record: which refreshes went live or were held, WHY each one
+   * that did not go live did not, and a bounded list of the most recent windows
+   * (see jev/telemetry.ts). This is the run's answer to "where did Jev fail, and
+   * why" — inspectable after the fact, with nothing upstream-derived in it.
    */
   readonly telemetry: JevRefreshTelemetry;
 }
 
 export interface JevController extends TrafficController {
-  /** Current policy in force, or null when the fallback is running. */
+  /**
+   * Current policy in force, or null when NONE is: the run is waiting for its
+   * first policy, or it has lost Jev and been invalidated.
+   */
   policy(): JevPolicy | null;
   status(): JevRuntimeStatus;
   meta(): JevControllerMeta;
   /** Accepted policies in replay order — the input to an offline replay. */
   trace(): JevTrace;
+  /**
+   * THE STARTUP GATE (Issue #61). Obtain the first policy BEFORE any simulated
+   * time passes. A driver must not step the engine until this says `ready`; when
+   * it says `unable` the run must not start, and nothing may be substituted.
+   * Idempotent, and synchronous for a client that answers synchronously.
+   */
+  start(observation: JevRuntimeObservation): JevStartOutcome | Promise<JevStartOutcome>;
+  /** The run's simulated time is over: close the accounting at `atSimMs`. */
+  finish(atSimMs: number): void;
+  /** The rest of the horizon is simulated back to back: stop asking for policy. */
+  beginAcceleratedTail(): void;
+  /** Non-null once Jev was lost: the run must stop and report why. */
+  invalidation(): JevInvalidation | null;
   /** New scenario: discards the policy, in-flight answers and the trace. */
   reset(next: { scenarioFingerprint: string; trace?: JevTrace | null }): void;
 }
 
 export interface JevControllerOptions {
-  /** null = unconfigured: the controller runs the Adaptive fallback forever. */
+  /** null = unconfigured: the run can never start. */
   readonly client: JevClient | null;
   /**
    * Identifies the scenario this controller serves; guards stale responses and
@@ -336,6 +382,8 @@ export interface JevControllerOptions {
   readonly minHoldMs?: number;
   /** How long one policy may keep governing without a replacement. */
   readonly maxHoldMs?: number;
+  /** How many times the startup gate may ask for its first policy. */
+  readonly startAttempts?: number;
   readonly request?: JevRequestOptions;
   /** "replay" consumes `trace` offline and never touches a client. */
   readonly mode?: "live" | "replay";
@@ -365,16 +413,15 @@ export function createJevController(options: JevControllerOptions): JevControlle
     ttlMs: options.ttlMs,
     minHoldMs: options.minHoldMs,
     maxHoldMs: options.maxHoldMs,
+    startAttempts: options.startAttempts,
     request: options.request,
     mode: options.mode,
     trace: options.trace,
     onAccepted: options.onAccepted,
     onRejected: options.onRejected,
   });
-  // The fallback is the real Adaptive controller, reused rather than re-derived.
-  const adaptive = createAdaptiveController();
   let effective: JevEffectivePolicy = {
-    source: "fallback",
+    source: "waiting",
     policy: null,
     acceptedAtSimMs: null,
     expiresAtSimMs: null,
@@ -388,6 +435,19 @@ export function createJevController(options: JevControllerOptions): JevControlle
     status: () => runtime.status(),
     trace: () => runtime.trace(),
     reset: (next) => runtime.reset(next),
+    start: (observation) => {
+      // The gate's answer settles the policy in force, so `policy()` is truthful
+      // the moment the run is allowed to begin — not one tick later.
+      const outcome = runtime.start(observation);
+      const settled = (result: JevStartOutcome): JevStartOutcome => {
+        effective = runtime.effective();
+        return result;
+      };
+      return isPromiseLike<JevStartOutcome>(outcome) ? outcome.then(settled) : settled(outcome);
+    },
+    finish: (atSimMs) => runtime.finish(atSimMs),
+    beginAcceleratedTail: () => runtime.beginAcceleratedTail(),
+    invalidation: () => runtime.invalidation(),
     meta: () => {
       const status = runtime.status();
       return {
@@ -396,11 +456,15 @@ export function createJevController(options: JevControllerOptions): JevControlle
         adapter,
         recorded: options.trace?.recorded ?? null,
         source: status.source,
+        start: status.start,
         liveMs: status.liveMs,
         replayMs: status.replayMs,
-        fallbackMs: status.fallbackMs,
         heldMs: status.heldMs,
         maxHoldMs: status.maxHoldMs,
+        invalidMs: status.invalidMs,
+        fallbackMs: status.fallbackMs,
+        adaptiveTicks: status.adaptiveTicks,
+        invalidation: status.invalidation,
         refreshes: status.refreshes,
         accepted: status.accepted,
         rejected: status.rejected,
@@ -415,10 +479,7 @@ export function createJevController(options: JevControllerOptions): JevControlle
                 detail: status.lastRejection.detail,
               },
         cause: status.lastCause,
-        fallbackReason: status.fallbackReason,
         causes: status.causes,
-        fallbackCauseMs: status.fallbackCauseMs,
-        dominantFallbackCause: status.dominantFallbackCause,
         clamped: status.clamped,
         dropped: status.dropped,
         telemetry: status.refreshTelemetry,
@@ -436,10 +497,12 @@ export function createJevController(options: JevControllerOptions): JevControlle
         activeVehicles: countActiveVehicles(traffic),
       });
 
-      // No policy in force: the Adaptive controller decides, exactly as it would
-      // if Jev had never been configured.
+      // NO policy in force: this controller has NO opinion at all. It does not
+      // consult another controller — there is none to consult — and the run is
+      // either waiting for its first policy (no simulated time is passing) or
+      // invalidated (the driver stops it). Signals keep their own mechanics.
       if (effective.policy === null) {
-        return adaptive.directives(city, traffic, context);
+        return new Map<IntersectionId, SignalDirective>();
       }
 
       const weights = resolveJevWeights(effective.policy);

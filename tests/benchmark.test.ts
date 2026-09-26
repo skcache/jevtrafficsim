@@ -574,7 +574,7 @@ describe("benchmark runs Jev through the same seam", () => {
     expect(controllersSeen[0].policy()?.pressureScale).toBe(1.2);
   });
 
-  it("keeps a failed live service from fabricating a policy", async () => {
+  it("keeps a failed live service from fabricating a policy — or a run", async () => {
     const controllersSeen: JevController[] = [];
     const failing = createHttpJevClient({
       endpoint: "https://jev.invalid/policy",
@@ -588,21 +588,27 @@ describe("benchmark runs Jev through the same seam", () => {
       driver: "tourist" as const,
       durationMs: 20_000,
     };
-    const record = await runLiveScenario(model, scenario, "jev", {
-      controllers: {
-        jev: () => {
-          const controller = createJevController({ client: failing, refreshMs: 5_000, scenarioFingerprint: "bench-failing" });
-          controllersSeen.push(controller);
-          return controller;
+    // A service that cannot answer the FIRST policy means the run does not
+    // start: the benchmark gets no Jev record at all, and nothing is
+    // substituted for the model.
+    await expect(
+      runLiveScenario(model, scenario, "jev", {
+        controllers: {
+          jev: () => {
+            const controller = createJevController({ client: failing, refreshMs: 5_000, scenarioFingerprint: "bench-failing" });
+            controllersSeen.push(controller);
+            return controller;
+          },
         },
-      },
-      describeController: () => jevProvenance(controllersSeen[0].meta()),
-    });
-    expect(record.controller).toBe("jev");
+        describeController: () => jevProvenance(controllersSeen[0].meta()),
+      }),
+    ).rejects.toThrow(/could not start/);
     const status = controllersSeen[0].status();
     expect(status.accepted).toBe(0);
     expect(status.rejected).toBeGreaterThan(0);
-    expect(status.source).toBe("fallback");
+    expect(status.source).toBe("waiting");
+    expect(status.start?.state).toBe("unable");
+    expect(status.fallbackMs).toBe(0);
     expect(status.lastRejection?.detail).toMatch(/500/);
   });
 

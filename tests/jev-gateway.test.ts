@@ -305,9 +305,9 @@ describe("gateway client", () => {
     });
     const controller = createJevController({ client, scenarioFingerprint: "gateway-1" });
     // Sanity: the neutral starting point is the mock's, not the gateway's.
-    // Before any tick the runtime holds nothing: the fallback is in force.
+    // Before any tick the runtime holds nothing: the run is waiting to start.
     expect(controller.policy()).toBeNull();
-    expect(controller.status().source).toBe("fallback");
+    expect(controller.status().source).toBe("waiting");
     expect(controller.status().accepted).toBe(0);
   });
 });

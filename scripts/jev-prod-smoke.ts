@@ -1,5 +1,5 @@
 /**
- * Production-style Jev smoke.
+ * Production-style Jev smoke — a NON-JEV CONTROL PROBE.
  *
  * Exercises the DEPLOYED relay (which holds the token server-side) with a body
  * the production generator actually produces, and checks the answer is a real
@@ -9,10 +9,16 @@
  *
  *   npx tsx scripts/jev-prod-smoke.ts [base-url]
  *
+ * THIS IS NOT A JEV RUN. Nothing here is governed by a Jev policy: the probe
+ * needs a populated city to build a realistic request from, and it drives that
+ * city with the FIXED baseline — deliberately not Adaptive, so no run in this
+ * file can ever be read as a Jev result or as an Adaptive-governed one. The
+ * banner below says so on stdout, and no Jev provenance is produced here.
+ *
  * No credentials are read, logged or needed here.
  */
 import { createEngine, runEngine } from "@/sim/engine";
-import { createAdaptiveController } from "@/controllers/adaptive";
+import { createFixedController } from "@/controllers/fixed";
 import { productionDemand } from "@/sim/demand-profile";
 import { buildCityPartition } from "@/sim/regions";
 import { buildObservationFrame } from "@/sim/observations";
@@ -25,9 +31,12 @@ const HORIZON_MS = 600_000;
 
 async function main(): Promise<void> {
   const model = loadBenchmarkModel();
+  // The probe's own world: driven by the deterministic Fixed baseline (see the
+  // module doc — this is a control probe, never a Jev or Adaptive run).
+  console.log("probe world: driven by the Fixed baseline; this is NOT a Jev run");
   const engine = createEngine({
     city: model.city,
-    controller: createAdaptiveController(),
+    controller: createFixedController(),
     spawns: productionDemand({ city: model.city, level: "rush-hour", seed: 42, durationMs: HORIZON_MS }),
   });
   runEngine(engine, HORIZON_MS);

@@ -256,7 +256,10 @@ describe("ego wiring in the worker", () => {
     expect(code).toMatch(/nextSeed\(state\.config\.seed\) : state\.config\.seed/);
     expect(code).toMatch(/buildRun\(\{ \.\.\.state\.config, seed \}\)/);
     // Controller switching is in-place: no rebuild, no respawn, no reroute.
-    expect(code).toMatch(/setEngineController\(\s*\n?\s*state\.engine,\s*\n?\s*makeController\(command\.controller, fingerprintForRun\(runningConfig\)\),/);
+    expect(code).toMatch(/setEngineController\(\s*\n?\s*engine,\s*\n?\s*makeController\(command\.controller, fingerprintForRun\(runningConfig\)\),/);
     expect(code).not.toMatch(/case "SET_CONTROLLER"[\s\S]{0,400}?buildRun\(/);
+    // Switching TO Jev mid-run passes the same startup gate as a fresh run: the
+    // run waits for the first policy instead of stepping without one.
+    expect(code).toMatch(/void gateSwitchedController\(engine\);/);
   });
 });

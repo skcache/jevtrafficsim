@@ -29,7 +29,13 @@ import { createJevController } from "@/controllers/jev";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { JevClientError, createRelayJevClient, type JevClient } from "@/jev/client";
 import { droppedAnswerCount, JEV_CONFIDENCE, policyFromEvaluations, buildEvaluationsBody } from "@/jev/gateway";
-import { createJevPolicyRuntime, type JevCause } from "@/jev/runtime";
+import {
+  createJevPolicyRuntime,
+  isPromiseLike,
+  JEV_RUNTIME_DEFAULTS,
+  type JevCause,
+  type JevStartOutcome,
+} from "@/jev/runtime";
 import { JEV_LIMITS, JEV_SCHEMA_VERSION, neutralJevPolicy, type JevPolicyRequest } from "@/jev/schema";
 import { policyLabel, causeReason } from "@/components/ui-model";
 import type { PresentationPolicy } from "@/worker/presentation-snapshot";
@@ -70,6 +76,17 @@ function policy(scale = 1.2) {
   return { schemaVersion: JEV_SCHEMA_VERSION, pressureScale: scale, hint: "neutral" as const, corridorWeights: [], regionWeights: [] };
 }
 
+/**
+ * The startup gate's answer for a client that answers INLINE: obtaining a
+ * synchronous policy must not require the event loop.
+ */
+function startedSync(outcome: JevStartOutcome | Promise<JevStartOutcome>): JevStartOutcome {
+  if (isPromiseLike<JevStartOutcome>(outcome)) {
+    throw new Error("this client answers inline: the gate must be synchronous");
+  }
+  return outcome;
+}
+
 /** Ticks with the event loop turning between them (the app's paced phase). */
 async function pacedTicks(
   runtime: { observe: (observation: ReturnType<typeof observationOf>) => unknown },
@@ -100,7 +117,7 @@ function tailTicks(
 /* ------------------------------------------- 1. the tail, before and after -- */
 
 describe("a policy keeps governing while nothing fresher arrives", () => {
-  it("does not hand the synchronous tail to the Adaptive fallback (the measured defect)", async () => {
+  it("governs the synchronous tail with the HELD policy, and never substitutes for it", async () => {
     const answer = { id: "mock", requestPolicy: () => new Promise((resolve) => setTimeout(() => resolve(policy(1.3)), 2)) };
 
     // The SAME drive under two rules: the shipped maximum hold, and the old
@@ -121,35 +138,52 @@ describe("a policy keeps governing while nothing fresher arrives", () => {
       maxHoldMs: 1_000,
     });
 
+    expect((await shippedRuntime.start(observationOf(shipped.engine, shipped.partition))).state).toBe("ready");
+    expect((await oneWindowRuntime.start(observationOf(oneWindow.engine, oneWindow.partition))).state).toBe("ready");
+
     await pacedTicks(shippedRuntime, shipped.engine, shipped.partition, 12);
     await pacedTicks(oneWindowRuntime, oneWindow.engine, oneWindow.partition, 12);
+    // The app's tail: simulated back to back, so nothing in flight can land.
+    // The runtime stops asking (an unpaced burst of doomed requests is what
+    // rate-limited the gateway) and the last accepted policy governs it.
+    shippedRuntime.beginAcceleratedTail();
+    oneWindowRuntime.beginAcceleratedTail();
     tailTicks(shippedRuntime, shipped.engine, shipped.partition, 30);
     tailTicks(oneWindowRuntime, oneWindow.engine, oneWindow.partition, 30);
 
     const held = shippedRuntime.status();
     const expired = oneWindowRuntime.status();
 
-    // Both accepted a policy; only one of them kept using it.
+    // Both accepted a policy; the shipped rule keeps USING it, and every
+    // simulated instant of the tail is governed by the model's own opinion —
+    // reported as HELD, which is not the same claim as freshly-driven.
     expect(held.accepted).toBeGreaterThan(0);
-    expect(expired.accepted).toBeGreaterThan(0);
-    // The old rule: the tail (2 900 ms of simulated time with no answer able to
-    // land) is all fallback. The shipped rule: only the gap before the first
-    // answer (one or two ticks) is.
-    expect(expired.fallbackMs).toBeGreaterThanOrEqual(2_000);
-    expect(held.fallbackMs).toBeLessThanOrEqual(300);
     expect(held.source).toBe("live");
     expect(held.heldMs).toBeGreaterThan(1_000);
+    expect(held.invalidMs).toBe(0);
+    expect(held.invalidation).toBeNull();
+    expect(held.fallbackMs).toBe(0);
+    expect(held.adaptiveTicks).toBe(0);
     // Held time is inside the governed time, never beside it.
     expect(held.heldMs).toBeLessThanOrEqual(held.liveMs);
     // Every observed interval belongs to one source; the tick after the LAST
     // observation is closed by the next one, which never comes at the end of a
     // run (the deployed participation check allows exactly that one tick).
-    expect(held.liveMs + held.replayMs + held.fallbackMs).toBe(
+    expect(held.liveMs + held.replayMs + held.invalidMs + held.fallbackMs).toBe(
       shipped.engine.traffic.timeMs - SIMULATION_TIMESTEP_MS,
     );
+
+    // Under the OLD one-window rule the same drive LOST Jev in the tail. That
+    // is an INVALIDATED run — reported with its instant and reason — and it is
+    // still never handed to another controller.
+    expect(expired.invalidation).not.toBeNull();
+    expect(expired.invalidation?.reason).toBe("expired");
+    expect(expired.invalidMs).toBeGreaterThan(0);
+    expect(expired.fallbackMs).toBe(0);
+    expect(expired.adaptiveTicks).toBe(0);
   });
 
-  it("names the cause of every fallback instead of reverting in silence", () => {
+  it("names the cause of every failure instead of substituting for Jev", () => {
     const { engine, partition } = crossroads();
     const failures: { kind: string; cause: JevCause; detail: string }[] = [];
     const client: JevClient = {
@@ -164,13 +198,19 @@ describe("a policy keeps governing while nothing fresher arrives", () => {
       refreshMs: 100,
       onRejected: (rejection) => failures.push(rejection),
     });
-    tailTicks(runtime, engine, partition, 5);
+    const started = startedSync(runtime.start(observationOf(engine, partition)));
+    expect(started).toEqual({
+      state: "unable",
+      reason: "timeout",
+      detail: expect.any(String),
+      attempts: JEV_RUNTIME_DEFAULTS.START_ATTEMPTS,
+    });
     const status = runtime.status();
     expect(status.accepted).toBe(0);
-    expect(status.source).toBe("fallback");
+    expect(status.source).toBe("waiting");
     expect(status.lastCause).toBe("timeout");
     expect(status.causes.timeout).toBeGreaterThan(0);
-    expect(status.fallbackReason).toBe("timeout");
+    expect(status.fallbackMs).toBe(0);
     expect(failures.every((rejection) => rejection.cause === "timeout")).toBe(true);
     expect(status.lastRejection?.kind).toBe("client-error");
   });
@@ -207,26 +247,44 @@ describe("a policy keeps governing while nothing fresher arrives", () => {
     expect(malformed.status().lastRejection?.kind).toBe("malformed");
   });
 
-  it("says unconfigured and first-policy rather than inventing a reason", () => {
+  it("says unconfigured and an unclassified failure rather than inventing a reason", () => {
     const { engine, partition } = crossroads();
     const unconfigured = createJevPolicyRuntime({ client: null, scenarioFingerprint: "none" });
-    tailTicks(unconfigured, engine, partition, 3);
-    expect(unconfigured.status().fallbackReason).toBe("unconfigured");
+    const unconfiguredStart = startedSync(unconfigured.start(observationOf(engine, partition)));
+    expect(unconfiguredStart.state).toBe("unable");
+    if (unconfiguredStart.state !== "unable") {
+      throw new Error("the gate must report the run as unable to start");
+    }
+    expect(unconfiguredStart.reason).toBe("unconfigured");
 
-    const waiting = createJevPolicyRuntime({
-      client: { id: "mock", requestPolicy: () => new Promise(() => undefined) },
-      scenarioFingerprint: "waiting",
-      refreshMs: 100,
+    // A failure the bounded classifier does not recognise is reported AS such:
+    // no plausible-looking cause is invented for it.
+    const { engine: weirdEngine, partition: weirdPartition } = crossroads();
+    const weird = createJevPolicyRuntime({
+      client: {
+        id: "mock",
+        requestPolicy: () => {
+          throw new Error("service exploded");
+        },
+      },
+      scenarioFingerprint: "weird",
+      startAttempts: 1,
     });
-    tailTicks(waiting, engine, partition, 3);
-    expect(waiting.status().fallbackReason).toBe("first-policy");
+    const weirdStart = startedSync(weird.start(observationOf(weirdEngine, weirdPartition)));
+    expect(weirdStart.state).toBe("unable");
+    if (weirdStart.state !== "unable") {
+      throw new Error("the gate must report the run as unable to start");
+    }
+    expect(weirdStart.reason).toBe("unknown");
   });
 
-  it("classifies the fallback TIME itself, so a run with zero refusals still explains itself", async () => {
+  it("starts under the accepted policy, so a healthy run has zero ungoverned time", async () => {
     const { engine, partition } = crossroads();
     // The measured live shape: a healthy client whose FIRST answer takes a few
-    // ticks to arrive, and nothing ever fails. The fallback time is real, and
-    // its cause is not a rejection — it is "no policy exists yet".
+    // wall-clock milliseconds. The old code simulated straight through that gap
+    // on the Adaptive fallback (the structural defect measured at 26.7% of a
+    // run). The startup gate waits instead, so no simulated instant is ever
+    // ungoverned.
     const runtime = createJevPolicyRuntime({
       client: {
         id: "mock",
@@ -235,16 +293,22 @@ describe("a policy keeps governing while nothing fresher arrives", () => {
       scenarioFingerprint: "opening-gap",
       refreshMs: 1_000,
     });
+    const started = await runtime.start(observationOf(engine, partition));
+    expect(started.state).toBe("ready");
+    expect(engine.traffic.timeMs).toBe(0); // no simulated time passed while waiting
     await pacedTicks(runtime, engine, partition, 4);
     tailTicks(runtime, engine, partition, 10);
+    runtime.finish(engine.traffic.timeMs);
     const status = runtime.status();
     expect(status.rejected).toBe(0);
-    expect(status.fallbackMs).toBeGreaterThan(0);
-    expect(status.dominantFallbackCause).toBe("first-policy");
-    expect(status.fallbackCauseMs["first-policy"]).toBe(status.fallbackMs);
+    expect(status.fallbackMs).toBe(0);
+    expect(status.invalidMs).toBe(0);
+    expect(status.adaptiveTicks).toBe(0);
+    expect(status.liveMs).toBe(engine.traffic.timeMs);
     expect(status.lastCause).toBeNull(); // nothing failed; nothing is invented
 
-    // ...and a fallback caused by failures is attributed to the failure.
+    // A run whose first policy cannot be obtained is NOT simulated at all: the
+    // failure is classified and the clock never moves.
     const { engine: failing, partition: failingPartition } = crossroads();
     const refused = createJevPolicyRuntime({
       client: {
@@ -254,13 +318,13 @@ describe("a policy keeps governing while nothing fresher arrives", () => {
         },
       },
       scenarioFingerprint: "refused",
-      refreshMs: 100,
+      startAttempts: 1,
     });
-    tailTicks(refused, failing, failingPartition, 10);
+    expect(startedSync(refused.start(observationOf(failing, failingPartition))).state).toBe("unable");
     const refusedStatus = refused.status();
-    expect(refusedStatus.dominantFallbackCause).toBe("upstream-error");
-    expect(refusedStatus.fallbackCauseMs["upstream-error"]).toBe(refusedStatus.fallbackMs);
     expect(refusedStatus.causes["upstream-error"]).toBeGreaterThan(0);
+    expect(refusedStatus.fallbackMs).toBe(0);
+    expect(failing.traffic.timeMs).toBe(0);
   });
 });
 
@@ -367,27 +431,47 @@ describe("the provenance label names the state that actually happened", () => {
     expect(label?.detail).not.toContain("fallback");
   });
 
-  it("names the classified reason beside a fallback, and the imperfections too", () => {
-    const onFallback: PresentationPolicy = {
+  it("names an INVALIDATED run for what it is, with the reason and the imperfections", () => {
+    const stopped: PresentationPolicy = {
       ...base,
-      fallbackMs: 240_000,
+      source: "invalidated",
+      invalidMs: 240_000,
       liveMs: 360_000,
       accepted: 16,
-      cause: "timeout",
+      cause: "expired",
+      invalidation: { atSimMs: 360_000, reason: "expired" },
       dropped: 3,
       clamped: 1,
     };
-    const label = policyLabel("jev", onFallback);
-    expect(label?.text).toBe("Jev · fallback used");
-    expect(label?.detail).toContain("40% of the run on the adaptive fallback");
-    expect(label?.detail).toContain("(the model did not answer in time)");
-    expect(label?.detail).toContain("16 live policies");
-    expect(label?.detail).toContain("3 answers below the confidence floor");
-    expect(label?.detail).toContain("1 value clamped");
-    // A run whose provenance predates these fields keeps the old wording.
-    const older: PresentationPolicy = { ...base, fallbackMs: 240_000, liveMs: 360_000 };
-    expect(policyLabel("jev", older)?.detail).toContain("40% of the run on the adaptive fallback · ");
-    expect(policyLabel("jev", older)?.detail).not.toContain("(");
+    const label = policyLabel("jev", stopped);
+    expect(label?.text).toBe("Jev · run invalidated");
+    expect(label?.detail).toContain("40% of the run after Jev was lost");
+    expect(label?.detail).toContain("6m 00s");
+    expect(label?.detail).toContain("(the held policy passed its maximum age)");
+    expect(label?.detail).toContain("not a completed Jev result");
+    // Never the plain word Jev for a run that stopped governing.
+    expect(label?.text).not.toBe("Jev");
+
+    // A run whose policy is still being obtained says so, and never claims Jev.
+    const waiting: PresentationPolicy = { ...base, source: "waiting", liveMs: 0, accepted: 0, cause: "first-policy" };
+    expect(policyLabel("jev", waiting)?.text).toBe("Waiting for Jev");
+    expect(policyLabel("jev", waiting)?.detail).toContain("the run was still waiting for its first policy");
+
+    // Ungoverned time that did not end the run is still named, never hidden.
+    const ungovened: PresentationPolicy = {
+      ...base,
+      invalidMs: 120_000,
+      liveMs: 480_000,
+      cause: "superseded",
+      dropped: 3,
+      clamped: 1,
+    };
+    const ungovenedLabel = policyLabel("jev", ungovened);
+    expect(ungovenedLabel?.text).toBe("Jev · ungoverned time");
+    expect(ungovenedLabel?.detail).toContain("20% of the run had no Jev policy in force");
+    expect(ungovenedLabel?.detail).toContain("(the answer arrived after its request was superseded)");
+    expect(ungovenedLabel?.detail).toContain("3 answers below the confidence floor");
+    expect(ungovenedLabel?.detail).toContain("1 value clamped");
   });
 
   it("has plain words for every cause it can classify, and none for an unknown one", () => {

@@ -91,21 +91,40 @@ test("happy path completes and accounts for mocked live Jev without network quot
   expect(telemetry).not.toBeNull();
   expect(telemetry!.total).toBeGreaterThan(0);
   expect(telemetry!.outcomes.live).toBeGreaterThan(0);
-  // The mocked relay answers every refresh: no window may fall through to the
-  // Adaptive safety net, and the record is what says so.
-  expect(telemetry!.outcomes.fallback).toBe(0);
+  // The mocked relay answers every refresh: no window may go ungoverned, and
+  // the record is what says so. (The accelerated tail holds the last policy and
+  // asks for nothing, which is why its windows are HELD.)
+  expect(telemetry!.outcomes.ungoverned).toBe(0);
   expect(telemetry!.recent.length).toBeLessThanOrEqual(64);
   const identity = await page.request.get("/api/build");
   expect(identity.ok()).toBe(true);
   expect((await identity.json() as { commit: string }).commit).toMatch(/^[a-f0-9]{40}$/);
 });
 
-test("fallback-only still completes but fails the live-Jev release assertion", async ({ page }) => {
-  const result = await journey(page, 503);
-  expect(result.policy.accepted).toBe(0);
-  expect(result.policy.liveMs).toBe(0);
-  expect(result.label).toBe("Adaptive fallback");
-  expect(() => checkLiveJevParticipation(result.policy, result.label, result.simulatedMs)).toThrow(/no live/);
+test("a relay that cannot answer starts NO run: no Jev result is produced", async ({ page }) => {
+  await page.route("**/api/jev/policy", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' });
+  });
+  await page.goto("/?debug=1");
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  await page.getByRole("button", { name: "Enter City" }).click();
+  await expect(page.getByText("Jev Traffic · Chicago")).toBeVisible();
+
+  // The startup gate never passes: the run does not begin, nothing is
+  // substituted for Jev, and the reason is shown in plain words.
+  await expect(page.getByText(/This run did not start/)).toBeVisible({ timeout: 30_000 });
+  // No payoff, no comparison, no provenance panel: this run produced no result.
+  await expect(page.getByText("Who got there first")).toBeHidden();
+  await expect(page.locator("[data-jev-provenance]")).toBeHidden();
+  const telemetry = await page.evaluate(() =>
+    (window as Window & { __jevDebug?: { telemetry?: unknown } }).__jevDebug?.telemetry ?? null,
+  );
+  expect(telemetry).toBeNull();
+  // And no simulated time was advanced behind the wait.
+  const timeMs = await page.evaluate(() =>
+    (window as Window & { __jevDebug?: { snapshot?: { timeMs?: number } } }).__jevDebug?.snapshot?.timeMs ?? 0,
+  );
+  expect(timeMs).toBe(0);
 });
 
 test("mobile trip HUD and incident controls stay inside the viewport", async ({ page }) => {

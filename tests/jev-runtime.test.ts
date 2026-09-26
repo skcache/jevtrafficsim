@@ -18,12 +18,14 @@
 import { describe, expect, it } from "vitest";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createJevController, jevDirective } from "@/controllers/jev";
-import type { JevClient } from "@/jev/client";
+import { JevClientError, type JevClient } from "@/jev/client";
 import {
   createJevPolicyRuntime,
+  isPromiseLike,
   JEV_RUNTIME_DEFAULTS,
   refreshDue,
   type JevRuntime,
+  type JevStartOutcome,
 } from "@/jev/runtime";
 import { JEV_SCHEMA_VERSION, neutralJevPolicy, type JevPolicyRequest } from "@/jev/schema";
 import { parseJevTrace, serializeTrace } from "@/jev/trace";
@@ -95,57 +97,88 @@ function runTicks(
   }
 }
 
-describe("failure behaviour ends in the Adaptive fallback", () => {
-  it("falls back while a service is unconfigured, without asking anyone", () => {
+/**
+ * The startup gate's answer for a client that answers INLINE: the gate must not
+ * need the event loop to obtain a synchronous policy.
+ */
+function startedSync(outcome: JevStartOutcome | Promise<JevStartOutcome>): JevStartOutcome {
+  if (isPromiseLike<JevStartOutcome>(outcome)) {
+    throw new Error("this client answers inline: the gate must be synchronous");
+  }
+  return outcome;
+}
+
+describe("a run that cannot be governed by Jev does not run", () => {
+  it("cannot start while a service is unconfigured, and never asks anyone", () => {
     const { engine, partition } = crossroadsCity();
     const runtime = createJevPolicyRuntime({ client: null, scenarioFingerprint: "s1" });
-    runTicks(runtime, engine, partition, 60);
+    const started = startedSync(runtime.start(observationOf(engine, partition)));
+    expect(started).toEqual({
+      state: "unable",
+      reason: "unconfigured",
+      detail: expect.any(String),
+      attempts: 0,
+    });
+    expect(runtime.status().refreshes).toBe(0);
+    // The gate is the ONLY thing standing between the run and simulated time: a
+    // driver that stepped anyway would be simulating with no policy at all, and
+    // that time is UNGOVERNED — never fallback time, because there is nothing to
+    // fall back to.
+    runTicks(runtime, engine, partition, 3);
     const status = runtime.status();
-    expect(status.configured).toBe(false);
-    expect(status.source).toBe("fallback");
-    expect(status.refreshes).toBe(0);
-    expect(status.fallbackMs).toBeGreaterThan(0);
+    expect(status.source).toBe("waiting");
+    expect(status.fallbackMs).toBe(0);
+    expect(status.adaptiveTicks).toBe(0);
+    expect(status.invalidMs).toBeGreaterThan(0);
     expect(runtime.effective().policy).toBeNull();
   });
 
-  it("falls back when a request times out", async () => {
+  it("cannot start when the first request fails, and classifies why", async () => {
     const { engine, partition } = crossroadsCity();
     const client: JevClient = {
       id: "mock",
-      requestPolicy: () =>
-        new Promise((_resolve, reject) => {
-          setTimeout(() => reject(new Error("jev service responded 504")), 5);
-        }),
+      requestPolicy: () => Promise.reject(new JevClientError("timeout", "jev service request timed out")),
     };
     const runtime = createJevPolicyRuntime({ client, scenarioFingerprint: "s1", refreshMs: 500 });
-    runTicks(runtime, engine, partition, 20);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    runTicks(runtime, engine, partition, 20);
+    const started = await runtime.start(observationOf(engine, partition));
+    expect(started.state).toBe("unable");
+    if (started.state !== "unable") {
+      throw new Error("the gate must report the run as unable to start");
+    }
+    expect(started.reason).toBe("timeout");
+    // The gate retries within its budget and then reports the truth.
+    expect(started.attempts).toBe(JEV_RUNTIME_DEFAULTS.START_ATTEMPTS);
     const status = runtime.status();
-    expect(status.rejected).toBeGreaterThan(0);
-    expect(status.lastRejection?.kind).toBe("client-error");
     expect(status.accepted).toBe(0);
-    expect(status.source).toBe("fallback");
+    expect(status.rejected).toBe(JEV_RUNTIME_DEFAULTS.START_ATTEMPTS);
+    expect(status.lastRejection?.kind).toBe("client-error");
+    expect(status.causes.timeout).toBe(JEV_RUNTIME_DEFAULTS.START_ATTEMPTS);
+    expect(status.fallbackMs).toBe(0);
     expect(runtime.trace().events).toHaveLength(0);
   });
 
-  it("falls back on a malformed response and keeps the simulation running", () => {
+  it("cannot start on a malformed first answer, and says so", () => {
     const { engine, partition } = crossroadsCity();
     const runtime = createJevPolicyRuntime({
       client: { id: "mock", requestPolicy: () => ({ schemaVersion: JEV_SCHEMA_VERSION, hint: "fly" }) },
       scenarioFingerprint: "s1",
       refreshMs: 500,
     });
-    runTicks(runtime, engine, partition, 40);
+    const started = startedSync(runtime.start(observationOf(engine, partition)));
+    expect(started.state).toBe("unable");
+    if (started.state !== "unable") {
+      throw new Error("the gate must report the run as unable to start");
+    }
+    expect(started.reason).toBe("malformed");
     const status = runtime.status();
     expect(status.lastRejection?.kind).toBe("malformed");
     expect(status.accepted).toBe(0);
-    expect(status.source).toBe("fallback");
-    // The simulation kept running: vehicles moved and signals cycled.
-    expect(engine.traffic.timeMs).toBe(4_000);
+    expect(status.fallbackMs).toBe(0);
+    // The simulation never advanced: the run did not start.
+    expect(engine.traffic.timeMs).toBe(0);
   });
 
-  it("keeps a policy governing past its freshness window, and falls back past its maximum hold", () => {
+  it("keeps a policy governing past its freshness window, and INVALIDATES the run past its maximum hold", () => {
     const { engine, partition } = crossroadsCity();
     const runtime = createJevPolicyRuntime({
       client: { id: "mock", requestPolicy: () => policy(1.4) },
@@ -156,7 +189,8 @@ describe("failure behaviour ends in the Adaptive fallback", () => {
       // keep governing for three freshness windows when nothing replaces it.
       maxHoldMs: 3_000,
     });
-    runTicks(runtime, engine, partition, 8); // accepted at t=0, in force from t=100
+    expect(startedSync(runtime.start(observationOf(engine, partition))).state).toBe("ready");
+    runTicks(runtime, engine, partition, 8); // accepted at t=0, in force from t=0
     expect(runtime.effective().source).toBe("live");
     expect(runtime.effective().policy?.pressureScale).toBe(1.4);
     expect(runtime.effective().held).toBe(false); // still inside its window at t=700
@@ -172,15 +206,28 @@ describe("failure behaviour ends in the Adaptive fallback", () => {
     runTicks(runtime, engine, partition, 1); // t=1200
     expect(runtime.status().heldMs).toBe(100);
 
-    // Past the maximum hold the safety net takes over, and it is named.
+    // Past the maximum hold Jev is LOST. The run is INVALIDATED — it is never
+    // handed to another controller — and the runtime reports the instant and
+    // the reason so a driver can stop it honestly.
     runTicks(runtime, engine, partition, 19); // t=3100 > 3000
-    expect(runtime.effective().source).toBe("fallback");
+    expect(runtime.effective().source).toBe("invalidated");
     expect(runtime.effective().policy).toBeNull();
+    expect(runtime.invalidation()).toEqual({
+      atSimMs: 3_100,
+      reason: "expired",
+      governedMs: runtime.status().liveMs,
+    });
     expect(runtime.status().expiries).toBeGreaterThan(0);
-    expect(runtime.status().fallbackMs).toBeGreaterThan(0);
-    expect(runtime.status().fallbackReason).toBe("expired");
-    // Held time is a subset of the governed time, never a fourth bucket.
+    // Closing the run accounts the interval it died in, and the buckets add up.
+    runtime.finish(engine.traffic.timeMs);
     const status = runtime.status();
+    expect(status.invalidMs).toBe(100);
+    expect(status.liveMs + status.replayMs + status.invalidMs + status.fallbackMs).toBe(
+      engine.traffic.timeMs,
+    );
+    expect(status.fallbackMs).toBe(0);
+    expect(status.adaptiveTicks).toBe(0);
+    // Held time is a subset of the governed time, never a fourth bucket.
     expect(status.heldMs).toBeLessThanOrEqual(status.liveMs + status.replayMs);
   });
 
@@ -195,12 +242,14 @@ describe("failure behaviour ends in the Adaptive fallback", () => {
       },
     };
     const runtime = createJevPolicyRuntime({ client, scenarioFingerprint: "s1", refreshMs: 500 });
-    runTicks(runtime, engine, partition, 2);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The gate's first attempt fails, its retry answers: the run starts.
+    const started = await runtime.start(observationOf(engine, partition));
+    expect(started.state).toBe("ready");
     runTicks(runtime, engine, partition, 20);
     expect(runtime.status().accepted).toBeGreaterThan(0);
     expect(runtime.status().source).toBe("live");
     expect(runtime.trace().events[0].policy.pressureScale).toBe(1.3);
+    expect(runtime.status().fallbackMs).toBe(0);
   });
 });
 
@@ -336,7 +385,8 @@ describe("stale responses can never mutate a new scenario", () => {
     runtime.observe(observationOf(engine, partition));
     // The scenario changed WITHOUT a reset (e.g. a caller re-binding a run).
     const rebound = createJevPolicyRuntime({ client: null, scenarioFingerprint: "scenario-b" });
-    expect(rebound.status().source).toBe("fallback");
+    expect(rebound.status().source).toBe("waiting");
+    expect(startedSync(rebound.start(observationOf(engine, partition))).state).toBe("unable");
     (pending as unknown as (value: unknown) => void)(policy(1.7));
     return new Promise((resolve) => setTimeout(resolve, 5)).then(() => {
       const after = runtime.status();
@@ -404,7 +454,10 @@ describe("stale responses can never mutate a new scenario", () => {
     const status = runtime.status();
     expect(status.lastRejection?.kind).toBe("stale-fingerprint");
     expect(status.accepted).toBe(0);
-    expect(status.source).toBe("fallback");
+    // A replay with nothing to replay cannot govern a run at all: the gate says
+    // so instead of running under anything else.
+    expect(status.source).toBe("waiting");
+    expect(runtime.invalidation()).toBeNull();
     expect(runtime.trace().events).toHaveLength(0);
   });
 });
@@ -505,7 +558,7 @@ describe("recorded trace", () => {
   });
 });
 
-describe("runtime metadata distinguishes live, replay and fallback", () => {
+describe("runtime metadata distinguishes live, replay and ungoverned time", () => {
   it("counts simulated time per source, and they add up to the observed span", () => {
     const { engine, partition } = crossroadsCity();
     const runtime = createJevPolicyRuntime({
@@ -514,9 +567,10 @@ describe("runtime metadata distinguishes live, replay and fallback", () => {
       refreshMs: 1_000,
       ttlMs: 1_500,
       // Two windows of hold, stated here because the exact counts below are
-      // derived from it: in force from t=100 to t=2000, fresh until t=1500.
+      // derived from it: in force from t=0 to t=2000, fresh until t=1500.
       maxHoldMs: 2_000,
     });
+    expect(startedSync(runtime.start(observationOf(engine, partition))).state).toBe("ready");
     let lastObservedMs = 0;
     for (let tick = 0; tick < 40; tick += 1) {
       lastObservedMs = engine.traffic.timeMs;
@@ -525,20 +579,27 @@ describe("runtime metadata distinguishes live, replay and fallback", () => {
     }
     const status = runtime.status();
     expect(status.liveMs).toBeGreaterThan(0);
-    expect(status.fallbackMs).toBeGreaterThan(0);
+    expect(status.invalidMs).toBeGreaterThan(0);
     expect(status.replayMs).toBe(0);
+    expect(status.fallbackMs).toBe(0);
     // Each interval belongs to the source that governed it: the sum is exactly
     // the simulated span observed so far (the tail after the last observation is
     // closed by the next one).
-    expect(status.liveMs + status.replayMs + status.fallbackMs).toBe(lastObservedMs);
-    expect(status.source).toBe("fallback"); // the held policy reached its cap at t=2000
-    // Derived on paper, not read off a run. The first answer is accepted at t=0
-    // and takes force at t=100; it is fresh through t=1500 and held from t=1600
-    // until the cap at t=2000, so held covers the five 100 ms intervals
-    // (1600..2100] and the governed span is (100..2100].
-    expect(status.liveMs).toBe(2_000);
+    expect(status.liveMs + status.replayMs + status.invalidMs + status.fallbackMs).toBe(
+      lastObservedMs,
+    );
+    // Jev was LOST at t=2000 — the policy reached its cap — and the run is
+    // invalidated rather than handed to anything else.
+    expect(status.source).toBe("invalidated");
+    expect(status.invalidation?.atSimMs).toBe(2_100);
+    // Derived on paper, not read off a run. The startup policy is accepted at
+    // t=0 and governs from t=0; it is fresh through t=1500 and held from t=1600
+    // until the cap at t=2000, so the governed span is (0..2100] and held covers
+    // the five 100 ms intervals (1600..2100].
+    expect(status.liveMs).toBe(2_100);
     expect(status.heldMs).toBe(500);
-    expect(status.fallbackMs).toBe(1_900);
+    expect(status.invalidMs).toBe(1_800);
+    expect(status.adaptiveTicks).toBe(0);
     expect(status.heldMs).toBeLessThanOrEqual(status.liveMs);
   });
 

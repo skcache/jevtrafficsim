@@ -1,5 +1,5 @@
 /**
- * Fallback-free completion harness (owner report).
+ * Pure-Jev completion harness (owner report; re-cut for the #61 contract).
  *
  *   "why does this keep happening and why is jev still being used for fallback…
  *    please track where Jev falls back and why. Also we should make sure when
@@ -11,8 +11,8 @@
  * (`worker/challenge-compare.ts`), with the same controller the app runs, and
  * reports what the run's OWN record says (jev/telemetry.ts):
  *
- *   per route   refreshes, windows by outcome (live / held / fallback),
- *               liveMs / heldMs / fallbackMs, the public provenance label
+ *   per route   refreshes, windows by outcome (live / held), liveMs / heldMs /
+ *               invalidMs, adaptive ticks, the public provenance label
  *   per reason  how many windows each classified reason cost, and the simulated
  *               time it covered
  *   per failure WHICH refresh it was (`index` at `atSimMs`), what happened
@@ -21,20 +21,23 @@
  *
  * ## The gate, stated exactly
  *
- * A run passes when it needed the Adaptive safety net for no FAILURE:
+ * The execution contract is now absolute: a Jev run is Jev-derived policy
+ * controlling 100% of its simulated signal-decision time, or it is not a Jev
+ * result at all. A route passes when:
  *
- *   - zero windows with outcome `fallback`   (no refresh fell through)
- *   - zero fallback time attributed to a failure cause
- *     (everything except the structural `first-policy` / `unconfigured` gap)
- *   - at least one live window, and the trip actually completed
+ *   - `fallbackMs` is 0 AND no refresh window is `ungoverned`
+ *     (there is no Adaptive path left to reach, and no window went uncovered)
+ *   - `adaptiveTicks` is 0 (an Adaptive decision never happened)
+ *   - `invalidMs` is 0 and the run was NOT invalidated: every simulated instant
+ *     had a Jev policy in force
+ *   - at least one live window was accepted, and the governed time adds up to
+ *     the simulated window exactly
  *
- * The ONE fallback the gate allows is the structural opening gap: the policy a
- * refresh produces is in force from the tick AFTER it is accepted (the rule
- * that makes live and replayed runs identical), so the sim time between the
- * first request and its answer is covered by the fallback whatever the service
- * does. It is reported separately and by name (`structuralMs`) — never hidden,
- * never renamed, and never allowed to grow: a gap that costs a real failure
- * fails the gate like any other.
+ * A HELD policy is not a failure: holding a real, previously accepted policy IS
+ * Jev control, and the tail after the ego arrives is reported as held time. A
+ * run that LOST Jev (nothing replaced the policy before its maximum hold) is
+ * invalidated, reported with the instant and the reason, and FAILS this gate —
+ * it must never be read as a completed Jev result.
  *
  * Anything that fails is reported WHERE and WHY, from the run's own record. The
  * harness never retries a window, never tunes a bound and never edits a result.
@@ -66,8 +69,11 @@
  *   pnpm tsx scripts/jev-fallback-harness.ts --client relay --base-url https://jevtrafficsim.vercel.app \
  *     --trips soldier-field-to-navy-pier
  *
- *   # negative control: a deliberately slow stand-in must FAIL the gate
- *   pnpm tsx scripts/jev-fallback-harness.ts --mock-latency 6000 --pace 8
+ *   # negative control: a stand-in that cannot answer at all must FAIL the gate
+ *   pnpm tsx scripts/jev-fallback-harness.ts --mock-fail timeout
+ *
+ *   # loss-of-Jev control: answers once, then goes silent for good
+ *   pnpm tsx scripts/jev-fallback-harness.ts --mock-silent-after 1
  */
 import { writeFileSync } from "node:fs";
 import path from "node:path";
@@ -98,7 +104,7 @@ type ClientChoice = "mock" | "gateway" | "relay";
 /** A class of failure the stand-in can be told to produce, for control runs. */
 const MOCK_FAILURES = ["timeout", "rate-limited", "upstream-5xx", "transport", "malformed-json", "schema-invalid"] as const;
 
-const USAGE = `Jev fallback-free completion harness
+const USAGE = `Jev pure-execution completion harness
 
 Usage: pnpm tsx scripts/jev-fallback-harness.ts [options]
 
@@ -113,6 +119,8 @@ Usage: pnpm tsx scripts/jev-fallback-harness.ts [options]
   --mock-latency <ms>            stand-in answers after this wall delay (default 0)
   --mock-fail <class>            stand-in refuses everything, in one class
                                  (${MOCK_FAILURES.join(" | ")}): a negative control
+  --mock-silent-after <n>        stand-in answers the first n requests and refuses
+                                 everything after: a loss-of-Jev control
   --base-url <url>               deployed origin for --client relay
   --timeout <ms>                 one request's deadline (default: the client's own)
   --live-run-budget <n>          routes a LIVE client may run per invocation (default 3)
@@ -135,6 +143,8 @@ interface Options {
   readonly mockLatencyMs: number;
   /** A stand-in that cannot be used, in this class; null for a healthy one. */
   readonly mockFail: string | null;
+  /** Answer this many requests, then refuse everything; null = never go silent. */
+  readonly mockSilentAfter: number | null;
   readonly baseUrl: string;
   readonly timeoutMs: number | null;
   readonly liveRunBudget: number;
@@ -224,6 +234,7 @@ function parseOptions(): Options {
     paceRatio,
     mockLatencyMs: intArg("--mock-latency", 0, 0),
     mockFail: parseMockFail(),
+    mockSilentAfter: arg("--mock-silent-after") === null ? null : intArg("--mock-silent-after", 0, 1),
     baseUrl: arg("--base-url") ?? "https://jevtrafficsim.vercel.app",
     timeoutMs,
     liveRunBudget: intArg("--live-run-budget", 3, 1),
@@ -236,21 +247,28 @@ function parseOptions(): Options {
 /* -------------------------------------------------------------- clients --- */
 
 /**
- * A deterministic stand-in that answers after a wall delay, for control runs.
- * Its id stays "mock": the adapter vocabulary describes what produced a policy,
- * and a delayed stand-in is still the stand-in — never a service.
+ * A deterministic stand-in that answers after a wall delay and — when asked —
+ * goes SILENT after a given number of answers, for control runs. Its id stays
+ * "mock": the adapter vocabulary describes what produced a policy, and a
+ * delayed or flaky stand-in is still the stand-in — never a service.
  */
-function delayedMockClient(delayMs: number): JevClient {
-  if (delayMs <= 0) {
-    return createMockJevClient();
-  }
+function delayedMockClient(delayMs: number, silentAfter: number | null): JevClient {
   const inner = createMockJevClient();
+  let answers = 0;
   return {
     id: "mock",
-    requestPolicy: (request) =>
-      new Promise((resolve) => {
+    requestPolicy: (request) => {
+      if (silentAfter !== null && answers >= silentAfter) {
+        throw new JevClientError("timeout", "mock stand-in went silent");
+      }
+      answers += 1;
+      if (delayMs <= 0) {
+        return inner.requestPolicy(request);
+      }
+      return new Promise((resolve) => {
         setTimeout(() => resolve(inner.requestPolicy(request)), delayMs);
-      }),
+      });
+    },
   };
 }
 
@@ -283,7 +301,7 @@ function buildClient(options: Options): JevClient {
   switch (options.client) {
     case "mock":
       return options.mockFail === null
-        ? delayedMockClient(options.mockLatencyMs)
+        ? delayedMockClient(options.mockLatencyMs, options.mockSilentAfter)
         : failingMockClient(options.mockFail);
     case "relay":
       return createRelayJevClient({
@@ -322,12 +340,19 @@ interface RouteReport {
   readonly rejected: number;
   readonly liveMs: number;
   readonly heldMs: number;
+  /**
+   * Simulated ms an Adaptive controller governed. A hard zero, reported so the
+   * gate can require it by value rather than by absence.
+   */
   readonly fallbackMs: number;
-  /** The part of `fallbackMs` the structural opening gap covered. */
-  readonly structuralFallbackMs: number;
-  /** The part of `fallbackMs` any FAILURE caused. Must be zero to pass. */
-  readonly failureFallbackMs: number;
-  readonly dominantFallbackCause: string | null;
+  /** Ticks an Adaptive controller decided. A hard zero, for the same reason. */
+  readonly adaptiveTicks: number;
+  /** Simulated ms NO Jev policy governed. Must be zero to pass. */
+  readonly invalidMs: number;
+  /** Set when the run LOST Jev: the instant and the classified reason. */
+  readonly invalidation: { readonly atSimMs: number; readonly reason: string } | null;
+  /** Set when the run could not start at all: the classified reason. */
+  readonly unableReason: string | null;
   readonly simulatedMs: number;
   /** The horizon the run was asked for, so "did not finish" names its bound. */
   readonly horizonMs: number;
@@ -342,9 +367,22 @@ interface RouteReport {
   readonly latencyMaxMs: number;
 }
 
-/** Causes that are the structure of a live run, not a failure of anything. */
-const STRUCTURAL_CAUSES = new Set(["first-policy", "unconfigured"]);
+/** What a route report needs from a run's outcome; a ChallengeResult satisfies it. */
+type RunOutcome = Parameters<typeof reportFor>[2];
 
+/**
+ * The outcome of a run that never started: zero measurements, named as such. The
+ * harness reports it so a route that could not start FAILS the gate by name
+ * instead of crashing the invocation.
+ */
+function emptyResult(): RunOutcome {
+  return {
+    simulatedMs: 0,
+    trip: { completed: false, tripTimeMs: 0, distanceM: 0, stoppedMs: 0 },
+  };
+}
+
+/** The p50/max answer latency of the windows the record still holds. */
 function summarizeLatency(events: readonly JevRefreshEvent[]): { p50: number; max: number } {
   const values = events
     .map((event) => event.latencyMs)
@@ -373,11 +411,6 @@ function reportFor(
   const meta = controller.meta();
   const provenance = jevProvenance(meta);
   const telemetry = meta.telemetry;
-  const causes = meta.fallbackCauseMs;
-  let structural = 0;
-  for (const cause of STRUCTURAL_CAUSES) {
-    structural += causes[cause as keyof typeof causes] ?? 0;
-  }
   const latency = summarizeLatency(telemetry.recent);
   return {
     tripId,
@@ -391,9 +424,12 @@ function reportFor(
     liveMs: meta.liveMs,
     heldMs: meta.heldMs,
     fallbackMs: meta.fallbackMs,
-    structuralFallbackMs: structural,
-    failureFallbackMs: Math.max(0, meta.fallbackMs - structural),
-    dominantFallbackCause: meta.dominantFallbackCause,
+    adaptiveTicks: meta.adaptiveTicks,
+    invalidMs: meta.invalidMs,
+    invalidation: meta.invalidation === null
+      ? null
+      : { atSimMs: meta.invalidation.atSimMs, reason: meta.invalidation.reason },
+    unableReason: meta.start?.state === "unable" ? meta.start.reason : null,
     simulatedMs: result.simulatedMs,
     horizonMs,
     tripCompleted: result.trip.completed,
@@ -409,7 +445,7 @@ function reportFor(
 
 /**
  * Everything the gate checks, per route. The two lists are kept apart on
- * purpose: "the safety net was needed" and "the trip did not finish" are
+ * purpose: "this run was not a Jev run" and "the trip did not finish" are
  * different failures with different owners, and a report that merged them would
  * be exactly the kind of thing this harness exists to prevent.
  */
@@ -421,19 +457,39 @@ export interface RouteVerdict {
 export function routeVerdict(report: RouteReport): RouteVerdict {
   const fallbackProblems: string[] = [];
   const completionProblems: string[] = [];
-  if (report.telemetry.outcomes.fallback > 0) {
+  if (report.unableReason !== null) {
     fallbackProblems.push(
-      `${report.telemetry.outcomes.fallback} refresh window(s) had no policy in force at all`,
+      `the run never started: the first policy could not be obtained (${report.unableReason}) — ` +
+        "nothing was simulated and nothing was substituted for Jev",
     );
   }
-  if (report.failureFallbackMs > 0) {
+  if (report.invalidation !== null) {
     fallbackProblems.push(
-      `${report.failureFallbackMs} ms of fallback time were caused by a failure` +
-        (report.dominantFallbackCause === null ? "" : ` (dominant cause: ${report.dominantFallbackCause})`),
+      `Jev was LOST at ${secs(report.invalidation.atSimMs)} (${report.invalidation.reason}): ` +
+        "the run stopped there and is not a completed Jev result",
+    );
+  }
+  if (report.adaptiveTicks > 0) {
+    fallbackProblems.push(`${report.adaptiveTicks} tick(s) were decided by an Adaptive controller`);
+  }
+  if (report.fallbackMs > 0) {
+    fallbackProblems.push(`${report.fallbackMs} ms were governed by an Adaptive controller`);
+  }
+  if (report.telemetry.outcomes.ungoverned > 0) {
+    fallbackProblems.push(
+      `${report.telemetry.outcomes.ungoverned} refresh window(s) had no policy in force at all`,
+    );
+  }
+  if (report.invalidMs > 0) {
+    fallbackProblems.push(
+      `${report.invalidMs} ms of simulated time had NO Jev policy in force`,
     );
   }
   if (report.telemetry.outcomes.live < 1 || report.accepted < 1) {
     fallbackProblems.push("no policy was ever accepted: this was not a Jev run");
+  }
+  if (report.liveMs <= 0 && report.accepted > 0) {
+    fallbackProblems.push("no simulated time was governed by the accepted policy");
   }
   if (!report.tripCompleted) {
     completionProblems.push(
@@ -463,8 +519,9 @@ async function main(): Promise<void> {
   const model = loadBenchmarkModel();
 
   console.log(
-    `\nJev fallback-free harness · client=${options.client}${options.client === "mock" && options.mockLatencyMs > 0 ? ` (+${options.mockLatencyMs}ms)` : ""}` +
+    `\nJev pure-execution harness · client=${options.client}${options.client === "mock" && options.mockLatencyMs > 0 ? ` (+${options.mockLatencyMs}ms)` : ""}` +
       `${options.mockFail === null ? "" : ` · stand-in failure=${options.mockFail}`}` +
+      `${options.mockSilentAfter === null ? "" : ` · silent after ${options.mockSilentAfter} answer(s)`}` +
       ` · traffic=${options.trafficLevel} · driver=${options.driver} · seed=${options.seed}` +
       ` · horizon=${secs(options.horizonMs)} · pace=${paceRatio === 0 ? "unpaced" : `${paceRatio}x`}` +
       ` · trips=${options.trips.length}`,
@@ -497,12 +554,30 @@ async function main(): Promise<void> {
         },
       },
     );
-    const result =
-      // A synchronous stand-in needs no event loop; anything live must be
-      // paced, exactly like the app, or the run would outrun its own answers.
-      options.client === "mock" && options.mockLatencyMs === 0 && paceRatio === 0
-        ? run.runUnder("jev")
-        : await run.runUnderAsync("jev", { paceRatio });
+    let result: RunOutcome;
+    try {
+      result =
+        // A synchronous stand-in needs no event loop; anything live must be
+        // paced, exactly like the app, or the run would outrun its own answers.
+        options.client === "mock" && options.mockLatencyMs === 0 && paceRatio === 0
+          ? run.runUnder("jev")
+          : await run.runUnderAsync("jev", { paceRatio });
+    } catch (error) {
+      // A run that could not START is a result too, and the harness reports it
+      // rather than crashing: the gate below fails it, by name.
+      if (controller === null) {
+        throw error;
+      }
+      const report = reportFor(tripId, controller, emptyResult(), options.horizonMs);
+      reports.push(report);
+      console.log(
+        `\n[run FAIL] ${tripId} · ${error instanceof Error ? error.message : String(error)}`,
+      );
+      for (const problem of routeVerdict(report).fallbackProblems) {
+        console.log(`       run: ${problem}`);
+      }
+      continue;
+    }
     if (controller === null) {
       throw new Error("the seam never asked for a jev controller");
     }
@@ -511,13 +586,13 @@ async function main(): Promise<void> {
     const verdict = routeVerdict(report);
     const wallMs = Date.now() - startedAt;
     console.log(
-      `\n[fallback ${verdict.fallbackProblems.length === 0 ? "PASS" : "FAIL"}` +
+      `\n[run ${verdict.fallbackProblems.length === 0 ? "PASS" : "FAIL"}` +
         ` · trip ${verdict.completionProblems.length === 0 ? "PASS" : "FAIL"}] ${tripId}` +
         ` · ${secs(wallMs)} wall · ${(report.simulatedMs / Math.max(1, wallMs)).toFixed(1)}x achieved` +
         ` · ${report.tripCompleted ? `completed in ${secs(report.tripTimeMs)}` : "NOT COMPLETED"}`,
     );
     for (const problem of verdict.fallbackProblems) {
-      console.log(`       fallback: ${problem}`);
+      console.log(`       run: ${problem}`);
     }
     for (const problem of verdict.completionProblems) {
       console.log(`       completion: ${problem}`);
@@ -529,12 +604,11 @@ async function main(): Promise<void> {
   console.log(
     [
       "trip".padEnd(32),
-      "windows live/held/fb".padEnd(20),
+      "windows live/held/ungov".padEnd(22),
       "liveMs".padStart(8),
       "heldMs".padStart(8),
-      "fallback".padStart(9),
-      "struct".padStart(8),
-      "fail".padStart(7),
+      "ungov".padStart(8),
+      "adaptive".padStart(8),
       "accepted".padStart(9),
       "p50/maxRTT".padStart(13),
       "label",
@@ -545,12 +619,11 @@ async function main(): Promise<void> {
     console.log(
       [
         report.tripId.padEnd(32),
-        `${outcomes.live}/${outcomes.held}/${outcomes.fallback}`.padEnd(20),
+        `${outcomes.live}/${outcomes.held}/${outcomes.ungoverned}`.padEnd(20),
         secs(report.liveMs).padStart(8),
         secs(report.heldMs).padStart(8),
-        secs(report.fallbackMs).padStart(9),
-        secs(report.structuralFallbackMs).padStart(8),
-        secs(report.failureFallbackMs).padStart(7),
+        secs(report.invalidMs + report.fallbackMs).padStart(8),
+        String(report.adaptiveTicks).padStart(8),
         String(report.accepted).padStart(9),
         `${report.latencyP50Ms}/${report.latencyMaxMs}ms`.padStart(13),
         report.label,
@@ -611,6 +684,7 @@ async function main(): Promise<void> {
           client: options.client,
           mockLatencyMs: options.mockLatencyMs,
           mockFail: options.mockFail,
+          mockSilentAfter: options.mockSilentAfter,
           trafficLevel: options.trafficLevel,
           driver: options.driver,
           seed: options.seed,
@@ -636,18 +710,20 @@ async function main(): Promise<void> {
     (report) => routeVerdict(report).completionProblems.length > 0,
   );
   if (fallbackFailed.length === 0) {
+    const held = reports.reduce((sum, report) => sum + report.heldMs, 0);
+    const governed = reports.reduce((sum, report) => sum + report.liveMs, 0);
     console.log(
-      `\nGATE: fallback-free on ${reports.length}/${reports.length} routes — ZERO fallback windows and ` +
-        "ZERO failure-attributed fallback time everywhere.",
+      `\nGATE: pure Jev on ${reports.length}/${reports.length} routes — every simulated ` +
+        "millisecond was governed by an accepted Jev policy: ZERO Adaptive ticks, ZERO fallback " +
+        "time, ZERO ungoverned time, ZERO windows with no policy in force.",
     );
-    const structural = reports.reduce((sum, report) => sum + report.structuralFallbackMs, 0);
     console.log(
-      `      the only fallback time in the run is the structural opening gap: ${secs(structural)} total` +
-        " (the policy a refresh produces is in force from the tick after it is accepted).",
+      `      ${secs(governed)} of simulated time governed by accepted policies` +
+        `${held > 0 ? `, ${secs(held)} of it HELD past the refresh window (the accelerated tail)` : ""}.`,
     );
   } else {
     console.log(
-      `\nGATE: ${fallbackFailed.length}/${reports.length} routes needed the safety net for a failure: ` +
+      `\nGATE: ${fallbackFailed.length}/${reports.length} routes were not pure Jev runs: ` +
         fallbackFailed.map((report) => report.tripId).join(", "),
     );
   }

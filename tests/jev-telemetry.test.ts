@@ -5,13 +5,13 @@
  *
  *   1. the classification: every refusal lands in the CLOSED vocabulary, and a
  *      schema refusal names the policy field and the bound it failed;
- *   2. an event per refresh window — live, held or fallback — with the simulated
+ *   2. an event per refresh window — live, held or ungoverned — with the simulated
  *      time each window spent on each source, summing to the run's own totals;
  *   3. the record can carry NO upstream text: a client error's message (which a
  *      client could in principle quote) never reaches it, and a detail is
  *      bounded and print-safe;
  *   4. the bounded list is bounded, and says how much it dropped;
- *   5. a healthy client's run has ZERO fallback windows and says so, and a
+ *   5. a healthy client's run has ZERO ungoverned windows and says so, and a
  *      failing one says exactly which window, why, and against which bound.
  */
 import { describe, expect, it } from "vitest";
@@ -186,11 +186,11 @@ describe("the recorder keeps one row per refresh window", () => {
     recorder.begin({ atEpochMs: 1_000, atSimMs: 0, generation: 1 });
     recorder.accept({ generation: 1, settledAtEpochMs: 1_050, clamped: 1, dropped: 0 });
     recorder.account({ deltaMs: 20_000, source: "live", held: false });
-    recorder.account({ deltaMs: 500, source: "fallback", held: false });
+    recorder.account({ deltaMs: 500, source: "invalidated", held: false });
     const summary = recorder.summary();
     expect(summary.total).toBe(1);
     expect(summary.issued).toBe(1);
-    expect(summary.outcomes).toEqual({ live: 1, held: 0, fallback: 0 });
+    expect(summary.outcomes).toEqual({ live: 1, held: 0, ungoverned: 0 });
     expect(Object.keys(summary.reasons)).toHaveLength(0);
     const event = summary.recent[0];
     expect(event.settled).toBe(true);
@@ -199,10 +199,10 @@ describe("the recorder keeps one row per refresh window", () => {
     expect(event.latencyMs).toBe(50);
     expect(event.clamped).toBe(1);
     expect(event.liveMs).toBe(20_000);
-    expect(event.fallbackMs).toBe(500);
+    expect(event.invalidMs).toBe(500);
   });
 
-  it("classifies a held window, a fallback window and a skipped one apart", () => {
+  it("classifies a held window, an ungoverned window and a skipped one apart", () => {
     const recorder = createJevRefreshTelemetryRecorder();
     // 1: refused while an older policy governs -> held, and the schema names
     //    the field.
@@ -215,7 +215,7 @@ describe("the recorder keeps one row per refresh window", () => {
       settledAtEpochMs: 5,
       governing: true,
     });
-    // 2: refused while nothing governs -> fallback, transport class.
+    // 2: refused while nothing governs -> ungoverned, transport class.
     recorder.begin({ atEpochMs: 10, atSimMs: 100, generation: 2 });
     recorder.refuse({
       generation: 2,
@@ -237,7 +237,7 @@ describe("the recorder keeps one row per refresh window", () => {
     expect(summary.total).toBe(3);
     expect(summary.issued).toBe(2);
     expect(summary.skipped).toBe(1);
-    expect(summary.outcomes).toEqual({ live: 0, held: 2, fallback: 1 });
+    expect(summary.outcomes).toEqual({ live: 0, held: 2, ungoverned: 1 });
     expect(summary.reasons).toEqual({ timeout: 1, "schema-invalid": 1, gap: 1 });
     expect(summary.fields).toEqual({ pressureScale: 1 });
     expect(summary.recent[0].bound).toContain("[0.5, 1.5]");
@@ -287,11 +287,11 @@ describe("the recorder keeps one row per refresh window", () => {
     const summary = recorder.summary();
     expect(summary.total).toBe(0);
     expect(summary.recent).toHaveLength(0);
-    expect(summary.outcomes).toEqual({ live: 0, held: 0, fallback: 0 });
+    expect(summary.outcomes).toEqual({ live: 0, held: 0, ungoverned: 0 });
   });
 
   it("is a closed outcome set", () => {
-    expect([...JEV_REFRESH_OUTCOMES]).toEqual(["live", "held", "fallback"]);
+    expect([...JEV_REFRESH_OUTCOMES]).toEqual(["live", "held", "ungoverned"]);
     expect(JEV_REFRESH_EVENT_BOUND).toBeGreaterThan(0);
   });
 });
@@ -299,17 +299,19 @@ describe("the recorder keeps one row per refresh window", () => {
 /* --------------------------------------- 3. the public surface stays plain -- */
 
 describe("the diagnostic vocabulary never reaches a public surface", () => {
-  it("words a fallback in plain English, not in reason tokens or field names", () => {
+  it("words an invalidated run in plain English, not in reason tokens or field names", () => {
     const policy: PresentationPolicy = {
-      source: "fallback",
+      source: "invalidated",
       liveMs: 300_000,
       replayMs: 0,
-      fallbackMs: 300_000,
+      fallbackMs: 0,
+      invalidMs: 300_000,
       accepted: 3,
       rejected: 9,
       refreshes: 12,
-      cause: "timeout",
-      causes: { timeout: 9 },
+      cause: "expired",
+      invalidation: { atSimMs: 300_000, reason: "expired" },
+      causes: { expired: 9 },
       dropped: 2,
       clamped: 1,
     };
@@ -324,16 +326,17 @@ describe("the diagnostic vocabulary never reaches a public surface", () => {
     for (const field of ["pressureScale", "corridorWeights", "regionWeights", "corridorIntents", "regionIntents"]) {
       expect(text, `field "${field}" leaked into the label`).not.toContain(field);
     }
-    // The plain words it does use are the ones the product already had.
-    expect(text).toContain("the model did not answer in time");
-    expect(text).toContain("of the run on the adaptive fallback");
+    // The plain words it does use are the product's own.
+    expect(text).toContain("the held policy passed its maximum age");
+    expect(text).toContain("of the run after Jev was lost");
+    expect(text).toContain("not a completed Jev result");
   });
 });
 
 /* --------------------------------------------- 3. a run's own record ------ */
 
 describe("a live run records where it went and why", () => {
-  it("keeps every window live under a healthy client, with no fallback window", async () => {
+  it("keeps every window live under a healthy client, with no ungoverned window", async () => {
     const { engine, partition } = crossroads();
     const runtime = createJevPolicyRuntime({
       client: createMockJevClient(),
@@ -349,14 +352,14 @@ describe("a live run records where it went and why", () => {
     const status = runtime.status();
     const summary = status.refreshTelemetry;
     expect(summary.total).toBeGreaterThanOrEqual(30);
-    expect(summary.outcomes.fallback).toBe(0);
+    expect(summary.outcomes.ungoverned).toBe(0);
     expect(summary.outcomes.live).toBe(summary.total - summary.skipped);
     expect(summary.reasons).toEqual({});
     // The rows add up to the run's own totals: nothing is attributed twice, and
     // nothing is lost between the per-window accounting and the run's.
-    const sum = (field: "liveMs" | "heldMs" | "fallbackMs") =>
+    const sum = (field: "liveMs" | "heldMs" | "invalidMs") =>
       summary.recent.reduce((total, event) => total + event[field], 0);
-    expect(sum("fallbackMs")).toBe(status.fallbackMs);
+    expect(sum("invalidMs")).toBe(status.invalidMs);
     expect(sum("liveMs")).toBe(status.liveMs);
     expect(summary.evicted).toBe(0);
   });
@@ -410,7 +413,7 @@ describe("a live run records where it went and why", () => {
       });
       await pacedTicks(runtime, engine, partition, 12);
       const summary = runtime.status().refreshTelemetry;
-      expect(summary.outcomes.fallback, expected).toBeGreaterThan(0);
+      expect(summary.outcomes.ungoverned, expected).toBeGreaterThan(0);
       expect(Object.keys(summary.reasons), expected).toContain(expected);
       // No upstream text, no credential, ever — whatever a client threw.
       const serialized = JSON.stringify(summary);
@@ -459,32 +462,36 @@ describe("a live run records where it went and why", () => {
     const summary = runtime.status().refreshTelemetry;
     expect(summary.issued).toBe(0);
     expect(summary.skipped).toBeGreaterThan(0);
-    expect(summary.outcomes.fallback).toBe(summary.total);
+    // Nothing was in force and nothing else could be: the windows are
+    // UNGOVERNED, which is the honest word for time this run did not control.
+    expect(summary.outcomes.ungoverned).toBe(summary.total);
     expect(summary.reasons.other).toBe(summary.total);
     expect(summary.recent[0].detail).toContain("no policy client");
+    expect(summary.recent[0].invalidMs).toBeGreaterThan(0);
   });
 
-  it("reports the structural opening gap as fallback TIME, on the window that asked for it", async () => {
+  it("names ungoverned time on the window that lived it, instead of silence", async () => {
     const { engine, partition } = crossroads();
     // The answer's arrival is controlled by the test, not by a timer: the gap
-    // it measures is the structural one, and a loaded machine must not be able
-    // to turn this into a race.
+    // it measures is the startup gap, and a loaded machine must not be able to
+    // turn this into a race.
     let answer: ((value: unknown) => void) | null = null;
     const runtime = createJevPolicyRuntime({
       client: {
         id: "mock",
         requestPolicy: () => new Promise((resolve) => (answer = resolve)),
       },
-      scenarioFingerprint: "opening-gap",
+      scenarioFingerprint: "startup-gap",
       refreshMs: 10_000,
     });
     await pacedTicks(runtime, engine, partition, 4);
-    // Nothing governs yet: the run is WAITING for its first opinion, which is
-    // exactly the fallback the first window must report as time, not as silence.
+    // Nothing governs yet: the run is WAITING for its first policy, and the
+    // window that asked for it must report that time as UNGOVERNED — never as
+    // fallback time, which would name a controller that does not exist.
     const waiting = runtime.status().refreshTelemetry;
-    expect(waiting.outcomes.fallback).toBe(0);
+    expect(waiting.outcomes.ungoverned).toBe(0);
     expect(waiting.unresolved).toBe(1);
-    expect(waiting.recent[0].fallbackMs).toBeGreaterThan(0);
+    expect(waiting.recent[0].invalidMs).toBeGreaterThan(0);
     (answer as unknown as (value: unknown) => void)(policy(1.1));
     await Promise.resolve();
     await pacedTicks(runtime, engine, partition, 4);
@@ -492,24 +499,27 @@ describe("a live run records where it went and why", () => {
     const status = runtime.status();
     const summary = status.refreshTelemetry;
     // The first window produced the policy that governs, so it is LIVE; the
-    // fallback time inside it is the gap before the answer, reported by name.
+    // ungoverned time inside it is the wait before the answer, reported there.
     const first = summary.recent[0];
     expect(first.settled).toBe(true);
     expect(first.outcome).toBe("live");
     expect(first.reason).toBeNull();
-    expect(first.fallbackMs).toBeGreaterThan(0);
-    expect(summary.outcomes.fallback).toBe(0);
-    expect(status.dominantFallbackCause).toBe("first-policy");
-    expect(summary.reasonMs.gap).toBeGreaterThanOrEqual(first.fallbackMs);
-    // The fallback time is classified per reason and adds up to the run's own
-    // fallback total: no fallback second is left unattributed.
+    expect(first.invalidMs).toBeGreaterThan(0);
+    expect(summary.outcomes.ungoverned).toBe(0);
+    expect(summary.reasonMs.gap).toBeGreaterThanOrEqual(first.invalidMs);
+    // Ungoverned time is classified per reason and adds up to the run's own
+    // total: no ungoverned millisecond is left unattributed.
     expect(
       Object.values(summary.reasonMs).reduce((total, ms) => total + ms, 0),
-    ).toBe(status.fallbackMs);
-    // Every observed interval is accounted exactly once.
-    expect(status.liveMs + status.replayMs + status.fallbackMs).toBe(
+    ).toBe(status.invalidMs);
+    expect(summary.invalidMs).toBe(status.invalidMs);
+    // Every observed interval is accounted exactly once, and no Adaptive
+    // controller ever governed a millisecond of it.
+    expect(status.liveMs + status.replayMs + status.invalidMs + status.fallbackMs).toBe(
       engine.traffic.timeMs - SIMULATION_TIMESTEP_MS,
     );
+    expect(status.fallbackMs).toBe(0);
+    expect(status.adaptiveTicks).toBe(0);
   });
 
   it("survives a reset with the run it belongs to", () => {
@@ -524,7 +534,7 @@ describe("a live run records where it went and why", () => {
     expect(controller.meta().telemetry.recent).toHaveLength(0);
     // Provenance carries the counters, never the per-event wall clock.
     const provenance = jevProvenance(controller.meta());
-    expect(provenance.refreshOutcomes).toEqual({ live: 0, held: 0, fallback: 0 });
+    expect(provenance.refreshOutcomes).toEqual({ live: 0, held: 0, ungoverned: 0 });
     expect(provenanceLine(provenance)).not.toContain("windows:");
   });
 });

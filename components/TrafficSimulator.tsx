@@ -38,6 +38,8 @@ import {
   debugMode,
   discardNeedsConfirm,
   shouldReaskBaselines,
+  runStoppedMessage,
+  runUnableMessage,
   type DiscardAction,
 } from "./ui-model";
 
@@ -147,9 +149,19 @@ function updateDebugHook(event: WorkerEvent): void {
       hook.metrics = event.metrics;
       break;
     case "RUN_COMPLETE":
-      // The run's per-refresh record: the answer to "where did Jev fall back,
-      // and why". Kept on the `?debug` hook only — nothing here is rendered.
+      // The run's per-refresh record: the answer to "where did Jev fail, and
+      // why". Kept on the `?debug` hook only — nothing here is rendered.
       hook.telemetry = event.telemetry;
+      hook.error = null;
+      break;
+    case "RUN_INVALIDATED":
+      hook.telemetry = event.telemetry;
+      hook.error = runStoppedMessage(event.invalidation);
+      break;
+    case "JEV_UNABLE":
+      hook.error = runUnableMessage(event.reason, event.detail);
+      break;
+    case "JEV_STARTING":
       hook.error = null;
       break;
     case "ERROR":
@@ -324,6 +336,7 @@ export function TrafficSimulator() {
         }
         case "RUN_COMPLETE": {
           store.setRunning(false);
+          store.setStarting(false);
           store.setRunComplete(true);
           // Remember WHICH world finished, so a READY for that same world cannot
           // erase the outcome (see applyReady).
@@ -359,6 +372,39 @@ export function TrafficSimulator() {
         case "ERROR": {
           store.setError(data.message);
           store.setRunning(false);
+          break;
+        }
+        case "JEV_STARTING": {
+          // The run is waiting for its first live policy: no simulated time is
+          // passing, and it will not start until one is accepted.
+          store.setStarting(true);
+          store.setRunning(false);
+          break;
+        }
+        case "JEV_READY": {
+          store.setStarting(false);
+          store.setRunning(true);
+          break;
+        }
+        case "JEV_UNABLE": {
+          // The run could not start. Nothing was simulated and nothing was
+          // substituted for Jev — the message is the whole account of it.
+          store.setStarting(false);
+          store.setRunning(false);
+          store.setRunComplete(false);
+          store.setLiveResult(null);
+          store.setError(runUnableMessage(data.reason, data.detail));
+          break;
+        }
+        case "RUN_INVALIDATED": {
+          // Jev was lost and the run stopped. The measurements already on screen
+          // stay; what must NOT happen is this reading as a completed Jev result.
+          store.setStarting(false);
+          store.setRunning(false);
+          store.setRunComplete(false);
+          store.setLiveResult(null);
+          store.setPolicy(data.policy);
+          store.setError(runStoppedMessage(data.invalidation));
           break;
         }
       }

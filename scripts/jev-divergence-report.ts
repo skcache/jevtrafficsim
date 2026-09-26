@@ -9,12 +9,14 @@
  */
 import { loadBenchmarkModel } from "@/benchmark/model";
 import { createAdaptiveController } from "@/controllers/adaptive";
-import { zoneMargin, createJevController, resolveJevWeights } from "@/controllers/jev";
+import { zoneMargin, createJevController, resolveJevWeights, type JevController } from "@/controllers/jev";
 import type { JevClient } from "@/jev/client";
 import { neutralJevPolicy, parseJevPolicy, JEV_SCHEMA_VERSION, type JevPolicy } from "@/jev/schema";
 import { buildCityPartition } from "@/sim/regions";
 import { productionDemand } from "@/sim/demand-profile";
 import { createEngine, runEngine, type ScheduledSpawn } from "@/sim/engine";
+import { controllerObservation, finishRunController, isJevRunController } from "@/worker/challenge-compare";
+import { isPromiseLike, type JevStartOutcome } from "@/jev/runtime";
 import { buildChallengeResult } from "@/worker/challenge-result";
 import { buildChallengeScenario, resolveScenarioWorld } from "@/worker/challenge-scenario";
 import { materializeChallengeTrip } from "@/worker/ego-spawn";
@@ -90,15 +92,28 @@ function run(policy: Partial<JevPolicy> | null) {
           client: scriptedClient(policy),
           scenarioFingerprint: "divergence-report",
         });
-  const rec = recording(base as never);
   const engine = createEngine({
     city: model.city,
-    controller: rec.controller as never,
+    controller: base as never,
     spawns,
     driver: "tourist",
     incidents: { seed: world.incidentPlan.incidentSeed, script: [...world.incidentPlan.entries] },
   });
+  // THE STARTUP GATE: a Jev run does not advance a single simulated millisecond
+  // until its first policy is accepted. The gate is asked on the controller
+  // itself (the recording wrapper below only sees directives), so the two runs
+  // are compared over exactly the ticks Jev governed.
+  if (isJevRunController(base as never)) {
+    const gated = base as unknown as JevController;
+    const started = gated.start(controllerObservation(engine));
+    if (isPromiseLike<JevStartOutcome>(started) || started.state !== "ready") {
+      throw new Error("the divergence report needs a first policy it can obtain inline");
+    }
+  }
+  const rec = recording(base as never);
+  engine.controller = rec.controller as never;
   runEngine(engine, HORIZON_MS);
+  finishRunController(engine);
   const result = buildChallengeResult(engine, scenario, "adaptive", 0, false);
   return { result, log: rec.log, tripTimeMs: result.trip.tripTimeMs, completed: result.trip.completed };
 }

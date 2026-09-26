@@ -30,6 +30,7 @@ import type { IncidentKind, IncidentRecord } from "@/sim/incidents";
 import type { IntersectionId, RoadId, VehicleId, VehicleState, VehicleType } from "@/sim/types";
 import { activeVehicleCount } from "@/sim/traffic";
 import type { JevCause, JevCauseCounts } from "@/jev/runtime";
+import type { JevPolicySource } from "@/jev/trace";
 
 /** One directed road carrying visible state. Absent road = free baseline. */
 export interface PresentationRoadTraffic {
@@ -120,9 +121,12 @@ export interface PresentationIncidentMarker {
 
 /**
  * Who actually governed the signals this run, in the smallest form the product
- * needs. A policy run that spent time in its fallback must say so: the numbers
- * on screen came from two different decision makers, and presenting the whole
- * run as pure live Jev would be a lie about the experiment.
+ * needs.
+ *
+ * `live` and `replay` mean a Jev policy was speaking; `waiting` means the run
+ * has not started yet (its first policy is still being obtained) and
+ * `invalidated` means Jev was lost and the run stopped. There is no member for
+ * "something else decided": a live Jev run has no other controller in it.
  *
  * The same standard applies to the two halves of "the policy governed it": a
  * policy that governed past its freshness window was still the model's opinion,
@@ -132,11 +136,18 @@ export interface PresentationIncidentMarker {
  * happened instead of collapsing them into one word.
  */
 export interface PresentationPolicy {
-  /** "live" and "replay" are the policy speaking; "fallback" is the safety net. */
-  readonly source: "live" | "replay" | "fallback";
+  /** Where the decisions come from: a policy (`live`/`replay`), or none at all. */
+  readonly source: JevPolicySource;
   readonly liveMs: number;
   readonly replayMs: number;
+  /**
+   * Simulated ms an Adaptive controller governed. A HARD ZERO for a Jev run:
+   * the controller has no Adaptive path, and the field is reported so the zero
+   * is stated rather than implied.
+   */
   readonly fallbackMs: number;
+  /** Simulated ms NO Jev policy governed: time this run did not control. */
+  readonly invalidMs?: number;
   /** Subset of the governed time covered after the policy's freshness window. */
   readonly heldMs?: number;
   /** Simulated ms a policy may keep governing without a replacement. */
@@ -144,7 +155,12 @@ export interface PresentationPolicy {
   readonly accepted: number;
   readonly rejected: number;
   readonly refreshes: number;
-  /** Why the safety net is covering, when it is (a bounded, classified cause). */
+  /** Ticks an Adaptive controller decided. A HARD ZERO, for the same reason. */
+  readonly adaptiveTicks?: number;
+  /**
+   * Why Jev is not governing (or did not start): a bounded, classified cause.
+   * Null while a policy governs.
+   */
   readonly cause?: JevCause | null;
   /** How many times each classified cause was seen. */
   readonly causes?: JevCauseCounts;
@@ -152,15 +168,21 @@ export interface PresentationPolicy {
   readonly clamped?: number;
   /** Answers dropped below the confidence floor across accepted answers. */
   readonly dropped?: number;
+  /**
+   * Non-null once Jev was LOST: the simulated instant the policy in force
+   * outlived its maximum hold, and the classified reason. The run stopped there
+   * with its measurements kept; it was never continued under another controller.
+   */
+  readonly invalidation?: { readonly atSimMs: number; readonly reason: JevCause } | null;
 }
 
-/** Fraction of a policy run that its fallback had to cover, in [0,1]. */
-export function fallbackShare(policy: PresentationPolicy): number {
-  const total = policy.liveMs + policy.replayMs + policy.fallbackMs;
+/** Fraction of a Jev run NO Jev policy governed, in [0,1]. */
+export function ungovernedShare(policy: PresentationPolicy): number {
+  const total = policy.liveMs + policy.replayMs + (policy.invalidMs ?? 0) + policy.fallbackMs;
   if (!Number.isFinite(total) || total <= 0) {
     return 0;
   }
-  return Math.min(1, Math.max(0, policy.fallbackMs / total));
+  return Math.min(1, Math.max(0, (policy.invalidMs ?? 0) / total));
 }
 
 /**
@@ -168,7 +190,7 @@ export function fallbackShare(policy: PresentationPolicy): number {
  * window — i.e. how much of "live Jev" was an opinion nobody had refreshed.
  */
 export function heldShare(policy: PresentationPolicy): number {
-  const total = policy.liveMs + policy.replayMs + policy.fallbackMs;
+  const total = policy.liveMs + policy.replayMs + (policy.invalidMs ?? 0) + policy.fallbackMs;
   if (!Number.isFinite(total) || total <= 0) {
     return 0;
   }

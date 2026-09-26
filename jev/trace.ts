@@ -15,10 +15,11 @@
  * counted in the runtime's status and reported to the caller; they are not
  * policy.
  *
- * Fallback is not an event either. "No valid policy right now" is a property of
- * the gap between events, and it is reproduced exactly by replaying the same
- * times against the same TTL — recording it would be recording a decision the
- * run did not make.
+ * No-policy time is not an event either. "No valid policy right now" is a
+ * property of the gap between events, and it is reproduced exactly by replaying
+ * the same times against the same TTL — recording it would be recording a
+ * decision the run did not make. A run that LOST its policy for good is not a
+ * traceable run at all: it is invalidated, and its account says so.
  *
  * ## Determinism
  *
@@ -31,8 +32,21 @@ import { parseJevPolicy, type JevPolicy, type JevValidation } from "./schema";
 
 export const JEV_TRACE_VERSION = 1;
 
-/** Where a policy in force came from. */
-export type JevPolicySource = "live" | "replay" | "fallback";
+/**
+ * What is in force for a Jev run, in the only four states it has.
+ *
+ *   live          a policy accepted from the live client governs the run
+ *   replay        a policy from a recorded trace governs it, offline
+ *   waiting       the run has NOT started: its first policy has not been
+ *                 accepted yet (the startup gate). No simulated time passes.
+ *   invalidated   Jev was LOST: the policy in force outlived its maximum hold.
+ *                 The run stops; it is never continued under another controller.
+ *
+ * There is deliberately no `fallback` member: a live Jev run has no Adaptive
+ * path at any stage, so "the safety net is driving" is not a state this codebase
+ * can report.
+ */
+export type JevPolicySource = "live" | "replay" | "waiting" | "invalidated";
 
 /**
  * Which policy source a run actually used (Issue #38).
@@ -73,8 +87,14 @@ export function provenanceLabel(adapter: JevAdapter): string {
   return `jev-${adapter}`;
 }
 
-/** Sources a recorded event can have: fallback is never recorded as a policy. */
-export type JevTraceSource = Exclude<JevPolicySource, "fallback">;
+/**
+ * Sources a recorded event can have. A trace records POLICIES a run accepted,
+ * so the only two answers are where that policy came from when it was recorded
+ * (`live`) and what it is when it is replayed offline (`replay`). The states a
+ * run can be in without a policy in force — `waiting` and `invalidated` — are
+ * never events: recording one would be recording a decision the run did not make.
+ */
+export type JevTraceSource = "live" | "replay";
 
 export interface JevTraceEvent {
   /** The scenario this policy belongs to; a mismatch invalidates it. */

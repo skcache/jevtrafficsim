@@ -15,6 +15,7 @@
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import { createJevController } from "@/controllers/jev";
+import type { TrafficController } from "@/controllers/contract";
 import { createRelayJevClient, JEV_RELAY_TIMEOUT_MS } from "@/jev/client";
 import { CHICAGO_SCALE_LABELS } from "@/cities/chicago";
 import { METRO_SCALE_INDEX } from "@/cities/chicago-trips";
@@ -26,10 +27,19 @@ import {
 } from "@/worker/challenge-scenario";
 import { buildChallengeResult } from "@/worker/challenge-result";
 import type { PresentationPolicy } from "@/worker/presentation-snapshot";
-import type { JevCause } from "@/jev/runtime";
+import type {
+  JevCause,
+  JevInvalidation,
+  JevRuntimeObservation,
+  JevStartOutcome,
+} from "@/jev/runtime";
 import type { JevRefreshTelemetry } from "@/jev/telemetry";
 import { fingerprintForRun } from "@/worker/challenge-scenario";
-import { runComparison } from "@/worker/challenge-compare";
+import {
+  controllerObservation,
+  finishRunController,
+  runComparison,
+} from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { loadChicagoCity } from "@/cities/chicago-assets";
 import type { MapModel } from "@/cities/map-model";
@@ -106,6 +116,11 @@ interface WorkerState {
   modified: boolean;
   /** Guards against overlapping async builds (fast scale switching). */
   buildToken: number;
+  /**
+   * Jev was LOST during this run (Issue #61): the run stopped with its
+   * measurements kept and may not be resumed — only a new run may start.
+   */
+  invalidated: boolean;
 }
 
 const state: WorkerState = {
@@ -126,6 +141,7 @@ const state: WorkerState = {
   manualIncidents: 0,
   modified: false,
   buildToken: 0,
+  invalidated: false,
 };
 
 function post(event: WorkerEvent): void {
@@ -145,11 +161,34 @@ function makeController(choice: ControllerChoice, identity: string) {
 }
 
 /**
+ * The run-control seam a Jev controller exposes to its DRIVER (Issue #61): the
+ * startup gate, the accelerated tail, the run's end, and the invalidation it
+ * reports when Jev is lost. Read structurally, so a Fixed or Adaptive run simply
+ * has none of it.
+ */
+interface JevRunControl {
+  start(observation: JevRuntimeObservation): JevStartOutcome | Promise<JevStartOutcome>;
+  finish(atSimMs: number): void;
+  beginAcceleratedTail(): void;
+  invalidation(): JevInvalidation | null;
+}
+
+/** The Jev run-control seam of the engine's current controller, or null. */
+function jevRunControl(engine: EngineState | null): JevRunControl | null {
+  const controller = engine?.controller as (TrafficController & Partial<JevRunControl>) | undefined;
+  if (!controller || controller.id !== "jev" || typeof controller.invalidation !== "function") {
+    return null;
+  }
+  return controller as TrafficController & JevRunControl;
+}
+
+/**
  * Who is really deciding the signals right now.
  *
- * A policy controller knows how much of the run its own policy governed and how
- * much the safety fallback had to cover. That distinction is the product's, not
- * an implementation detail: a run that spent meaningful time on the fallback may
+ * A policy controller knows how much of the run its own policy governed, how
+ * much of that was an opinion past its freshness window, and how much time NO
+ * Jev policy governed at all. That distinction is the product's, not an
+ * implementation detail: a run that did not control its own simulated time may
  * never be presented as pure live Jev. Controllers without an external policy
  * (Fixed, Adaptive) report nothing.
  */
@@ -158,10 +197,8 @@ function policyProvenance(): PresentationPolicy | null {
     | {
         meta?: () => PresentationPolicy & {
           kind?: string;
-          /** The controller's own naming for the cause behind the fallback. */
-          fallbackReason?: JevCause | null;
-          /** The cause that covered the most fallback time, or null. */
-          dominantFallbackCause?: JevCause | null;
+          /** Why Jev is not governing (or did not start): a classified cause. */
+          cause?: JevCause | null;
         };
       }
     | undefined;
@@ -175,22 +212,24 @@ function policyProvenance(): PresentationPolicy | null {
       liveMs: meta.liveMs,
       replayMs: meta.replayMs,
       fallbackMs: meta.fallbackMs,
-      // The two halves of "the policy governed it": how much of that time was an
-      // opinion past its freshness window, and what each answer cost. They ride
-      // every frame so the label can say what actually happened.
+      // The halves of "the policy governed it": how much of that time was an
+      // opinion past its freshness window, how much time nothing governed at
+      // all, and what each answer cost. They ride every frame so the label can
+      // say what actually happened.
       heldMs: meta.heldMs,
+      invalidMs: meta.invalidMs,
       maxHoldMs: meta.maxHoldMs,
+      adaptiveTicks: meta.adaptiveTicks,
       accepted: meta.accepted,
       rejected: meta.rejected,
       refreshes: meta.refreshes,
-      // `cause` names WHY the safety net ran: the cause that covered the most
-      // fallback time, or the reason it is covering right now. A run that never
-      // refused anything still had fallback time (the opening gap) and this is
-      // what names it, instead of leaving a bare percentage.
-      cause: meta.dominantFallbackCause ?? meta.fallbackReason ?? null,
+      // `cause` names WHY Jev is not governing, or why it never started: the
+      // classified cause, never a bare statement that something went wrong.
+      cause: meta.cause ?? null,
       causes: meta.causes,
       clamped: meta.clamped,
       dropped: meta.dropped,
+      invalidation: meta.invalidation ?? null,
     };
   } catch {
     return null;
@@ -360,9 +399,15 @@ function egoArrived(engine: EngineState): boolean {
  * byte-identical engine state — same steps, same order, same result, same
  * comparison — so only the delay is deleted.
  */
-function finishHorizon(engine: EngineState, untilMs: number): void {
+function finishHorizon(engine: EngineState, untilMs: number, control: JevRunControl | null): void {
   while (engine.traffic.timeMs < untilMs) {
     stepEngine(engine);
+    // Jev LOST mid-tail: stop immediately. The run is invalidated, and running
+    // the rest of the horizon without a policy would be exactly the silent
+    // substitution this contract forbids.
+    if (control !== null && control.invalidation() !== null) {
+      return;
+    }
   }
 }
 
@@ -398,7 +443,7 @@ async function buildRun(config: RunConfig): Promise<void> {
   // The curated challenge IS a trip across real Chicago, and the trips are
   // defined against the Metro graph: every run loads Metro.
   const scaleIndex = METRO_SCALE_INDEX;
-  const token = (state.buildToken += 1);
+  const buildToken = (state.buildToken += 1);
   let model: MapModel;
   try {
     model = await loadChicagoCity(scaleIndex);
@@ -409,7 +454,7 @@ async function buildRun(config: RunConfig): Promise<void> {
     });
     return;
   }
-  if (token !== state.buildToken) {
+  if (buildToken !== state.buildToken) {
     return; // a newer build superseded this one
   }
   const city = model.city;
@@ -483,6 +528,7 @@ async function buildRun(config: RunConfig): Promise<void> {
   }));
   state.manualIncidentSequence = 0;
   state.snapshotSequence = 0;
+  state.invalidated = false;
   capabilitySignature = null;
   postIncidentCapabilities();
   post({
@@ -514,7 +560,9 @@ async function buildRun(config: RunConfig): Promise<void> {
   });
   postSnapshot();
   postMetrics();
-  start(); // initial state: automatically running (documented behavior)
+  // Initial state: automatically running (documented behaviour) — but a Jev run
+  // first has to pass the startup gate, which may take a moment and may fail.
+  await beginRun(buildToken);
 }
 
 /**
@@ -533,11 +581,121 @@ function scheduleNextTick(tickCostMs = 0): void {
 }
 
 function start(): void {
-  if (!state.engine || state.running || state.complete) {
+  if (!state.engine || state.running || state.complete || state.invalidated) {
     return;
   }
   state.running = true;
   scheduleNextTick();
+}
+
+/**
+ * THE STARTUP GATE (Issue #61), for a run that has just been built.
+ *
+ * A live Jev run does not advance a single simulated millisecond until its first
+ * policy is accepted: the wait is announced (so the UI can say what it is waiting
+ * for), and when no policy can be obtained the run does not start AT ALL — the
+ * reason travels to the UI and nothing is substituted for Jev.
+ */
+async function beginRun(buildToken: number): Promise<void> {
+  const engine = state.engine;
+  if (engine === null) {
+    return;
+  }
+  const control = jevRunControl(engine);
+  if (control !== null) {
+    post({ type: "JEV_STARTING", resuming: false });
+    const started = await control.start(controllerObservation(engine));
+    if (buildToken !== state.buildToken) {
+      return; // a newer build superseded this run
+    }
+    if (started.state === "unable") {
+      state.running = false;
+      post({
+        type: "JEV_UNABLE",
+        reason: started.reason,
+        detail: started.detail,
+        attempts: started.attempts,
+      });
+      return;
+    }
+    post({ type: "JEV_READY" });
+  }
+  start();
+}
+
+/**
+ * Stop a run whose Jev policy was LOST, honestly.
+ *
+ * The measurements collected so far are kept and published, the truthful reason
+ * is reported, and no normal completion is produced: this run is NOT a Jev
+ * result and must never be shown as one. Nothing takes Jev's place.
+ */
+function stopInvalidated(engine: EngineState, config: RunConfig, invalidation: JevInvalidation): void {
+  state.running = false;
+  state.invalidated = true;
+  clearTimer();
+  finishRunController(engine);
+  postSnapshot();
+  postMetrics();
+  post({
+    type: "RUN_INVALIDATED",
+    timeMs: engine.traffic.timeMs,
+    invalidation: { atSimMs: invalidation.atSimMs, reason: invalidation.reason },
+    result: buildChallengeResult(
+      engine,
+      state.scenario ?? fallbackScenario(config),
+      config.controller,
+      state.manualIncidents,
+      true,
+    ),
+    policy: policyProvenance(),
+    telemetry: policyTelemetry(),
+  });
+}
+
+/** The scenario a config describes, rebuilt only if the run never stored one. */
+function fallbackScenario(config: RunConfig): ChallengeScenario {
+  return buildChallengeScenario({
+    tripId: config.tripId,
+    trafficLevel: config.trafficLevel,
+    driver: config.driver,
+    seed: config.seed,
+    durationMs: config.durationMs,
+  });
+}
+
+/**
+ * A mid-run switch TO a policy controller waits for that controller's first
+ * policy, exactly as a fresh run does. Stepping on without one would be the
+ * silent substitution this contract forbids, so the run pauses instead — and if
+ * the policy cannot be obtained, the run does not continue.
+ */
+async function gateSwitchedController(engine: EngineState): Promise<void> {
+  const control = jevRunControl(engine);
+  if (control === null) {
+    return;
+  }
+  const wasRunning = state.running;
+  state.running = false;
+  clearTimer();
+  post({ type: "JEV_STARTING", resuming: true });
+  const started = await control.start(controllerObservation(engine));
+  if (state.engine !== engine || state.invalidated) {
+    return; // superseded by a newer build, or the run was stopped meanwhile
+  }
+  if (started.state === "unable") {
+    post({
+      type: "JEV_UNABLE",
+      reason: started.reason,
+      detail: started.detail,
+      attempts: started.attempts,
+    });
+    return;
+  }
+  post({ type: "JEV_READY" });
+  if (wasRunning) {
+    start();
+  }
 }
 
 function pause(): void {
@@ -577,10 +735,24 @@ function runTick(): void {
       // rest of the horizon back to back instead of pacing it out in real time.
       postSnapshot();
       postMetrics();
-      finishHorizon(engine, config.durationMs);
+      const control = jevRunControl(engine);
+      // The tail never turns the event loop, so a refresh requested during it
+      // could not be answered — asking anyway is an unpaced burst of doomed
+      // requests (measured: `rate-limited x18`). The LAST ACCEPTED policy
+      // governs the tail instead, reported as HELD, which is still Jev control
+      // and never a gap.
+      control?.beginAcceleratedTail();
+      finishHorizon(engine, config.durationMs, control);
     }
   } catch (error) {
     handleError(error);
+    return;
+  }
+  // Jev LOST (Issue #61): stop here, keep the measurements, say why. There is
+  // no substitution — the run is invalidated, not continued under anything else.
+  const invalidation = jevRunControl(engine)?.invalidation() ?? null;
+  if (invalidation !== null) {
+    stopInvalidated(engine, config, invalidation);
     return;
   }
   // ONE frame per real tick, never one per simulated step. The renderer
@@ -593,6 +765,10 @@ function runTick(): void {
   if (engine.traffic.timeMs >= config.durationMs) {
     state.running = false;
     state.complete = true;
+    // The run's simulated time is over: close its accounting at the final
+    // instant, so the numbers the result carries cover the whole window and an
+    // answer that arrives later can never be counted as a governing policy.
+    finishRunController(engine);
     postSnapshot();
     postMetrics();
     post({
@@ -602,14 +778,7 @@ function runTick(): void {
       telemetry: policyTelemetry(),
       result: buildChallengeResult(
         engine,
-        state.scenario ??
-          buildChallengeScenario({
-            tripId: config.tripId,
-            trafficLevel: config.trafficLevel,
-            driver: config.driver,
-            seed: config.seed,
-            durationMs: config.durationMs,
-          }),
+        state.scenario ?? fallbackScenario(config),
         config.controller,
         state.manualIncidents,
         state.modified,
@@ -660,20 +829,34 @@ function handleCommand(command: WorkerCommand): void {
         post({ type: "ERROR", message: "cannot SET_CONTROLLER before INIT" });
         return;
       }
+      if (state.invalidated) {
+        // A run that lost Jev was stopped with its measurements kept. Continuing
+        // it under another controller would be exactly the substitution the
+        // execution contract forbids: a new run is the honest way forward.
+        post({
+          type: "ERROR",
+          message: "this run lost Jev and was stopped — start a new run instead of switching controllers",
+        });
+        return;
+      }
       // In-place switch: traffic, incidents, metrics, seed and simulation time
       // are untouched; policy changes from the next tick. Switching controller
       // mid-run must not change the scenario identity: the new Jev controller is
       // bound to the run that is already in progress.
       const runningConfig = state.config;
+      const engine = state.engine;
       // Half the run under one controller and half under another is not a run
       // of either: the result stays visible but is marked non-comparable.
       state.modified = true;
       setEngineController(
-        state.engine,
+        engine,
         makeController(command.controller, fingerprintForRun(runningConfig)),
       );
       state.config = { ...runningConfig, controller: command.controller };
       postSnapshot(); // controller id visible immediately
+      // Switching TO Jev mid-run passes the SAME gate as starting one: the run
+      // waits for the first policy instead of stepping without one.
+      void gateSwitchedController(engine);
       return;
     }
     case "COMPARE": {

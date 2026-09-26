@@ -2,8 +2,8 @@
  * Per-refresh Jev telemetry (owner report: "track where Jev falls back and why").
  *
  * The runtime's own accounting answers HOW MUCH of a run each source governed
- * (`liveMs` / `heldMs` / `fallbackMs`) and how much fallback time each cause
- * covered (`fallbackCauseMs`). What a summary of totals cannot say is WHICH
+ * (`liveMs` / `heldMs`) and how much time NO Jev policy governed at all
+ * (`invalidMs`). What a summary of totals cannot say is WHICH
  * refresh went wrong: a run that fell back twice for two different reasons and a
  * run that fell back once for twice as long produce the same numbers, and the
  * one thing the owner asked for — "track where Jev falls back and why" — is
@@ -18,8 +18,13 @@
  *                  request was issued)
  *   outcome        live      this refresh produced the policy in force
  *                  held      it produced nothing; an older policy still governed
- *                  fallback  it produced nothing AND nothing governed: the
- *                            Adaptive safety net drove this window
+ *                  ungoverned  it produced nothing AND no policy was in force
+ *                            at all. There is deliberately no `fallback`
+ *                            member: a Jev run has no second controller to fall
+ *                            back to, so "the safety net drove this window" is
+ *                            not a state this codebase can report. A window in
+ *                            this state is time the run did not control, and
+ *                            `invalidMs` says how much.
  *   reason         for anything not live, one member of a CLOSED vocabulary:
  *                  timeout / rate-limited / upstream-5xx / transport /
  *                  malformed-json / schema-invalid / confidence-rejected /
@@ -32,9 +37,11 @@
  *                  bound it was checked against (e.g. pressureScale,
  *                  "pressureScale in [0.5, 1.5]")
  *   detail         this codebase's OWN short sentence
- *   liveMs/heldMs/fallbackMs
+ *   liveMs/heldMs/invalidMs
  *                  the simulated time THIS window spent on each source, so the
- *                  per-refresh rows add up to the run's own totals
+ *                  per-refresh rows add up to the run's own totals. There is no
+ *                  fallback bucket to report: `invalidMs` is the honest home for
+ *                  time no Jev policy governed at all.
  *
  * ## What can never appear here
  *
@@ -57,7 +64,7 @@
  * ## Outcomes are resolved once, and say when they are not
  *
  * A window resolves when its answer is used (live), when its answer is refused
- * (held or fallback, decided by whether a policy was in force at that moment),
+ * (held or ungoverned, decided by whether a policy was in force at that moment),
  * or when the window was skipped and never asked (gap/other). A window whose
  * request was still in flight when the run ended stays UNRESOLVED: it is
  * reported as such (`settled: false`, counted in `unresolved`) rather than
@@ -68,7 +75,7 @@ import type { JevCause, JevRejectionKind } from "./runtime";
 import type { JevPolicySource } from "./trace";
 
 /** What a refresh window produced. */
-export const JEV_REFRESH_OUTCOMES = ["live", "held", "fallback"] as const;
+export const JEV_REFRESH_OUTCOMES = ["live", "held", "ungoverned"] as const;
 
 export type JevRefreshOutcome = (typeof JEV_REFRESH_OUTCOMES)[number];
 
@@ -241,7 +248,8 @@ export interface JevRefreshEvent {
   readonly latencyMs: number | null;
   readonly liveMs: number;
   readonly heldMs: number;
-  readonly fallbackMs: number;
+  /** Simulated ms this window spent with NO Jev policy in force. */
+  readonly invalidMs: number;
   readonly clamped: number;
   readonly dropped: number;
   /** A live window whose accepted answer carried no usable model opinion. */
@@ -264,8 +272,17 @@ export interface JevRefreshTelemetry {
   readonly reasons: Readonly<Partial<Record<JevRefreshReason, number>>>;
   /** Live windows whose answer carried no usable opinion, by reason. */
   readonly degraded: Readonly<Partial<Record<JevRefreshReason, number>>>;
-  /** Simulated ms each reason covered, across every window that had it. */
+  /**
+   * Simulated ms of UNGOVERNED time each reason covered, across every window
+   * that had it. Sums exactly to `invalidMs`.
+   */
   readonly reasonMs: Readonly<Partial<Record<JevRefreshReason, number>>>;
+  /**
+   * Simulated ms with NO Jev policy in force, across every window. Zero for a
+   * run that started under Jev and kept it; a non-zero value is time the run did
+   * not control and is never reported as fallback time.
+   */
+  readonly invalidMs: number;
   /** Refusals that named a policy field, by field. */
   readonly fields: Readonly<Record<string, number>>;
   /** The most recent `JEV_REFRESH_EVENT_BOUND` windows, oldest first. */
@@ -308,7 +325,7 @@ export interface JevRefreshTelemetryRecorder {
     cause: JevCause;
     detail: string;
     settledAtEpochMs: number;
-    /** True when a policy was in force, so this window is held, not fallback. */
+    /** True when a policy was in force, so this window is held, not ungoverned. */
     governing: boolean;
   }): void;
   /** Attribute one simulated interval to the window that owned it. */
@@ -331,6 +348,13 @@ interface MutableEvent {
   skipped: boolean;
   outcome: JevRefreshOutcome;
   reason: JevRefreshReason | null;
+  /**
+   * Why this window's simulated TIME did not go live, kept even after the window
+   * itself resolves live: a refresh whose answer arrived late covered the wait
+   * with no policy in force, and that time must stay attributable to its reason.
+   * Never reported directly — it is what `reasonMs` is summed from.
+   */
+  timeReason: JevRefreshReason | null;
   cause: JevCause | null;
   field: string | null;
   bound: string | null;
@@ -338,7 +362,7 @@ interface MutableEvent {
   latencyMs: number | null;
   liveMs: number;
   heldMs: number;
-  fallbackMs: number;
+  invalidMs: number;
   clamped: number;
   dropped: number;
   degraded: JevRefreshReason | null;
@@ -346,7 +370,27 @@ interface MutableEvent {
 
 /** A copy: a reader can never reach into the recorder's own mutable state. */
 function snapshot(event: MutableEvent): JevRefreshEvent {
-  return { ...event };
+  return {
+    index: event.index,
+    atEpochMs: event.atEpochMs,
+    atSimMs: event.atSimMs,
+    generation: event.generation,
+    settled: event.settled,
+    skipped: event.skipped,
+    outcome: event.outcome,
+    reason: event.reason,
+    cause: event.cause,
+    field: event.field,
+    bound: event.bound,
+    detail: event.detail,
+    latencyMs: event.latencyMs,
+    liveMs: event.liveMs,
+    heldMs: event.heldMs,
+    invalidMs: event.invalidMs,
+    clamped: event.clamped,
+    dropped: event.dropped,
+    degraded: event.degraded,
+  };
 }
 
 /** Nothing failed yet; every string is this repository's own words. */
@@ -385,6 +429,8 @@ export function createJevRefreshTelemetryRecorder(
   const degraded = new Map<JevRefreshReason, number>();
   const reasonMs = new Map<JevRefreshReason, number>();
   const fields = new Map<string, number>();
+  /** Simulated ms with no Jev policy in force, across every window. */
+  let invalidMsTotal = 0;
 
   const keep = (event: MutableEvent): MutableEvent => {
     events.push(event);
@@ -412,8 +458,9 @@ export function createJevRefreshTelemetryRecorder(
       skipped: input.skipped,
       // Provisional until an answer resolves it: a window that has produced
       // nothing yet is covered by whatever is in force right now.
-      outcome: input.governing ? "held" : "fallback",
+      outcome: input.governing ? "held" : "ungoverned",
       reason: input.skipped ? null : "gap",
+      timeReason: input.skipped ? null : "gap",
       cause: null,
       field: null,
       bound: null,
@@ -421,7 +468,7 @@ export function createJevRefreshTelemetryRecorder(
       latencyMs: null,
       liveMs: 0,
       heldMs: 0,
-      fallbackMs: 0,
+      invalidMs: 0,
       clamped: 0,
       dropped: 0,
       degraded: null,
@@ -442,6 +489,11 @@ export function createJevRefreshTelemetryRecorder(
     event.settled = true;
     event.outcome = input.outcome;
     event.reason = input.reason;
+    // A window that resolves LIVE keeps the reason its waiting time had: that
+    // time really was covered by no policy, and it stays attributable.
+    if (input.outcome !== "live" || event.timeReason === null) {
+      event.timeReason = input.reason;
+    }
     event.cause = input.cause;
     event.field = input.field;
     event.bound = input.bound;
@@ -482,7 +534,7 @@ export function createJevRefreshTelemetryRecorder(
         skipped: true,
         governing: input.governing,
       });
-      const outcome: JevRefreshOutcome = input.governing ? "held" : "fallback";
+      const outcome: JevRefreshOutcome = input.governing ? "held" : "ungoverned";
       settle(event, {
         outcome,
         reason: input.reason,
@@ -537,7 +589,7 @@ export function createJevRefreshTelemetryRecorder(
       }
       const reason = refreshReasonFor({ kind: input.kind, cause: input.cause });
       const named = input.kind === "malformed" ? schemaRefusalField(input.detail) : { field: null, bound: null };
-      const outcome: JevRefreshOutcome = input.governing ? "held" : "fallback";
+      const outcome: JevRefreshOutcome = input.governing ? "held" : "ungoverned";
       settle(event, {
         outcome,
         reason,
@@ -559,12 +611,17 @@ export function createJevRefreshTelemetryRecorder(
         return;
       }
       const delta = input.deltaMs;
-      if (input.source === "fallback") {
-        current.fallbackMs += delta;
-        // The classification of the fallback TIME, so "where did the fallback
-        // come from" is answerable per reason from the same rows.
-        const reason = current.reason ?? "gap";
-        reasonMs.set(reason, (reasonMs.get(reason) ?? 0) + delta);
+      if (input.source === "waiting" || input.source === "invalidated") {
+        // No Jev policy governed this interval. It is NOT fallback time: a Jev
+        // run has no second controller to attribute it to, and saying otherwise
+        // would be the one thing this record exists to prevent.
+        current.invalidMs += delta;
+        invalidMsTotal += delta;
+        // ...and it is classified by the reason the window that lived it had,
+        // so no ungoverned millisecond is left unattributed.
+        if (current.timeReason !== null) {
+          reasonMs.set(current.timeReason, (reasonMs.get(current.timeReason) ?? 0) + delta);
+        }
         return;
       }
       current.liveMs += delta;
@@ -587,6 +644,7 @@ export function createJevRefreshTelemetryRecorder(
       degraded.clear();
       reasonMs.clear();
       fields.clear();
+      invalidMsTotal = 0;
     },
 
     summary() {
@@ -616,11 +674,12 @@ export function createJevRefreshTelemetryRecorder(
         outcomes: {
           live: outcomes.get("live") ?? 0,
           held: outcomes.get("held") ?? 0,
-          fallback: outcomes.get("fallback") ?? 0,
+          ungoverned: outcomes.get("ungoverned") ?? 0,
         },
         reasons: reasonRecord(reasons),
         degraded: reasonRecord(degraded),
         reasonMs: reasonRecord(reasonMs),
+        invalidMs: invalidMsTotal,
         fields: Object.fromEntries([...fields].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
         recent: events.map(snapshot),
         evicted,

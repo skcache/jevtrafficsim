@@ -258,6 +258,8 @@ export function SimChrome(props: SimChromeProps) {
   const scenarioOpen = useUiStore((state) => state.scenarioOpen);
   const setScenarioOpen = useUiStore((state) => state.setScenarioOpen);
   const runComplete = useUiStore((state) => state.runComplete);
+  /** A live Jev run waiting for its first policy: no simulated time is passing. */
+  const starting = useUiStore((state) => state.starting);
   /**
    * The authoritative trip completion (Issue #46), read from the frame the UI
    * already holds. The ego's arrival IS the end of the trip, and the payoff is
@@ -512,6 +514,22 @@ export function SimChrome(props: SimChromeProps) {
                 New draw
               </button>
             </div>
+          </motion.div>
+        )}
+        {live && starting && !runComplete && error === null && (
+          <motion.div
+            key="starting"
+            aria-live="polite"
+            className="surface-overlay absolute bottom-20 left-1/2 z-20 flex max-w-[440px] -translate-x-1/2 items-center gap-2 px-3.5 py-2.5"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.24, ease: EASE }}
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink/40" aria-hidden="true" />
+            <span className="text-ui text-ink-70">
+              Waiting for Jev&apos;s first policy — the run starts when it arrives.
+            </span>
           </motion.div>
         )}
         {live && error !== null && !runComplete && (

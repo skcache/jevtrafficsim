@@ -8,8 +8,8 @@ import type { ControllerChoice } from "@/worker/protocol";
 import { DRIVER_DESCRIPTIONS, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIPS } from "@/cities/chicago-trips";
 import {
-  fallbackShare,
   heldShare,
+  ungovernedShare,
   type PresentationPolicy,
   type PresentationTripProgress,
 } from "@/worker/presentation-snapshot";
@@ -800,7 +800,7 @@ export interface PolicyLabel {
  * Why a run was not fully governed by a fresh model policy, in plain words.
  *
  * One phrase per classified cause, so the label can say WHAT happened rather
- * than "fallback". A cause this build does not recognise adds nothing: an
+ * than naming a mode. A cause this build does not recognise adds nothing: an
  * unknown reason is reported as unknown, never guessed at.
  */
 export function causeReason(cause: JevCause | null | undefined): string | null {
@@ -856,18 +856,20 @@ function shareText(share: number): string {
 /**
  * Who governed the signals, in the fewest words that stay true.
  *
- *   Checking Jev        no runtime provenance has arrived yet
- *   Jev                 the model's policy governed all observed time, freshly
- *   Jev · policy held   it governed all of it, but part was past its refresh
- *                       window: no fresher opinion arrived in time
- *   Jev · fallback used any observed time was on the adaptive safety net, with
- *                       the classified reason named after it
- *   Adaptive fallback   no live policy ever arrived: this was not a Jev run
- *   Replay              a recorded policy run, applied offline
+ *   Checking Jev           no runtime provenance has arrived yet
+ *   Waiting for Jev        the run is waiting for its FIRST live policy; no
+ *                          simulated time is passing, and it will not start
+ *                          until one is accepted
+ *   Jev                    the model's policy governed all observed time, freshly
+ *   Jev · policy held      it governed all of it, but part was past its refresh
+ *                          window: no fresher opinion arrived in time
+ *   Jev · run invalidated  Jev was LOST: the run stopped with its measurements
+ *                          kept, and it is not a completed Jev result
+ *   Replay                 a recorded policy run, applied offline
  *
  * Controllers with no external policy (Fixed, Adaptive) label themselves. The
- * three Jev states are mutually exclusive and none of them is ever shown for
- * another: a held run is not called a fallback, and a fallback is never hidden
+ * Jev states are mutually exclusive and none of them is ever shown for another:
+ * a held run is not called ungoverned, and ungoverned time is never hidden
  * behind the plain word Jev.
  */
 export function policyLabel(
@@ -890,15 +892,46 @@ export function policyLabel(
   if (policy.source === "replay") {
     return { text: "Replay", detail: `${policy.replayMs > 0 ? formatDuration(policy.replayMs) : "recorded"} replayed` };
   }
-  if (policy.accepted === 0 || policy.liveMs <= 0) {
-    return { text: "Adaptive fallback", detail: "no live policy governed this run" };
+  if (policy.source === "invalidated" || policy.invalidation != null) {
+    // Jev was lost and the run stopped. The measurements are real and kept, but
+    // this is not a completed Jev result and the label says so.
+    const reason = causeReason(policy.invalidation?.reason ?? policy.cause);
+    const at = policy.invalidation?.atSimMs;
+    return {
+      text: "Jev · run invalidated",
+      detail:
+        `${shareText(ungovernedShare(policy))} of the run after Jev was lost` +
+        `${at === undefined ? "" : ` at ${formatDuration(at)}`}` +
+        `${reason === null ? "" : ` (${reason})`} · not a completed Jev result`,
+    };
   }
-  const share = fallbackShare(policy);
+  if (policy.source === "waiting" || (policy.accepted === 0 && (policy.invalidMs ?? 0) === 0)) {
+    // No policy has been accepted yet: the run is waiting for its first one and
+    // no simulated time is passing. Nothing else is deciding.
+    const reason = causeReason(policy.cause);
+    return {
+      text: "Waiting for Jev",
+      detail: `the run starts once the first live policy arrives${reason === null ? "" : ` · ${reason}`}`,
+    };
+  }
   if (policy.fallbackMs > 0) {
+    // A state the execution contract FORBIDS: some of this run's time was not
+    // decided by a Jev policy and was not left ungoverned either. Reported
+    // rather than hidden — a broken contract must not read as plain Jev.
     const reason = causeReason(policy.cause);
     return {
       text: "Jev · fallback used",
-      detail: `${shareText(share)} of the run on the adaptive fallback${
+      detail: `${shareText(ungovernedShare(policy))} of the run on the adaptive fallback${
+        reason === null ? "" : ` (${reason})`
+      } · ${policies}${imperfectNote(policy)}`,
+    };
+  }
+  if ((policy.invalidMs ?? 0) > 0) {
+    // Time no Jev policy governed, in a run that did not lose Jev for good.
+    const reason = causeReason(policy.cause);
+    return {
+      text: "Jev · ungoverned time",
+      detail: `${shareText(ungovernedShare(policy))} of the run had no Jev policy in force${
         reason === null ? "" : ` (${reason})`
       } · ${policies}${imperfectNote(policy)}`,
     };
@@ -918,6 +951,31 @@ export function policyLabel(
 /** Short label for chrome ("Tourist", "Local"). */
 export function driverLabel(driver: DriverStrategy): string {
   return DRIVER_OPTIONS.find((option) => option.value === driver)?.label ?? "Tourist";
+}
+
+/**
+ * The one sentence a run owes the user when Jev was LOST mid-run: what happened,
+ * when, and that the run is not a completed Jev result. Plain words only — this
+ * reaches the page.
+ */
+export function runStoppedMessage(invalidation: {
+  readonly atSimMs: number;
+  readonly reason: JevCause;
+}): string {
+  const reason = causeReason(invalidation.reason) ?? "the policy stopped arriving";
+  return (
+    `Jev was lost at ${formatDuration(invalidation.atSimMs)} (${reason}), so the run stopped there. ` +
+    "Its measurements so far are kept — this is not a completed Jev result."
+  );
+}
+
+/**
+ * The one sentence a run owes the user when it could NOT START: why, and that
+ * nothing was simulated in its place.
+ */
+export function runUnableMessage(reason: JevCause, detail: string): string {
+  const cause = causeReason(reason) ?? detail;
+  return `This run did not start: Jev could not provide its first policy (${cause}). Nothing was simulated.`;
 }
 
 export function driverDescription(driver: DriverStrategy): string {

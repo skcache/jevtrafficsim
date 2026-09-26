@@ -15,8 +15,12 @@ import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
 import { createAdaptiveController } from "@/controllers/adaptive";
 import { createFixedController } from "@/controllers/fixed";
 import type { TrafficController } from "@/controllers/contract";
+import type { JevController } from "@/controllers/jev";
+import { isPromiseLike, type JevRuntimeObservation, type JevStartOutcome } from "@/jev/runtime";
 import { productionDemand } from "@/sim/demand-profile";
 import { createEngine, runEngine, stepEngine, type EngineState, type ScheduledSpawn } from "@/sim/engine";
+import { buildObservationFrame } from "@/sim/observations";
+import { activeVehicleCount } from "@/sim/traffic";
 import type { IncidentConfig } from "@/sim/incidents";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
@@ -176,12 +180,37 @@ export function buildScenarioRun(
     demandSeed: world.demandSeed,
     runUnder: (controller) => {
       const engine = buildEngine(controller);
+      // The pure-Jev startup gate: no simulated time passes until the first
+      // policy is accepted, and a run that cannot obtain one does not start at
+      // all. A synchronous driver can only gate a client that answers inline.
+      const started = startRunController(engine);
+      if (isPromiseLike<JevStartOutcome>(started)) {
+        throw new Error(
+          `the "${controller}" run needs an asynchronous driver: its first policy is requested, ` +
+            "not answered inline (use runUnderAsync)",
+        );
+      }
+      if (started.state === "unable") {
+        throw new Error(
+          `the "${controller}" run could not start: ${started.detail} (${started.reason}) — ` +
+            "no simulated time was advanced",
+        );
+      }
       runEngine(engine, request.durationMs);
+      finishRunController(engine);
       return buildChallengeResult(engine, scenario, controller, 0);
     },
     runUnderAsync: async (controller, runOptions = {}) => {
       const engine = buildEngine(controller);
+      const started = await startRunController(engine);
+      if (started.state === "unable") {
+        throw new Error(
+          `the "${controller}" run could not start: ${started.detail} (${started.reason}) — ` +
+            "no simulated time was advanced",
+        );
+      }
       await runEngineAsync(engine, request.durationMs, runOptions);
+      finishRunController(engine);
       return buildChallengeResult(engine, scenario, controller, 0);
     },
   };
@@ -197,6 +226,62 @@ export interface AsyncRunOptions {
    * remote model) can answer at something like the cadence it sees in the app.
    */
   readonly paceRatio?: number;
+}
+
+/* ------------------------- the pure-Jev startup gate ----------------------- */
+
+/**
+ * The observation a controller sees at an instant, built from the engine's own
+ * state — the SAME inputs `stepEngine` hands the controller, so a policy
+ * obtained before the run started was decided from exactly the state the run
+ * begins in.
+ */
+export function controllerObservation(engine: EngineState): JevRuntimeObservation {
+  return {
+    frame: buildObservationFrame(engine.city, engine.traffic, engine.arrivals),
+    partition: engine.partition,
+    intersections: engine.city.intersections.length,
+    activeVehicles: activeVehicleCount(engine.traffic),
+  };
+}
+
+/**
+ * THE STARTUP GATE, for any driver that steps an engine.
+ *
+ * A live Jev run must not advance simulated time until its first policy is
+ * accepted, and must NOT start at all when it cannot be obtained — there is no
+ * substitute controller to fall back on, by contract. This is the one place that
+ * asks, so every driver (the app's worker, the benchmark, the fallback harness)
+ * gates the same way. Non-Jev controllers are ready by definition.
+ *
+ * Synchronous for a client that answers synchronously; a promise otherwise.
+ */
+export function startRunController(
+  engine: EngineState,
+): JevStartOutcome | Promise<JevStartOutcome> {
+  const controller = engine.controller as Partial<JevController> & TrafficController;
+  if (controller.id !== "jev" || typeof controller.start !== "function") {
+    return { state: "ready", attempts: 0 };
+  }
+  return controller.start(controllerObservation(engine));
+}
+
+/**
+ * Close a run's accounting at its final simulated instant: the engine steps once
+ * past the last observation, and that step's decisions belong to the source that
+ * was in force. Also retires any request still in flight, so an answer that
+ * arrives after the run can never be counted as a policy that governed it.
+ */
+export function finishRunController(engine: EngineState): void {
+  const controller = engine.controller as Partial<JevController> & TrafficController;
+  if (controller.id === "jev" && typeof controller.finish === "function") {
+    controller.finish(engine.traffic.timeMs);
+  }
+}
+
+/** True when the run's controller is a Jev policy controller. */
+export function isJevRunController(controller: TrafficController): boolean {
+  return controller.id === "jev";
 }
 
 /**
