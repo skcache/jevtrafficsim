@@ -78,6 +78,23 @@ test("happy path completes and accounts for mocked live Jev without network quot
   const result = await journey(page, 200);
   expect(result.policy.accepted).toBeGreaterThan(0);
   checkLiveJevParticipation(result.policy, result.label, result.simulatedMs);
+  // The run's own per-refresh record is inspectable AFTER it finished, and only
+  // behind ?debug: counters for every refresh window, plus a bounded list of the
+  // most recent ones (jev/telemetry.ts). It is never rendered into the page.
+  const telemetry = await page.evaluate(() =>
+    (window as Window & {
+      __jevDebug?: {
+        telemetry?: { total: number; outcomes: Record<string, number>; recent: unknown[] } | null;
+      };
+    }).__jevDebug?.telemetry ?? null,
+  );
+  expect(telemetry).not.toBeNull();
+  expect(telemetry!.total).toBeGreaterThan(0);
+  expect(telemetry!.outcomes.live).toBeGreaterThan(0);
+  // The mocked relay answers every refresh: no window may fall through to the
+  // Adaptive safety net, and the record is what says so.
+  expect(telemetry!.outcomes.fallback).toBe(0);
+  expect(telemetry!.recent.length).toBeLessThanOrEqual(64);
   const identity = await page.request.get("/api/build");
   expect(identity.ok()).toBe(true);
   expect((await identity.json() as { commit: string }).commit).toMatch(/^[a-f0-9]{40}$/);

@@ -379,6 +379,24 @@ describe("control tile surface", () => {
     expect(tile).not.toMatch(/#ff4a3d|#ffc93c|#4ee06a|#b3312a/i);
   });
 
+  it("is drawn flat: one housing fill, plain lamps, no gradients or filters", () => {
+    // The owner's pass on the shipped tile: cleaner/flatter, less housing detail.
+    // The roadside sprite keeps the bevel, the lamp wells and the lit-lens core;
+    // this tile must not drift back toward them.
+    expect(tile).not.toMatch(/Gradient|<defs|filter=/);
+    // One housing shape, one fill: the old edge/bevel/sheen rects are gone.
+    expect(tile.match(/fill=\{HOUSING\}/g)).toHaveLength(1);
+    // Three lamps and at most one bead of detail (the thin ring on the lit lens):
+    // no per-lamp wells, no halos, no specular cores.
+    expect((tile.match(/<circle/g) ?? []).length).toBeLessThanOrEqual(4);
+    // Exactly one white stroke in the file, and it is that lens ring.
+    expect(tile.match(/stroke="#ffffff"/g)).toHaveLength(1);
+    // The sign: a flat red octagon with no stroke and no shadow work, plus a
+    // band drawn with plain mitred corners.
+    expect(tile).toContain("<polygon points={SIGN_FACE} fill={CONTROL_MARKER_COLORS.stop} />");
+    expect(tile).toContain('strokeLinejoin="miter"');
+  });
+
   it("keeps the state in text for assistive tech, with nothing that ticks", () => {
     expect(tile).toContain("sr-only");
     expect(tile).toContain("aria-hidden=\"true\"");

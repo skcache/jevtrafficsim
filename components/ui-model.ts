@@ -520,6 +520,96 @@ export function raceDelta(
 }
 
 /* ------------------------------------------------------------------ */
+/* Altered runs (the numbers are shown, marked)                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The marker an altered run's numbers are shown under.
+ *
+ * The owner's rule is that the comparison stays visible when a run was changed
+ * by hand, so the numbers are no longer withheld — but nothing here may soften
+ * what that means. `title` is the state, `detail` is what changed in the run's
+ * own words (which instrument, and when), and `boundary` is why the numbers
+ * underneath are real and still not a comparison.
+ */
+export interface AlteredRunNotice {
+  readonly title: string;
+  readonly detail: string;
+  readonly boundary: string;
+}
+
+/**
+ * The instruments, named exactly as the dock's own buttons name them: the marker
+ * must not describe the intervention with a different word than the one the user
+ * pressed.
+ */
+const INTERVENTION_LABELS: Record<IncidentKind, string> = {
+  "traffic-burst": "+5× Traffic",
+  crash: "Crash",
+  "close-road": "Close Road",
+  "bridge-closed": "Bridge Closed",
+  "event-release": "Event Lets Out",
+};
+
+export const ALTERED_RUN_TITLE = "Altered by hand";
+export const ALTERED_SCENARIO_TITLE = "Scenario changed mid-run";
+/** The run's own record of an intervention, or the count when only that exists. */
+export const ALTERED_INTERVENTIONS_LEAD = "Fired during this run: ";
+export const ALTERED_SCENARIO_LINE =
+  "The traffic level or the controller changed while this run was playing.";
+export const ALTERED_RUN_BOUNDARY =
+  "Fixed and Adaptive replayed the scenario without those changes — the numbers " +
+  "below are what happened, not a like-for-like comparison.";
+/** The comparison's footer, in the two shapes the panel can honestly take. */
+export const COMPARISON_FOOTER =
+  "Same scenario, same demand, same incidents, same driver — only the signals differ.";
+export const ALTERED_COMPARISON_FOOTER =
+  "Same scenario, same automatic incidents, same driver — the changes made by " +
+  "hand during this run are not in the Fixed and Adaptive runs.";
+
+/**
+ * What the panel must say about this run, or null when nobody altered it.
+ *
+ * Read from the run's own record — the worker's count of hand-fired incidents,
+ * the concrete entries the engine queued (kind and simulated time), and the
+ * mid-run-change flag — so it cannot name an intervention that did not happen.
+ * With no entries to name it falls back to the count it was given, and with
+ * neither it says nothing at all.
+ */
+export function alteredRunNotice(live: ChallengeResult): AlteredRunNotice | null {
+  const byHand = live.manualIncidents > 0;
+  if (!byHand && !live.modified) {
+    return null;
+  }
+  const lines: string[] = [];
+  if (byHand) {
+    const fired = live.interventions ?? [];
+    lines.push(
+      fired.length > 0
+        ? ALTERED_INTERVENTIONS_LEAD +
+            fired
+              .map(
+                (intervention) =>
+                  `${INTERVENTION_LABELS[intervention.kind]} at ${formatRaceTime(intervention.atMs)}`,
+              )
+              .join(", ") +
+            "."
+        : `${ALTERED_INTERVENTIONS_LEAD}${live.manualIncidents} intervention${
+            live.manualIncidents === 1 ? "" : "s"
+          }.`,
+    );
+  }
+  if (live.modified) {
+    lines.push(ALTERED_SCENARIO_LINE);
+  }
+  return {
+    title: byHand ? ALTERED_RUN_TITLE : ALTERED_SCENARIO_TITLE,
+    detail: lines.join(" "),
+    boundary: ALTERED_RUN_BOUNDARY,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Lifecycle (Issue #39)                                               */
 /* ------------------------------------------------------------------ */
 

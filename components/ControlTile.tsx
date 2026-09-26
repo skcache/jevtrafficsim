@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ControlTile (Issue #46; made an OBJECT in the tile-as-object pass).
+ * ControlTile (Issue #46; flattened in the tile-as-object pass).
  *
  * The ONE control surface in the top-right corner while a control ahead is
  * relevant. It renders the state the map marker is showing, from the same
@@ -12,6 +12,12 @@
  * three-lamp signal head with the authoritative lamp lit and the other two
  * unlit, or a complete stop-sign octagon with STOP on its face. A viewer who has
  * never seen this product should know what it is in one glance.
+ *
+ * Both objects are drawn FLAT. The roadside sprite is the full-detail object at
+ * map scale — bevelled housing, lamp wells, a specular core on the lit lens —
+ * because it is drawn tiny in map metres. This tile is drawn large on paper and
+ * needs none of that: one housing fill, three plain lamp circles, one red
+ * octagon with a white band. Same geometry, same inks, less drawing.
  *
  * Both objects are drawn in the marker sprite's OWN coordinate systems
  * (render/control-sprites.ts: a 128x320 head cell, a 256x256 sign cell) with the
@@ -37,19 +43,12 @@ const EASE = [0.22, 1, 0.36, 1] as const;
 /* Object inks                                                         */
 /* ------------------------------------------------------------------ */
 
-/**
- * The head's physical inks: the same graphite housing, lamp wells and housing
- * sheen the roadside sprite draws. These are the OBJECT, never a state — the
- * authoritative lamp colours come from CONTROL_MARKER_COLORS and nothing else.
- */
-const HOUSING_EDGE = "#0f1113";
+/** The head's own ink: the marker sprite's graphite housing, one flat fill. */
 const HOUSING = "#23262a";
-const HOUSING_SHEEN = "#3a4046";
-const LAMP_WELL = "#16181b";
 /**
- * An unlit lens is the marker's own colour laid into its well at a low alpha:
- * dark and low-saturation, so it reads as a lens that is OFF rather than as a
- * second lamp that is on (bright "dim" lamps read as lit).
+ * An unlit lens is the marker's own colour laid on the flat housing at a low
+ * alpha: dark and low-saturation, so it reads as a lens that is OFF rather than
+ * as a second lamp that is on (bright "dim" lamps read as lit).
  */
 const UNLIT_ALPHA = 0.22;
 /** The sign's white — the marker sprite's own sign tone. */
@@ -79,7 +78,17 @@ const SIGNAL_LAMPS = [
   { lamp: "green", cy: 254 },
 ] as const;
 
-/** A complete three-lamp head: housing, three wells, one lamp lit at full colour. */
+/** One housing rect at the sprite's own aspect: inset 10 a side, lamps 44 across. */
+const HOUSING_BOX = { x: 10, y: 8, width: 108, height: 304, rx: 28 } as const;
+const LAMP_RADIUS = 44;
+/**
+ * The lit lamp's one piece of detail: a single thin ring inside the lens edge.
+ * It says "lit glass" without a glow, a halo or a second light source — the
+ * full-strength marker colour is what carries the state.
+ */
+const LENS_RING_RADIUS = 37;
+
+/** A complete three-lamp head: one flat housing, three lamps, one of them lit. */
 function SignalHead({ lit }: { lit: ControlTileLamp }) {
   return (
     <svg
@@ -89,22 +98,36 @@ function SignalHead({ lit }: { lit: ControlTileLamp }) {
       height={SIGNAL_HEIGHT}
       viewBox="0 0 128 320"
     >
-      <rect x={6} y={3} width={116} height={314} rx={28} fill={HOUSING_EDGE} />
-      <rect x={10} y={7} width={108} height={306} rx={24} fill={HOUSING} />
-      <rect x={14} y={11} width={100} height={10} rx={5} fill={HOUSING_SHEEN} />
+      <rect
+        x={HOUSING_BOX.x}
+        y={HOUSING_BOX.y}
+        width={HOUSING_BOX.width}
+        height={HOUSING_BOX.height}
+        rx={HOUSING_BOX.rx}
+        fill={HOUSING}
+      />
       {SIGNAL_LAMPS.map(({ lamp, cy }) => {
         const on = lamp === lit;
         return (
           <g key={lamp}>
-            <circle cx={64} cy={cy} r={51} fill={LAMP_WELL} />
             <circle
               cx={64}
               cy={cy}
-              r={47}
+              r={LAMP_RADIUS}
               fill={CONTROL_MARKER_COLORS[lamp]}
               fillOpacity={on ? 1 : UNLIT_ALPHA}
             />
-            {on && <circle cx={51} cy={cy - 14} r={13} fill="#ffffff" fillOpacity={0.55} />}
+            {on && (
+              <circle
+                cx={64}
+                cy={cy}
+                r={LENS_RING_RADIUS}
+                fill="none"
+                stroke="#ffffff"
+                strokeOpacity={0.38}
+                strokeWidth={3}
+              />
+            )}
           </g>
         );
       })}
@@ -117,7 +140,7 @@ function SignalHead({ lit }: { lit: ControlTileLamp }) {
 /* ------------------------------------------------------------------ */
 
 /** Octagon geometry, in the sprite's own 256x256 sign cell. */
-const SIGN_RADIUS = 117;
+const SIGN_RADIUS = 121;
 const SIGN_CENTER = 128;
 
 function octagonPoints(radius: number): string {
@@ -128,10 +151,13 @@ function octagonPoints(radius: number): string {
 }
 
 const SIGN_FACE = octagonPoints(SIGN_RADIUS);
-/** The white band just inside the face, as on the roadside sign. */
+/**
+ * The white band just inside the face, as on the roadside sign: one stroked
+ * octagon, mitred so its corners stay an octagon instead of rounding off.
+ */
 const SIGN_BAND = octagonPoints(SIGN_RADIUS * Math.cos(Math.PI / 8) - 4);
 
-/** The entire sign as an object: red octagon, white band, STOP on its face. */
+/** The entire sign as an object: flat red octagon, white band, STOP on its face. */
 function StopSign() {
   return (
     <svg
@@ -141,19 +167,13 @@ function StopSign() {
       height={OBJECT_WIDTH}
       viewBox="0 0 256 256"
     >
-      <polygon
-        points={SIGN_FACE}
-        fill={CONTROL_MARKER_COLORS.stop}
-        stroke={CONTROL_MARKER_COLORS.stop}
-        strokeWidth={6}
-        strokeLinejoin="round"
-      />
+      <polygon points={SIGN_FACE} fill={CONTROL_MARKER_COLORS.stop} />
       <polygon
         points={SIGN_BAND}
         fill="none"
         stroke={SIGN_WHITE}
         strokeWidth={7}
-        strokeLinejoin="round"
+        strokeLinejoin="miter"
       />
       <text
         x={SIGN_CENTER}

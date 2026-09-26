@@ -31,53 +31,37 @@ export function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
+/**
+ * Display phase: where between the two most recent snapshots the screen is.
+ *
+ * Wall time since the frame arrived, over the MEASURED arrival interval, clamped
+ * to [0, 1]. Nothing smooths this value any further, and the reason belongs with
+ * the number (issue #46 measured it).
+ *
+ * What used to sit here was a low-pass of the frame clock (`smoothRenderClock`,
+ * tau 70 ms, state carried across frames). A first-order low-pass tracking a RAMP
+ * has a steady-state lag of `rate x tau`, and the rate IS the playback
+ * compression: at the shipping 8x (8 x 100 ms simulated steps per 100 ms tick)
+ * the lag was 8 x 70 = 560 simulated ms out of an 800 ms window. The phase
+ * therefore sat behind the window's START for most of every window — measured on
+ * the rendered car at 60 fps, alpha was exactly 0 on 56% of frames (the display
+ * held the previous snapshot's position) and climbed to only ~0.35 before the
+ * next arrival reset the window, so the car froze for ~4 frames and then jumped
+ * 7-9 m, about nine times a second. Both halves of the earlier "freeze and snap"
+ * work (measure the real cadence; size the window from it) are kept — the lag was
+ * the remaining half.
+ *
+ * The rule: the window follows the measured cadence and the phase inside it is
+ * wall time divided by that cadence, so the display reaches the newest snapshot
+ * just as the next one arrives. Arrival jitter is absorbed by the interval
+ * estimate — one number, never a position — which cannot lag the window because
+ * it is only ever used as a divisor.
+ */
 export function frameAlpha(nowMs: number, receivedAtMs: number, expectedIntervalMs: number): number {
   if (expectedIntervalMs <= 0) {
     return 1;
   }
   return clamp01((nowMs - receivedAtMs) / expectedIntervalMs);
-}
-
-/**
- * Time constant of the render clock's low-pass, in real milliseconds.
- *
- * Frames arrive when the worker finishes a tick, which is jittery: a tick that
- * runs long delivers its frame late, and a naive alpha then sits pinned at 1
- * (a frozen world) before snapping forward. Following the frame clock through a
- * short low-pass absorbs that jitter and turns lumpy arrivals into continuous
- * motion. It is deliberately shorter than a frame interval so the car never
- * feels like it is lagging the simulation.
- */
-export const RENDER_CLOCK_TAU_MS = 70;
-
-/**
- * Advance the render clock toward the frame clock.
- *
- * The clock is expressed in SIMULATED milliseconds, between the previous and
- * current frame timestamps, so smoothing can never push a position off its
- * road: the value still gets converted to a path position by the same
- * path-aware interpolation as before. A target that jumps further than one
- * frame interval (a reset, a new scale, a long stall) snaps instead of easing,
- * because easing across a discontinuity would sweep the car through the city.
- */
-export function smoothRenderClock(
-  clockMs: number,
-  targetMs: number,
-  dtMs: number,
-  snapDistanceMs: number,
-  tauMs: number = RENDER_CLOCK_TAU_MS,
-): number {
-  if (!Number.isFinite(clockMs)) {
-    return targetMs;
-  }
-  if (Math.abs(targetMs - clockMs) > snapDistanceMs) {
-    return targetMs;
-  }
-  if (tauMs <= 0) {
-    return targetMs;
-  }
-  const k = 1 - Math.exp(-Math.max(0, dtMs) / tauMs);
-  return clockMs + (targetMs - clockMs) * k;
 }
 
 /** Fade-in for vehicles that appeared since the previous frame. */

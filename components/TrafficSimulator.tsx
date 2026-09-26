@@ -46,6 +46,13 @@ interface JevDebugHook {
   incidentPlan: unknown;
   incidentHistory: unknown[];
   incidentFingerprint: string | null;
+  /**
+   * The finished run's per-refresh record (jev/telemetry.ts), or null while no
+   * run has completed. Kept ONLY here, on a `?debug` hook: it is the one place
+   * a reason vocabulary ("upstream-5xx", a policy field, a bound) may be read,
+   * and it is never rendered into the page.
+   */
+  telemetry: unknown;
   snapshot: {
     sequence: number;
     timeMs: number;
@@ -91,6 +98,7 @@ function updateDebugHook(event: WorkerEvent): void {
       incidentPlan: null,
       incidentHistory: [],
       incidentFingerprint: null,
+      telemetry: null,
       snapshot: null,
       metrics: null,
       error: null,
@@ -102,6 +110,9 @@ function updateDebugHook(event: WorkerEvent): void {
       hook.incidentHistory = [...event.incidentHistory];
       hook.incidentFingerprint = event.incidentFingerprint;
       hook.snapshot = null;
+      // A new run starts with no record of its own yet: the previous run's
+      // per-refresh history must not read as this one's.
+      hook.telemetry = null;
       hook.error = null;
       break;
     case "INCIDENT_RESOLVED":
@@ -136,6 +147,9 @@ function updateDebugHook(event: WorkerEvent): void {
       hook.metrics = event.metrics;
       break;
     case "RUN_COMPLETE":
+      // The run's per-refresh record: the answer to "where did Jev fall back,
+      // and why". Kept on the `?debug` hook only — nothing here is rendered.
+      hook.telemetry = event.telemetry;
       hook.error = null;
       break;
     case "ERROR":

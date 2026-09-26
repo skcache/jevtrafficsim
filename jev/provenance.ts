@@ -78,6 +78,17 @@ export interface JevProvenance {
    * measured rather than asserted.
    */
   readonly fallbackCauses?: Readonly<Record<string, number>>;
+  /**
+   * How many refresh WINDOWS ended live, were held, or needed the safety net
+   * (absent when the producer predates the field). The totals above say how much
+   * time each source governed; these say how many refreshes went each way, which
+   * is the difference between "one long fallback" and "twenty short ones".
+   */
+  readonly refreshOutcomes?: Readonly<Record<string, number>>;
+  /** Why each non-live refresh window was not live, by classified reason. */
+  readonly refreshReasons?: Readonly<Record<string, number>>;
+  /** Refusals that named a policy field, by field (bounded field names only). */
+  readonly refreshFields?: Readonly<Record<string, number>>;
   /** Present on a replay: which trace was consumed. */
   readonly trace: JevTraceReference | null;
   /** Present on a replay: what the recorded run actually was. */
@@ -110,6 +121,16 @@ export interface JevRunMeta {
   readonly fallbackCauseMs?: Readonly<Record<string, number>>;
   /** The cause that covered the most fallback time, when the producer knows it. */
   readonly dominantFallbackCause?: string | null;
+  /**
+   * The per-refresh record's counters, when the producer has them (see
+   * jev/telemetry.ts). Only counts are taken from it: a provenance document is
+   * deterministic by contract, and the per-event wall-clock instants are not.
+   */
+  readonly telemetry?: {
+    readonly outcomes: Readonly<Record<string, number>>;
+    readonly reasons: Readonly<Record<string, number>>;
+    readonly fields: Readonly<Record<string, number>>;
+  } | null;
 }
 
 /** Build the provenance record from the controller's account of its own run. */
@@ -118,6 +139,7 @@ export function jevProvenance(
   trace: JevTrace | null = null,
 ): JevProvenance {
   const adapter: JevAdapter = meta.mode === "replay" ? "replay" : meta.adapter;
+  const telemetry = meta.telemetry ?? null;
   return {
     controller: "jev",
     label: provenanceLabel(adapter),
@@ -142,6 +164,17 @@ export function jevProvenance(
     ...(meta.fallbackCauseMs === undefined || meta.fallbackCauseMs === null
       ? {}
       : { fallbackCauses: { ...meta.fallbackCauseMs } }),
+    ...(telemetry === null
+      ? {}
+      : {
+          refreshOutcomes: { ...telemetry.outcomes },
+          ...(Object.keys(telemetry.reasons).length === 0
+            ? {}
+            : { refreshReasons: { ...telemetry.reasons } }),
+          ...(Object.keys(telemetry.fields).length === 0
+            ? {}
+            : { refreshFields: { ...telemetry.fields } }),
+        }),
     trace:
       trace === null
         ? null
@@ -174,6 +207,25 @@ export function provenanceLine(provenance: JevProvenance): string {
   }
   if (provenance.fallbackReason !== null) {
     parts.push(`fallback reason: ${provenance.fallbackReason}`);
+  }
+  // How many refresh WINDOWS went each way, and why the ones that did not go
+  // live did not. A reason with no count beside it cannot say whether it
+  // happened once or twenty times, which is the whole point of the record.
+  const outcomes = provenance.refreshOutcomes;
+  if (outcomes !== undefined && (outcomes.held ?? 0) + (outcomes.fallback ?? 0) > 0) {
+    const reasons = Object.entries(provenance.refreshReasons ?? {})
+      .map(([reason, count]) => `${reason} x${count}`)
+      .join(", ");
+    parts.push(
+      `windows: ${outcomes.live ?? 0} live, ${outcomes.held ?? 0} held,` +
+        ` ${outcomes.fallback ?? 0} fallback${reasons.length === 0 ? "" : ` (${reasons})`}`,
+    );
+  }
+  const refusedFields = Object.entries(provenance.refreshFields ?? {})
+    .map(([field, count]) => `${field} x${count}`)
+    .join(", ");
+  if (refusedFields.length > 0) {
+    parts.push(`refused fields: ${refusedFields}`);
   }
   if (provenance.trace !== null) {
     parts.push(

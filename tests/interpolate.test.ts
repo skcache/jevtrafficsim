@@ -10,7 +10,6 @@ import {
   interpolateVehicles,
   lerpAngle,
   positionForRoad,
-  smoothRenderClock,
 } from "@/render/interpolate";
 import { clampVehiclesAtSignals, packQueues } from "@/render/queue-packing";
 import {
@@ -579,33 +578,75 @@ describe("queue packing", () => {
   });
 });
 
-describe("smoothed render clock", () => {
-  it("eases toward the frame clock instead of snapping to it", () => {
-    // The point is to absorb arrival jitter, not to teleport to the target:
-    // a 16 ms step must move only part of the way.
-    const after16ms = smoothRenderClock(0, 800, 16, 800);
-    expect(after16ms).toBeGreaterThan(0);
-    expect(after16ms).toBeLessThan(400);
-    const after100ms = smoothRenderClock(0, 800, 100, 800);
-    expect(after100ms).toBeGreaterThan(after16ms);
-    expect(after100ms).toBeLessThan(800);
+describe("display phase", () => {
+  it("is linear in wall time since the arrival, and reaches the newest frame at the cadence", () => {
+    expect(frameAlpha(1000, 1000, 100)).toBe(0);
+    expect(frameAlpha(1050, 1000, 100)).toBeCloseTo(0.5, 6);
+    expect(frameAlpha(1100, 1000, 100)).toBe(1);
   });
 
-  it("converges on a steady target", () => {
-    let clock = 0;
-    for (let i = 0; i < 60; i += 1) {
-      clock = smoothRenderClock(clock, 800, 16, 800);
+  it("clamps in both directions", () => {
+    // Nothing moves before the frame that carries the position arrived...
+    expect(frameAlpha(990, 1000, 100)).toBe(0);
+    // ...and the phase never runs past the newest snapshot.
+    expect(frameAlpha(1400, 1000, 100)).toBe(1);
+    expect(frameAlpha(1000, 1000, 0)).toBe(1);
+  });
+
+  it("never freezes the display for a whole window at 60 fps", () => {
+    // The regression this pins (issue #46, measured on the rendered car): a
+    // low-pass of the FRAME CLOCK lags a ramp by `rate x tau`, and the rate is
+    // the playback compression — at 8x the clock sat ~560 simulated ms behind
+    // an 800 ms window, so alpha was exactly 0 on 56% of display frames (the
+    // car held the previous snapshot) and then jumped 7-9 m at each arrival.
+    // The fix: the window follows the measured cadence, the phase inside it is
+    // wall time divided by that cadence, and nothing smooths the phase.
+    const cadenceMs = 100;
+    const frameMs = 1000 / 60;
+    // Measured arrival jitter at 8x playback (p5 83 / p50 100 / p95 133).
+    const gaps = [83, 100, 133, 100, 116, 100, 100, 150, 100, 83];
+    let nextArrival = 5000 + gaps[0];
+    let gapIndex = 0;
+    let windowStart = 5000;
+    let zeroRun = 0;
+    let windowZeroRunMax = 0;
+    let windowMax = 0;
+    let midWindow = 0;
+    const windowMaxima: number[] = [];
+    const windowBounds: number[] = [];
+    const midWindowValues: number[] = [];
+    for (let frame = 0; frame < 600; frame += 1) {
+      const now = 5000 + frame * frameMs;
+      if (now >= nextArrival) {
+        windowMaxima.push(windowMax);
+        windowBounds.push(
+          Math.min(1, (nextArrival - windowStart - frameMs - 1) / cadenceMs),
+        );
+        midWindowValues.push(midWindow);
+        windowZeroRunMax = Math.max(windowZeroRunMax, zeroRun);
+        windowStart = nextArrival;
+        gapIndex += 1;
+        nextArrival = windowStart + gaps[gapIndex % gaps.length];
+        windowMax = 0;
+        midWindow = 0;
+        zeroRun = 0;
+      }
+      const phase = frameAlpha(now, windowStart, cadenceMs);
+      if (phase < 0.05) zeroRun += 1;
+      else zeroRun = 0;
+      windowMax = Math.max(windowMax, phase);
+      if (now - windowStart >= cadenceMs / 2 && midWindow === 0) midWindow = phase;
     }
-    // ~1.2 s of real time at tau = 70 ms: within a millisecond of the target,
-    // and strictly behind it (the clock eases, it never leads the sim).
-    expect(clock).toBeGreaterThan(799);
-    expect(clock).toBeLessThan(800);
-  });
-
-  it("snaps across a discontinuity rather than sweeping through the city", () => {
-    // A reset or scale change moves the frame clock further than one interval:
-    // easing there would draw the car across the whole map.
-    expect(smoothRenderClock(0, 60_000, 16, 800)).toBe(60_000);
-    expect(smoothRenderClock(Number.NaN, 1234, 16, 800)).toBe(1234);
+    // At most the single frame that lands exactly on the arrival may show zero.
+    expect(windowZeroRunMax).toBeLessThanOrEqual(1);
+    // The phase must reach what the arithmetic allows: the last display frame
+    // before the next arrival sits one frame short of the window's end, so its
+    // phase is (gap - one frame) / cadence at worst. A phase that lags — the old
+    // smoothed clock peaked at 0.35 of the window — cannot satisfy this.
+    for (let index = 0; index < windowMaxima.length; index += 1) {
+      expect(windowMaxima[index]).toBeGreaterThanOrEqual(windowBounds[index] - 0.02);
+    }
+    // Halfway through a window the car is halfway between the snapshots.
+    expect(Math.min(...midWindowValues)).toBeGreaterThan(0.4);
   });
 });

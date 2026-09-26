@@ -11,6 +11,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:jev-fallback": "tsx scripts/jev-fallback-harness.ts",
     "test:browser": "pnpm build && playwright test",
     "benchmark": "tsx benchmark/cli.ts",
     "sync:maplibre-worker": "node scripts/sync-maplibre-worker.mjs",

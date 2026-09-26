@@ -58,6 +58,7 @@ import {
   type JevPolicy,
 } from "@/jev/schema";
 import { adapterFromId, type JevAdapter, type JevPolicySource, type JevTrace, type JevTraceEvent, type JevTraceRecordedRun } from "@/jev/trace";
+import type { JevRefreshTelemetry } from "@/jev/telemetry";
 import type { IntersectionObservation, PhaseObservation } from "@/sim/observations";
 import type { CityPartition } from "@/sim/regions";
 import type { SignalDirective, SignalState } from "@/sim/signals";
@@ -300,6 +301,14 @@ export interface JevControllerMeta {
   /** Values clamped to their bounds, and answers dropped below the floor. */
   readonly clamped: number;
   readonly dropped: number;
+  /**
+   * The per-refresh record: which refreshes went live, were held, or needed the
+   * safety net, WHY each one that did not go live did not, and a bounded list
+   * of the most recent windows (see jev/telemetry.ts). This is the run's answer
+   * to "where did Jev fall back, and why" — inspectable after the fact, with
+   * nothing upstream-derived in it.
+   */
+  readonly telemetry: JevRefreshTelemetry;
 }
 
 export interface JevController extends TrafficController {
@@ -412,6 +421,7 @@ export function createJevController(options: JevControllerOptions): JevControlle
         dominantFallbackCause: status.dominantFallbackCause,
         clamped: status.clamped,
         dropped: status.dropped,
+        telemetry: status.refreshTelemetry,
       };
     },
     directives(city: City, traffic: TrafficState, context?: TrafficControllerContext) {

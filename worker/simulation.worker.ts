@@ -27,6 +27,7 @@ import {
 import { buildChallengeResult } from "@/worker/challenge-result";
 import type { PresentationPolicy } from "@/worker/presentation-snapshot";
 import type { JevCause } from "@/jev/runtime";
+import type { JevRefreshTelemetry } from "@/jev/telemetry";
 import { fingerprintForRun } from "@/worker/challenge-scenario";
 import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
@@ -191,6 +192,29 @@ function policyProvenance(): PresentationPolicy | null {
       clamped: meta.clamped,
       dropped: meta.dropped,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The run's per-refresh record (jev/telemetry.ts): which refresh window went
+ * live, was held, or needed the safety net — and why, in a closed vocabulary.
+ *
+ * Reported BOUNDED: the counters plus at most `JEV_REFRESH_EVENT_BOUND` events,
+ * every string of which this codebase wrote. It rides the worker's own messages
+ * and is never rendered: the main thread copies it into a `?debug` hook, so no
+ * reason vocabulary, policy field or bound can reach a public surface.
+ */
+function policyTelemetry(): JevRefreshTelemetry | null {
+  const controller = state.engine?.controller as
+    | { meta?: () => { telemetry?: JevRefreshTelemetry | null } }
+    | undefined;
+  if (!controller || typeof controller.meta !== "function") {
+    return null;
+  }
+  try {
+    return controller.meta().telemetry ?? null;
   } catch {
     return null;
   }
@@ -575,6 +599,7 @@ function runTick(): void {
       type: "RUN_COMPLETE",
       timeMs: engine.traffic.timeMs,
       policy: policyProvenance(),
+      telemetry: policyTelemetry(),
       result: buildChallengeResult(
         engine,
         state.scenario ??

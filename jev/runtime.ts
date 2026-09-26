@@ -76,12 +76,30 @@
  * imperfect are counted too (`clamped`, `dropped`), because "the model's policy
  * governed the run" and "the model's policy governed the run perfectly" are
  * different claims and the product must be able to tell them apart.
+ *
+ * ## Where a refresh went wrong, per refresh
+ *
+ * Totals cannot say WHICH refresh cost the fallback, so every refresh window is
+ * also recorded, one event each, by `jev/telemetry.ts`: its simulated and
+ * wall-clock instant, its outcome (live / held / fallback), why it was not live
+ * in a closed vocabulary, the policy field and bound when a refusal named one,
+ * and the simulated time the window itself spent on each source. The status
+ * carries the counters plus a bounded recent-events list (`refreshTelemetry`),
+ * so a run can be inspected after the fact without keeping a single byte of
+ * upstream text. The record is passive: it changes nothing about what a run
+ * decides, so live and replayed runs behave exactly as they did.
  */
 import type { ObservationFrame } from "@/sim/observations";
 import type { CityPartition } from "@/sim/regions";
 import { JevClientError, type JevClient, type JevClientFailure } from "./client";
 import { buildJevPolicyRequest, jevPolicyContext, type JevRequestOptions } from "./request";
 import { parseJevPolicy, type JevPolicy, type JevPolicyRequest } from "./schema";
+import {
+  createJevRefreshTelemetryRecorder,
+  refreshDetailForCause,
+  type JevRefreshTelemetry,
+  type JevRefreshTelemetryRecorder,
+} from "./telemetry";
 import {
   compareTraceEvents,
   emptyTrace,
@@ -214,6 +232,11 @@ export interface JevRuntimeOptions {
   /** "replay" consumes the supplied trace instead of calling any client. */
   readonly mode?: "live" | "replay";
   readonly trace?: JevTrace | null;
+  /**
+   * How many recent refresh events the telemetry keeps (see jev/telemetry.ts).
+   * The counters cover every refresh whatever this is; it only bounds the list.
+   */
+  readonly telemetryEvents?: number;
   readonly onAccepted?: (event: JevTraceEvent) => void;
   readonly onRejected?: (rejection: JevRejection) => void;
 }
@@ -292,6 +315,12 @@ export interface JevRuntimeStatus {
   readonly clamped: number;
   /** Answers dropped below the confidence floor across accepted answers. */
   readonly dropped: number;
+  /**
+   * The per-refresh record: how many refresh windows went live, were held, or
+   * needed the safety net, WHY each one that did not go live did not, and a
+   * bounded list of the most recent windows. See jev/telemetry.ts.
+   */
+  readonly refreshTelemetry: JevRefreshTelemetry;
   /** Replay events still waiting for their instant. */
   readonly queuedEvents: number;
 }
@@ -338,6 +367,10 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
   const client = options.client;
   const configured = client !== null && mode === "live";
   const clientId = client?.id ?? (mode === "replay" ? "replay" : "none");
+  /** The per-refresh record. Passive: it observes, it never decides. */
+  const telemetry: JevRefreshTelemetryRecorder = createJevRefreshTelemetryRecorder({
+    bound: options.telemetryEvents,
+  });
 
   let fingerprint = options.scenarioFingerprint;
   let generation = 0;
@@ -381,15 +414,38 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
     causeCounts.set(cause, (causeCounts.get(cause) ?? 0) + 1);
   };
 
+  /**
+   * True when a policy governs at this instant — possibly past its freshness
+   * window (`held`), which is exactly what that word means. Used to decide
+   * whether a refresh that produced nothing was covered by an older policy or
+   * by the safety net, so the per-refresh record cannot call a held window a
+   * fallback or the other way round.
+   */
+  const policyInForceAt = (nowMs: number): boolean =>
+    accepted !== null && nowMs <= accepted.simulationTimeMs + maxHoldMs;
+
   const reject = (
     kind: JevRejectionKind,
     atSimMs: number,
     detail: string,
     cause: JevCause,
+    refusalGeneration: number | null = null,
   ): void => {
     rejected += 1;
     countCause(cause);
     lastRejection = { kind, cause, atSimMs, detail };
+    telemetry.refuse({
+      generation: refusalGeneration,
+      kind,
+      cause,
+      // The record keeps this codebase's OWN sentence. A client error's message
+      // is dropped here (the refusals list still carries it for the console):
+      // a client is an outside seam, and the record's rule is absolute — no
+      // upstream prose, ever. The classified cause is what a report needs.
+      detail: kind === "client-error" ? refreshDetailForCause(cause) : detail,
+      settledAtEpochMs: Date.now(),
+      governing: policyInForceAt(atSimMs),
+    });
     options.onRejected?.(lastRejection);
   };
 
@@ -517,6 +573,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         context.acceptedAtSimMs,
         `generation ${context.requestGeneration} superseded by ${generation}`,
         "superseded",
+        context.requestGeneration,
       );
       return;
     }
@@ -526,6 +583,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         context.acceptedAtSimMs,
         "the scenario changed under this response",
         "superseded",
+        context.requestGeneration,
       );
       return;
     }
@@ -535,6 +593,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         context.acceptedAtSimMs,
         `policy is held for ${minHoldMs} simulated ms before replacement`,
         "held",
+        context.requestGeneration,
       );
       return;
     }
@@ -543,7 +602,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
       regionIds: context.regionIds,
     });
     if (!parsed.ok) {
-      reject("malformed", context.acceptedAtSimMs, parsed.error, "malformed");
+      reject("malformed", context.acceptedAtSimMs, parsed.error, "malformed", context.requestGeneration);
       return;
     }
     // What this answer COST: counted only for an answer the run actually uses,
@@ -561,6 +620,14 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
       policy: parsed.value.policy,
       source: context.source,
     };
+    // This refresh produced the policy in force: the window that asked for it
+    // is live, and what the answer cost rides on the same event.
+    telemetry.accept({
+      generation: context.requestGeneration,
+      settledAtEpochMs: Date.now(),
+      clamped: notes?.clamped ?? 0,
+      dropped: notes?.dropped ?? 0,
+    });
     if (lastObservedMs !== null && event.simulationTimeMs === lastObservedMs) {
       // Resolved inside the current tick: in force from the next one.
       pending = event;
@@ -588,6 +655,9 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
     const requestFingerprint = fingerprint;
     refreshes += 1;
     inFlightGeneration = requestGeneration;
+    // The new refresh window opens here: its wall-clock instant is recorded for
+    // correlating a run with logs, and everything else about it stays simulated.
+    telemetry.begin({ atEpochMs: Date.now(), atSimMs: nowMs, generation: requestGeneration });
     /** Release the slot only if this request still owns it. */
     const release = (): void => {
       if (inFlightGeneration === requestGeneration) {
@@ -616,6 +686,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
               lastObservedMs ?? nowMs,
               error instanceof Error ? error.message : "jev client failed",
               clientFailureCause(error),
+              requestGeneration,
             );
           })
           .finally(release);
@@ -629,6 +700,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         nowMs,
         error instanceof Error ? error.message : "jev client failed",
         clientFailureCause(error),
+        requestGeneration,
       );
       release();
     }
@@ -644,6 +716,9 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
       // bucket, so the three sources still add up to the observed span.
       if (lastObservedMs !== null) {
         const delta = Math.max(0, nowMs - lastObservedMs);
+        // The same interval is attributed to the refresh window that owned it,
+        // so the per-refresh rows add up to the run's own totals.
+        telemetry.account({ deltaMs: delta, source: lastSource, held: lastHeld });
         if (lastSource === "live") {
           liveMs += delta;
           if (lastHeld) heldMs += delta;
@@ -683,8 +758,31 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
           adopt(pending);
           pending = null;
         }
-        if (configured && refreshDue(nowMs, refreshMs) && inFlightGeneration === null) {
-          startRequest(observation, nowMs);
+        // EVERY due refresh window is recorded, including the ones that could
+        // not ask: a window skipped because the previous request was still in
+        // flight is exactly where a slow model turns into held time, and a run
+        // that never asked at all has to be able to say so rather than showing
+        // an empty history.
+        if (refreshDue(nowMs, refreshMs)) {
+          if (!configured) {
+            telemetry.skip({
+              atEpochMs: Date.now(),
+              atSimMs: nowMs,
+              governing: policyInForceAt(nowMs),
+              reason: "other",
+              detail: "no policy client was configured for this run",
+            });
+          } else if (inFlightGeneration !== null) {
+            telemetry.skip({
+              atEpochMs: Date.now(),
+              atSimMs: nowMs,
+              governing: policyInForceAt(nowMs),
+              reason: "gap",
+              detail: "the previous request was still in flight when this refresh was due",
+            });
+          } else {
+            startRequest(observation, nowMs);
+          }
         }
       }
 
@@ -728,6 +826,8 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
       replayMs = 0;
       fallbackMs = 0;
       heldMs = 0;
+      // A reset is a new run: the per-refresh record starts over with it.
+      telemetry.reset();
 
       const trace = next.trace ?? null;
       if (mode === "replay") {
@@ -791,6 +891,7 @@ export function createJevPolicyRuntime(options: JevRuntimeOptions): JevRuntime {
         dominantFallbackCause: dominantFallbackCause(),
         clamped: clampedCount,
         dropped: droppedCount,
+        refreshTelemetry: telemetry.summary(),
         queuedEvents: queue.length,
       };
     },

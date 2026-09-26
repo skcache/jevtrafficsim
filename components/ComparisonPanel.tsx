@@ -8,20 +8,37 @@
  * percentiles, throughput, queued-time share) lives behind SEE DETAILS, because
  * nobody should have to understand p95 to enjoy the result.
  *
- * The fairness guard is untouched and still authoritative: results are only shown
- * side by side when every fingerprint agrees and no run was touched by hand. A
- * modified run gets the refusal, not a table.
+ * The fairness guard is untouched and still authoritative: `comparisonVerdictAll`
+ * decides whether these three results are a comparison at all, and a refusal for
+ * a different world or a repeated controller still shows no table.
+ *
+ * One refusal changed shape, by the owner's decision: a run that was changed by
+ * hand keeps its numbers on screen, under a marker that says — in the run's own
+ * words, and only when the run recorded them — what was changed and when, and
+ * that the result is therefore not a like-for-like comparison. `alteredComparisonAllowed`
+ * (the guard's own answer about the untouched counterfactual) is what permits it;
+ * without it, the refusal stands exactly as it always has. The difference
+ * sentence is not shown for an altered run: "faster than Adaptive" is a
+ * comparison claim, and this panel is not allowed to make one here.
  *
  * No winner score, no claim that any controller is universally better: the
  * sentence reports the difference this run measured, in whichever direction it
- * went.
+ * went — and only where the run was left alone.
  */
 import { useState } from "react";
 import type { ChallengeResult } from "@/worker/challenge-result";
-import { comparisonVerdictAll } from "@/worker/challenge-result";
+import { alteredComparisonAllowed, comparisonVerdictAll } from "@/worker/challenge-result";
 import type { PresentationPolicy } from "@/worker/presentation-snapshot";
 import type { BaselineState } from "@/store/ui-store";
-import { comparisonRows, policyLabel, raceDelta, raceEntries } from "./ui-model";
+import {
+  ALTERED_COMPARISON_FOOTER,
+  COMPARISON_FOOTER,
+  alteredRunNotice,
+  comparisonRows,
+  policyLabel,
+  raceDelta,
+  raceEntries,
+} from "./ui-model";
 
 export function ComparisonPanel({
   baselines,
@@ -35,12 +52,20 @@ export function ComparisonPanel({
   const [open, setOpen] = useState(false);
   const rows = comparisonRows(baselines.fixed, baselines.adaptive, live);
   const verdict = comparisonVerdictAll([baselines.fixed, baselines.adaptive, live]);
+  const notice = alteredRunNotice(live);
+  /**
+   * The owner's rule, decided by the guard itself: an altered run's numbers are
+   * shown, marked. `alteredComparisonAllowed` only says yes when the alteration
+   * is the sole reason for the refusal, so every other refusal — a different
+   * world, the same controller twice — still renders no numbers at all.
+   */
+  const alteredNumbers = alteredComparisonAllowed(baselines.fixed, baselines.adaptive, live);
   const visible = policyLabel(live.controller, policy);
   const liveLabel = live.controller === "jev"
     ? visible?.text ?? "Checking Jev"
     : `Watched ${visible?.text ?? live.controller}`;
 
-  if (!verdict.comparable) {
+  if (!verdict.comparable && !alteredNumbers) {
     return (
       <div>
         <span className="label-micro">This run</span>
@@ -61,8 +86,25 @@ export function ComparisonPanel({
   const columns = ["Fixed", "Adaptive", liveLabel] as const;
 
   return (
-    <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs}>
+    <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs} data-jev-altered={alteredNumbers ? "true" : undefined}>
       <span className="label-micro">Who got there first</span>
+
+      {/* The honest marker, above the numbers it qualifies: what a human changed,
+          when, and the one thing these columns are not. */}
+      {alteredNumbers && notice !== null && (
+        <div
+          role="note"
+          className="mt-3 rounded-control border border-hair-strong bg-ink/[0.035] px-3 py-2.5"
+        >
+          <p className="flex items-center gap-1.5 text-meta font-semibold text-ink">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#b0392b]" aria-hidden="true" />
+            {notice.title}
+          </p>
+          <p className="mt-1 text-meta leading-relaxed text-ink-70">
+            {notice.detail} {notice.boundary}
+          </p>
+        </div>
+      )}
 
       <div className="mt-3 flex flex-col">
         {entries.map((entry, index) => {
@@ -93,7 +135,10 @@ export function ComparisonPanel({
         })}
       </div>
 
-      {delta !== null && (
+      {/* No difference sentence for an altered run: naming a winner here would be
+          a comparison claim the run cannot support. The marker above already
+          says what the numbers are. */}
+      {delta !== null && !alteredNumbers && (
         <p className="mt-3 border-t border-hairline pt-2.5 text-ui leading-snug text-ink">
           {delta.text}
         </p>
@@ -136,7 +181,7 @@ export function ComparisonPanel({
             </tbody>
           </table>
           <p className="mt-2.5 text-meta leading-relaxed text-ink-70">
-            Same scenario, same demand, same incidents, same driver — only the signals differ.
+            {alteredNumbers ? ALTERED_COMPARISON_FOOTER : COMPARISON_FOOTER}
           </p>
           <p className="mt-1 text-micro leading-relaxed text-ink-38">
             Scenario {live.fingerprint}, {baselines.incidentEntries} automatic incidents.
@@ -162,8 +207,9 @@ export function ComparisonPanel({
  *
  * Placeholders only: no spinner, no percentage, no invented progress. The whole
  * block is decorative (`aria-hidden`); the announcement lives in the chrome's
- * status region. `refusal` mirrors the other shape this panel has — a run that
- * cannot be compared gets two sentences, not three times.
+ * status region. `refusal` is the shape a refusal has — two sentences, not three
+ * times — and it is also where an altered run's panel now opens: the marker's
+ * title and paragraph sit in exactly that place before the rows arrive.
  */
 export type ComparisonSkeletonVariant = "race" | "refusal";
 

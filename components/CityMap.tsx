@@ -32,11 +32,9 @@ import { buildDirectedPathIndexes } from "@/render/map-geometry";
 import { setFrameModel } from "./frame-buffer";
 import { lngLatToMetric, metricToLngLat, type MapModel } from "@/cities/map-model";
 import {
-  clamp01,
   frameAlpha,
   interpolateEgoRoadProgress,
   interpolateVehicles,
-  smoothRenderClock,
 } from "@/render/interpolate";
 import {
   carriagewayPairs,
@@ -159,9 +157,6 @@ const zoomRef = useRef(16);
     { id: number; roadId: number | null; x: number; y: number; headingRadians: number; blockedWaitMs: number }[]
   >([]);
   const destSpritesRef = useRef<DestinationSpriteSet | null>(null);
-  /** Smoothed render clock (simulated ms) and the wall time it last advanced. */
-  const renderClockRef = useRef<number>(Number.NaN);
-  const renderClockNowRef = useRef<number>(Number.NaN);
   /** Alpha actually used for the last drawn frame (QA/debug readout). */
   const alphaRef = useRef<number>(1);
   /** Wall-clock arrival interval, low-passed. The render window follows it. */
@@ -534,14 +529,19 @@ const zoomRef = useRef(16);
       const buffer = frames.current;
       const activeMap = mapRef.current;
       if (buffer && activeMap && buffer.model && buffer.paths) {
-        // Draw time is a SMOOTHED position between the two frames, not the raw
-        // arrival-based alpha. Frame arrivals jitter with the worker's tick
-        // (measured p95 ~205 ms against a 100 ms nominal), and a raw alpha
-        // saturates at 1 on every late frame — a frozen world that snaps
-        // forward. The render clock follows the frame clock through a short
-        // low-pass in simulated time, so every downstream consumer (ego, route
-        // trim, contextual controls, queue packing) smooths together and stays
-        // on its road.
+        // Draw time is the phase between the two most recent frames, taken
+        // straight from wall time.
+        //
+        // Frame arrivals jitter with the worker's tick (measured p95 ~130 ms
+        // against a 100 ms nominal), so the WINDOW must follow the real cadence —
+        // that is what expectedIntervalRef is. The PHASE inside it must not be
+        // smoothed: a low-pass of the frame clock lags a ramp by `rate x tau`,
+        // and the rate is the playback compression, so at 8x the clock sat ~560
+        // simulated ms behind an 800 ms window. The phase then pinned at 0 for
+        // most of every window (measured: 56% of display frames showed ZERO
+        // motion) and jumped 7-9 m at each arrival. Every consumer of this value
+        // (ego, route trim, contextual controls) reads the same phase, so they
+        // move together and every position still comes from a road path.
         const currentFrame = buffer.current;
         if (!currentFrame) {
           raf = requestAnimationFrame(render);
@@ -574,23 +574,13 @@ const zoomRef = useRef(16);
             }
           }
         }
-        const frameAlphaValue = frameAlpha(now, arrival, expectedIntervalRef.current);
+        const alpha = frameAlpha(now, arrival, expectedIntervalRef.current);
+        alphaRef.current = alpha;
         const previousTime = buffer.previous?.timeMs ?? currentFrame.timeMs;
         const currentTime = currentFrame.timeMs;
-        const targetClock = previousTime + frameAlphaValue * (currentTime - previousTime);
-        const lastNow = renderClockNowRef.current;
-        renderClockNowRef.current = now;
-        const renderDtMs = Number.isFinite(lastNow) ? now - lastNow : 0;
-        const clock = smoothRenderClock(
-          renderClockRef.current,
-          targetClock,
-          renderDtMs,
-          Math.max(1, currentTime - previousTime),
-        );
-        renderClockRef.current = clock;
-        const alpha =
-          currentTime > previousTime ? clamp01((clock - previousTime) / (currentTime - previousTime)) : frameAlphaValue;
-        alphaRef.current = alpha;
+        // The simulated time the screen is showing (between the two frames).
+        // Debug readout only: the render loop no longer carries clock state.
+        const displaySimMs = previousTime + alpha * (currentTime - previousTime);
         // One vehicle in the frame now: the ego. Background traffic reaches the
         // map only as sparse road aggregates. Route/control presentation uses
         // the SAME display-time progress as the visible car, otherwise a smooth
@@ -739,7 +729,7 @@ const zoomRef = useRef(16);
             // actually got, rather than inferring it from frame arrivals.
             receivedAtMs: buffer.currentReceivedAtMs,
             alpha: Number(alphaRef.current.toFixed(4)),
-            clockMs: Number(renderClockRef.current.toFixed(1)),
+            displaySimMs: Number(displaySimMs.toFixed(1)),
             frameIntervalMs: Number(expectedIntervalRef.current.toFixed(1)),
             arrivalGapsMs: arrivalGapsRef.current.slice(-40),
             cameraCenter: [

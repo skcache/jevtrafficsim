@@ -239,6 +239,33 @@ A replay fills in `trace` (what it consumed) and `recorded` (what that run was),
 model-derived. Groups are keyed by controller **and** provenance, so a mock Jev run and a
 gateway Jev run of the same scenario are never averaged together.
 
+## Fallback-free completion (per-refresh Jev telemetry)
+
+Jev's policy source can be live, held (the last good policy still governing) or the Adaptive
+fallback. `jev/telemetry.ts` records every policy refresh — its wall-clock and simulated
+instant, its outcome, a **classified reason** when it was not live (`timeout`, `rate-limited`,
+`upstream-5xx`, `transport`, `malformed-json`, `schema-invalid`, `confidence-rejected`,
+`stale`, `gap`, `other`), and the policy `field`/`bound` a schema refusal failed — plus the
+simulated time each window spent on each source. Counters cover every refresh; the recent-event
+list is bounded; nothing upstream-derived (a body, a header, a token) can enter it. It is
+inspectable after a run from `controller.meta().telemetry` (and via `window.__jevDebug` with
+`?debug`, never in the public DOM).
+
+```bash
+pnpm test:jev-fallback                            # all six curated trips, mock client, gate
+pnpm test:jev-fallback --client relay             # the DEPLOYED relay, exactly as the browser calls it
+pnpm test:jev-fallback --client gateway --trips soldier-field-to-navy-pier   # one live run
+pnpm test:jev-fallback --mock-fail timeout        # negative control: this MUST fail
+```
+
+The harness drives each curated trip to the full horizon through the same world seam the app
+uses and **fails unless every route was fallback-free**: zero fallback windows and zero
+failure-attributed fallback time. The only fallback time it allows is the structural opening
+gap (a policy is in force from the tick after it is accepted), reported by name and never
+allowed to grow. Trip completion is reported in its own section — an unfinished trip is not a
+fallback, and `--require-completion` makes it fail the gate too. Live clients are capped at 3
+routes per invocation (`--live-run-budget`), so an invocation cannot quietly spend the quota.
+
 ## Commands
 
 ```bash
@@ -249,6 +276,7 @@ pnpm test         # vitest
 pnpm build        # production build
 pnpm test:browser # production-mode browser journey with mocked relay, no live quota
 pnpm benchmark    # headless benchmark harness
+pnpm test:jev-fallback  # fallback-free completion gate over all six curated trips
 ```
 
 The detailed product requirements live in `docs/` and are intentionally local-only.

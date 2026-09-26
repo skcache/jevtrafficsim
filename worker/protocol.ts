@@ -20,6 +20,7 @@ import type {
   ResolvedChallengeIncident,
 } from "./challenge-incidents";
 import type { ChallengeResult, ComparisonVerdict } from "./challenge-result";
+import type { JevRefreshTelemetry } from "@/jev/telemetry";
 
 /** Fixed simulation pacing: one 100 ms tick per scheduled worker iteration. */
 export const SIM_TICK_MS = 100;
@@ -184,6 +185,13 @@ export type WorkerEvent =
       readonly result: ChallengeResult;
       /** Who governed the signals: null when there was no external policy. */
       readonly policy: PresentationPolicy | null;
+      /**
+       * The per-refresh record (jev/telemetry.ts): which refresh windows went
+       * live, were held, or needed the safety net, and why. Null for a
+       * controller with no external policy. Diagnostic only — the main thread
+       * keeps it behind `?debug`, so no reason vocabulary reaches the DOM.
+       */
+      readonly telemetry: JevRefreshTelemetry | null;
     }
   | {
       readonly type: "COMPARE_RESULT";

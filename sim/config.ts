@@ -175,8 +175,51 @@ export const STOP_SIGN_MIN_STOP_MS = 1500;
  * the road is absolutely full, keeping the final stretch of every road clear
  * for the vehicles already on it. Absolute capacity remains documented as the
  * hard ceiling, but with a ratio below 1 the spillback limit binds first.
+ *
+ * The reservation is a HARD barrier only while it is doing something. It has
+ * no way to be used by any vehicle once a road sits on the threshold, so a set
+ * of roads that block each other at the threshold is an absorbing state: every
+ * member refuses the next vehicle, no member's occupancy can fall, and the jam
+ * never clears. `SPILLBACK_RELEASE_MS` is the escape valve for exactly that
+ * state; without it Chicago's one-way block loops lock permanently.
  */
 export const SPILLBACK_ADMISSION_RATIO = 0.9;
+
+/**
+ * How long a vehicle must have been CONTINUOUSLY blocked at the same road end
+ * before it may use the receiving road's reserved spillback headroom (the
+ * last 10% of that road's capacity), still bounded by absolute capacity.
+ *
+ * Why an escape valve exists at all: the reserved headroom is unusable by
+ * construction once a road sits on SPILLBACK_ADMISSION_RATIO, so a ring of
+ * saturated roads — vehicles on each wanting room on the next — becomes an
+ * absorbing state with no escape. Measured on Chicago (Metro, rush-hour, seed
+ * 42, 600 s): the post-horizon drain leaves permanent residues on the downtown
+ * one-way block loops (e.g. West Taylor St / South Halsted St as four 12-13 m
+ * links of capacity 3, each holding 2 vehicles), with queue heads blocked for
+ * 1 000-1 700 s and never moving again, and the ego trips that run through one
+ * of those loops never finish at all.
+ *
+ * Why 90 000 ms: it must be longer than any legitimate wait for service at a
+ * road end, so the valve can never fire for a vehicle that is simply waiting
+ * for its own green. A signal's worst-case service interval is one full cycle —
+ * two groups at maxGreen 30 s + yellow 3 s + all-red 1 s, i.e. ~68 s — and a
+ * vehicle released from a queue reaches the next road end within one or two
+ * ticks. A vehicle still standing after 90 s of continuous blocking at the same
+ * road end has therefore been refused by the downstream occupancy rule, not by
+ * the signal, and the reservation it is refused by is provably not draining
+ * anything: the receiving road has sat on the threshold with vehicles unable to
+ * leave it.
+ *
+ * Measured scope of the valve (Chicago Metro, seed 42, 600 s, Adaptive, the
+ * SAME scenario run with and without it — scripts/route-completion-report.ts):
+ * light is bit-identical (no candidate at all); everyday moves from 2 778 to
+ * 2 785 arrivals (+0.3%), p95 wait 102.7 -> 102.6 s, max wait 265.6 -> 230.3 s,
+ * gridlock 0.1642 -> 0.1636; rush-hour from 4 683 to 4 659 arrivals (-0.5%),
+ * p95 wait 230.4 -> 216.7 s, gridlock 0.2509 -> 0.2495. It removes permanent
+ * blocks and shortens the worst waits; it is not a throughput lever.
+ */
+export const SPILLBACK_RELEASE_MS = 90_000;
 
 /** Target active-vehicle range per city size and traffic level (PRD §5). */
 export interface ActiveVehicleTargets {

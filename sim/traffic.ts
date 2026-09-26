@@ -33,6 +33,14 @@
  * `occupancy + footprint <= capacity + SIMULATION_EPSILON`. The same map can
  * be handed to A* as its occupancy source (ratio = units / capacity).
  *
+ * Below that hard ceiling the spillback rule keeps a fraction of every road
+ * free (SPILLBACK_ADMISSION_RATIO), and a vehicle that has been blocked at one
+ * road end for SPILLBACK_RELEASE_MS of simulated time may use that reserved
+ * fraction — the gridlock valve. It exists because the reservation, on its
+ * own, is an absorbing state for a ring of saturated roads (`hasCapacity`).
+ * It never crosses absolute capacity, so occupancy stays <= capacity and every
+ * capacity invariant still holds.
+ *
  * ## Waiting rules
  *
  * waitTimeMs accrues only while the vehicle is blocked at tick end: pending
@@ -46,7 +54,9 @@ import {
   SIMULATION_EPSILON,
   SIMULATION_TIMESTEP_MS,
   SPILLBACK_ADMISSION_RATIO,
+  SPILLBACK_RELEASE_MS,
 } from "./config";
+import { currentQueueWaitMs } from "./approach-stats";
 import {
   createIntersectionStepContext,
   evaluateIntersectionControl,
@@ -199,7 +209,8 @@ function removeOccupancy(
 /**
  * Entry check for every admission path (spawns, pending retries, transfers):
  * - absolute capacity (Task 05): occupancy + footprint must fit, so a vehicle
- *   is never released into a full edge;
+ *   is never released into a full edge. This is the hard ceiling and the
+ *   gridlock valve below can never cross it;
  * - spillback headroom (Task 08, PRD §11.3): the admission decision uses the
  *   PROJECTED occupancy (current + this vehicle's footprint). Once occupancy
  *   has reached SPILLBACK_ADMISSION_RATIO of capacity nothing new is admitted,
@@ -210,8 +221,23 @@ function removeOccupancy(
  *   capacity-1 road). An EMPTY road may accept its first vehicle whenever
  *   absolute capacity permits; once occupied, projected spillback applies
  *   normally. Pure function of state — no hysteresis, no separate queue.
+ * - gridlock release (SPILLBACK_RELEASE_MS): a vehicle that has stood still at
+ *   this road end for long enough that no control could still be serving it
+ *   (`waitedMs`) may use that reserved headroom, absolute capacity permitting.
+ *   Without this the reservation is an absorbing state — a ring of roads each
+ *   on the threshold refuses every entrant and no member's occupancy can ever
+ *   fall, so the jam, and any vehicle queued behind it, is stuck forever. The
+ *   valve does not weaken the reservation while a road is draining: it needs
+ *   the vehicle to have stood at the same road end for 90 simulated seconds,
+ *   longer than any legal signal cycle can hold it. Still a pure function of
+ *   (state, wait) — measured scope in sim/config.ts.
  */
-function hasCapacity(state: TrafficState, road: Road, footprint: number): boolean {
+function hasCapacity(
+  state: TrafficState,
+  road: Road,
+  footprint: number,
+  waitedMs = 0,
+): boolean {
   const current = roadOccupancy(state, road.id);
   const projected = current + footprint;
   if (projected > road.capacity + SIMULATION_EPSILON) {
@@ -220,7 +246,27 @@ function hasCapacity(state: TrafficState, road: Road, footprint: number): boolea
   if (current <= SIMULATION_EPSILON) {
     return true;
   }
-  return projected <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON;
+  if (projected <= road.capacity * SPILLBACK_ADMISSION_RATIO + SIMULATION_EPSILON) {
+    return true;
+  }
+  return waitedMs >= SPILLBACK_RELEASE_MS;
+}
+
+/**
+ * Continuous time (ms) a vehicle has been blocked at its CURRENT road end —
+ * the gridlock valve's clock, and the same quantity the starvation watch calls
+ * "approach wait" (see sim/approach-stats.ts: one definition, every consumer).
+ * A queued vehicle reads its `queuedSinceMs`; a pending vehicle has never been
+ * anywhere else, so its whole wait has accrued at this first road.
+ */
+export function continuousBlockedWaitMs(state: TrafficState, vehicle: Vehicle): number {
+  if (vehicle.state === "queued") {
+    return currentQueueWaitMs(state.timeMs, vehicle.queuedSinceMs);
+  }
+  if (vehicle.state === "pending") {
+    return vehicle.waitTimeMs;
+  }
+  return 0;
 }
 
 function enterRoad(state: TrafficState, vehicle: Vehicle, road: Road): void {
@@ -256,7 +302,7 @@ function attemptFirstEntry(
   if (!road || road.closed) {
     return;
   }
-  if (!hasCapacity(state, road, vehicleFootprint(vehicle.type))) {
+  if (!hasCapacity(state, road, vehicleFootprint(vehicle.type), continuousBlockedWaitMs(state, vehicle))) {
     return;
   }
   enterRoad(state, vehicle, road);
@@ -278,7 +324,14 @@ function attemptTransfer(
   if (!next || next.closed) {
     return;
   }
-  if (!hasCapacity(state, next, vehicleFootprint(vehicle.type))) {
+  if (
+    !hasCapacity(
+      state,
+      next,
+      vehicleFootprint(vehicle.type),
+      continuousBlockedWaitMs(state, vehicle),
+    )
+  ) {
     return;
   }
   if (
@@ -354,6 +407,11 @@ function advance(
     let blockedAhead = false;
     if (nextRoadId !== undefined) {
       const next = city.roads[nextRoadId];
+      // This look-ahead decides BRAKING, so it deliberately never uses the
+      // gridlock valve: a vehicle still rolling has not proven the receiver is
+      // stuck, and it should brake to the road end the way it always has. The
+      // valve belongs to vehicles that are actually standing still (the queue
+      // and pending phases), which is where a long continuous wait exists.
       blockedAhead =
         !next ||
         next.closed ||
