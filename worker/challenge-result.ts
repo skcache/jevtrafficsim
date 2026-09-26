@@ -230,8 +230,7 @@ function cleanRunVerdict(results: readonly ChallengeResult[]): ComparisonVerdict
  * that was itself altered keeps the refusal too.
  *
  * What this changes is what a refusal is allowed to LOOK like, not what counts
- * as fair — the numbers are shown as what happened, never as a like-for-like
- * result.
+ * as fair: the numbers are shown as what happened, not as a comparison.
  */
 export function alteredComparisonAllowed(
   fixed: ChallengeResult,

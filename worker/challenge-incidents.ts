@@ -554,7 +554,7 @@ export function resolveManualChallengeIncident(
               targetRoadId: segment.roadId,
               allowDisconnect: false,
             },
-            label: `${roadLabel(input.model, segment.roadId)} closed — rerouting`,
+            label: `${roadLabel(input.model, segment.roadId)} closed; rerouting`,
           };
     }
 

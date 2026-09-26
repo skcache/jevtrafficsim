@@ -246,7 +246,7 @@ export function TrafficSimulator() {
               // The map's own Retry control can recover the asset cache. Keep
               // this companion load bounded and handled, never an unhandled
               // rejection that poisons the browser session.
-              store.setError("Chicago map data is temporarily unavailable. Retry the map or run.");
+              store.setError("Chicago map data is temporarily unavailable. Retry the map, or reload the page.");
             });
           if (
             prewarmRef.current &&

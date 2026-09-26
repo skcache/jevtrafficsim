@@ -556,15 +556,15 @@ export const ALTERED_SCENARIO_TITLE = "Scenario changed mid-run";
 /** The run's own record of an intervention, or the count when only that exists. */
 export const ALTERED_INTERVENTIONS_LEAD = "Fired during this run: ";
 export const ALTERED_SCENARIO_LINE =
-  "The traffic level or the controller changed while this run was playing.";
+  "A setting changed while this run was playing.";
 export const ALTERED_RUN_BOUNDARY =
-  "Fixed and Adaptive replayed the scenario without those changes — the numbers " +
-  "below are what happened, not a like-for-like comparison.";
+  "Fixed and Adaptive replayed the scenario without those changes, so the numbers " +
+  "below are not comparable.";
 /** The comparison's footer, in the two shapes the panel can honestly take. */
 export const COMPARISON_FOOTER =
-  "Same scenario, same demand, same incidents, same driver — only the signals differ.";
+  "Same scenario, same demand, same incidents, same driver. Only the signals differ.";
 export const ALTERED_COMPARISON_FOOTER =
-  "Same scenario, same automatic incidents, same driver — the changes made by " +
+  "Same scenario, same automatic incidents, same driver. The changes made by " +
   "hand during this run are not in the Fixed and Adaptive runs.";
 
 /**
@@ -642,7 +642,7 @@ export const INCIDENT_WARNING_TITLE = "Incidents make this run non-comparable";
  * The run is not modified yet at this point, so the wording stays in the future.
  */
 export const INCIDENT_WARNING_BODY =
-  "Your trip keeps running, but the run will be marked modified — no clean " +
+  "Your trip keeps running, but the run will be marked modified: no clean " +
   "comparison with Fixed and Adaptive.";
 export const INCIDENT_WARNING_CONFIRM = "Add incident";
 export const INCIDENT_WARNING_CANCEL = "Keep it clean";
@@ -661,7 +661,7 @@ export function runShowsNonComparable(input: RunGovernanceLike): boolean {
 
 /** Shown once when a live setting change (not an incident) breaks comparability. */
 export const CLEAN_RUN_LOST_NOTICE =
-  "This run is now modified — the clean comparison with Fixed and Adaptive is off.";
+  "This run is now modified: the clean comparison with Fixed and Adaptive is off.";
 
 /**
  * What the payoff panel should be showing after arrival. `waiting` is the only
@@ -700,7 +700,7 @@ export function baselinePanelState(input: {
 export const BASELINE_COMPUTING_TEXT = "Running the same scenario with Fixed and Adaptive…";
 export const BASELINE_FAILED_TEXT = "The Fixed and Adaptive runs could not be computed.";
 export const BASELINE_FAILED_DETAIL =
-  "The comparison needs both runs — trying again is safe.";
+  "The comparison needs both runs. Trying again is safe.";
 export const BASELINE_RETRY_LABEL = "Try again";
 
 /** Actions that throw the current run away. */

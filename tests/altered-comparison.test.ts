@@ -6,8 +6,7 @@
  *   - a run nobody touched takes exactly the path it always took — no marker,
  *     no extra word, same numbers;
  *   - a run a human changed still shows the comparison's numbers, under a marker
- *     that says what was changed and when, and that it is not a like-for-like
- *     comparison;
+ *     that says what was changed and when, and that it is not comparable;
  *   - the guard keeps refusing an altered run. Showing is not comparing, and
  *     `alteredComparisonAllowed` is only allowed to say yes when the alteration
  *     is the ONLY reason for the refusal;
@@ -135,7 +134,7 @@ describe("the marker says what changed, and when", () => {
   it("names a mid-run change without claiming an incident caused it", () => {
     const notice = alteredRunNotice(result({ modified: true }));
     expect(notice?.title).toBe(ALTERED_SCENARIO_TITLE);
-    expect(notice?.detail).toContain("traffic level or the controller");
+    expect(notice?.detail).toContain("setting changed");
     expect(notice?.detail).not.toContain("Crash");
     // Both at once says both, and the title names the hand that did it.
     const both = alteredRunNotice(
@@ -143,11 +142,11 @@ describe("the marker says what changed, and when", () => {
     );
     expect(both?.title).toBe(ALTERED_RUN_TITLE);
     expect(both?.detail).toContain("Crash at 0:05");
-    expect(both?.detail).toContain("traffic level or the controller");
+    expect(both?.detail).toContain("setting changed");
   });
 
-  it("says plainly that the numbers are not a like-for-like comparison", () => {
-    expect(ALTERED_RUN_BOUNDARY).toContain("not a like-for-like comparison");
+  it("says plainly that the numbers are not comparable", () => {
+    expect(ALTERED_RUN_BOUNDARY).toContain("not comparable");
     expect(ALTERED_RUN_BOUNDARY).toContain("Fixed and Adaptive");
     // The details footer must not repeat the clean run's claim about incidents
     // being identical; the hand-made changes are not in the baselines.
@@ -255,7 +254,7 @@ describe("the panel shows an altered run's numbers under the marker", () => {
   const panel = source("components/ComparisonPanel.tsx");
 
   it("keeps the plain refusal for every other refusal", () => {
-    expect(panel).toContain("No comparison for this run — {verdict.reason}.");
+    expect(panel).toContain("No comparison for this run: {verdict.reason}.");
     expect(panel).toContain("if (!verdict.comparable && !alteredNumbers) {");
   });
 

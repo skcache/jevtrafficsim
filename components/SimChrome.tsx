@@ -78,9 +78,9 @@ const EASE = [0.22, 1, 0.36, 1] as const;
  * RUN_COMPLETE). The skeleton underneath shows the comparison's shape while the
  * numbers are being prepared.
  */
-export const ARRIVED_FINISHING_TEXT = "You arrived — finishing the citywide comparison…";
+export const ARRIVED_FINISHING_TEXT = "You arrived. Finishing the citywide comparison…";
 export const ARRIVED_FINISHING_DETAIL =
-  "The citywide numbers come from the same window as the Fixed and Adaptive runs, so the run is finishing that window now. Your trip time is final.";
+  "The citywide numbers come from the same window as the Fixed and Adaptive runs, and that window is still finishing. Your trip time is final.";
 /** What a screen reader hears while either wait is on screen. */
 export const COMPARISON_PREPARING_ANNOUNCEMENT = "Preparing the citywide comparison.";
 

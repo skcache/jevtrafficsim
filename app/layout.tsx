@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Jev Traffic Simulator",
-  description: "Control a living city. Break it if you can.",
+  description: "Watch one car drive across Chicago while Jev runs the signals. Fixed and Adaptive replay the same scenario.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

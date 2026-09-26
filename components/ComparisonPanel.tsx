@@ -15,7 +15,7 @@
  * One refusal changed shape, by the owner's decision: a run that was changed by
  * hand keeps its numbers on screen, under a marker that says — in the run's own
  * words, and only when the run recorded them — what was changed and when, and
- * that the result is therefore not a like-for-like comparison. `alteredComparisonAllowed`
+ * that the result is therefore not comparable. `alteredComparisonAllowed`
  * (the guard's own answer about the untouched counterfactual) is what permits it;
  * without it, the refusal stands exactly as it always has. The difference
  * sentence is not shown for an altered run: "faster than Adaptive" is a
@@ -70,10 +70,10 @@ export function ComparisonPanel({
       <div>
         <span className="label-micro">This run</span>
         <p className="mt-2.5 text-ui leading-relaxed text-ink">
-          No comparison for this run — {verdict.reason}.
+          No comparison for this run: {verdict.reason}.
         </p>
         <p className="mt-1.5 text-meta leading-relaxed text-ink-70">
-          The trip still happened — your time was {formatLive(live)}.
+          The trip still happened. Your time was {formatLive(live)}.
         </p>
       </div>
     );
@@ -184,7 +184,9 @@ export function ComparisonPanel({
             {alteredNumbers ? ALTERED_COMPARISON_FOOTER : COMPARISON_FOOTER}
           </p>
           <p className="mt-1 text-micro leading-relaxed text-ink-38">
-            Scenario {live.fingerprint}, {baselines.incidentEntries} automatic incidents.
+            Scenario {live.fingerprint},{" "}
+            {baselines.incidentEntries} automatic{" "}
+            {baselines.incidentEntries === 1 ? "incident" : "incidents"}.
           </p>
         </div>
       )}

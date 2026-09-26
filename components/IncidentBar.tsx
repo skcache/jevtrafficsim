@@ -267,7 +267,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
                     aria-label={
                       availability.applicable
                         ? option.label
-                        : `${option.label} — unavailable: ${unavailableHint}`
+                        : `${option.label} unavailable. ${unavailableHint}`
                     }
                     onClick={() => request(option)}
                     onMouseEnter={() => setHint(unavailableHint ?? option.hint)}

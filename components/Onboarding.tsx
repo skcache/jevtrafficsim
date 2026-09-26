@@ -121,8 +121,8 @@ export function Onboarding({
               Jev Traffic Simulator
             </h1>
             <p className="on-map-display mt-4 max-w-md text-ui leading-relaxed text-ink-70">
-              Watch one car drive across Chicago while Jev runs the signals. At the
-              end you&apos;ll see how it compared with Fixed and Adaptive.
+              Watch one car drive across Chicago while Jev runs the signals. Fixed and
+              Adaptive replay the same trip for comparison.
             </p>
             <button
               type="button"
