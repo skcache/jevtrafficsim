@@ -90,6 +90,7 @@ import {
 import { jevProvenance, provenanceLine, type JevProvenance } from "@/jev/provenance";
 import { JEV_SCHEMA_VERSION } from "@/jev/schema";
 import { JEV_REFRESH_REASONS, type JevRefreshEvent, type JevRefreshReason, type JevRefreshTelemetry } from "@/jev/telemetry";
+import { createJevServiceGate, type JevServiceStatus } from "@/jev/scheduler";
 import type { DriverStrategy } from "@/sim/driver";
 import type { TrafficLevel } from "@/sim/types";
 import type { ScenarioRun } from "@/worker/challenge-compare";
@@ -362,6 +363,18 @@ interface RouteReport {
   readonly tripDistanceM: number;
   readonly tripStoppedMs: number;
   readonly reasonMs: Readonly<Partial<Record<JevRefreshReason, number>>>;
+  /**
+   * The wall-clock service schedule this run actually achieved (jev/scheduler.ts):
+   * requests issued, answers received, refusals by reason, and the spacing the
+   * successful policies landed at. Null for a client that needs no gate.
+   */
+  readonly service: JevServiceStatus | null;
+  /**
+   * Simulated ms between accepted policies, from the run's own refresh record:
+   * the freshness the schedule bought in SIMULATED time, which is the quantity
+   * TTL and max hold are expressed in.
+   */
+  readonly successSpacingSimMs: { readonly p50: number; readonly max: number };
   readonly failures: readonly JevRefreshEvent[];
   readonly latencyP50Ms: number;
   readonly latencyMaxMs: number;
@@ -380,6 +393,15 @@ function emptyResult(): RunOutcome {
     simulatedMs: 0,
     trip: { completed: false, tripTimeMs: 0, distanceM: 0, stoppedMs: 0 },
   };
+}
+
+/** Nearest-rank p50/max of a list of durations; 0 for an empty list. */
+function summarizeSpacing(values: readonly number[]): { p50: number; max: number } {
+  if (values.length === 0) {
+    return { p50: 0, max: 0 };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  return { p50: sorted[Math.floor(sorted.length / 2)], max: sorted[sorted.length - 1] };
 }
 
 /** The p50/max answer latency of the windows the record still holds. */
@@ -412,6 +434,13 @@ function reportFor(
   const provenance = jevProvenance(meta);
   const telemetry = meta.telemetry;
   const latency = summarizeLatency(telemetry.recent);
+  // The simulated gap between accepted policies, from the accepted rows only:
+  // the run's own answer to "how fresh was the policy stream, in the units the
+  // TTL and the maximum hold are written in".
+  const acceptedAtSim = telemetry.recent
+    .filter((event) => event.outcome === "live")
+    .map((event) => event.atSimMs);
+  const simSpacings = acceptedAtSim.slice(1).map((at, index) => at - acceptedAtSim[index]);
   return {
     tripId,
     label: provenance.label,
@@ -437,6 +466,8 @@ function reportFor(
     tripDistanceM: result.trip.distanceM,
     tripStoppedMs: result.trip.stoppedMs,
     reasonMs: telemetry.reasonMs,
+    service: meta.service,
+    successSpacingSimMs: summarizeSpacing(simSpacings),
     failures: telemetry.recent.filter((event) => event.outcome !== "live"),
     latencyP50Ms: latency.p50,
     latencyMaxMs: latency.max,
@@ -548,6 +579,9 @@ async function main(): Promise<void> {
             controller = createJevController({
               client,
               scenarioFingerprint: context.fingerprint,
+              // Live clients spend a real allowance; the stand-in spends none
+              // and stays deterministic, so only the live paths are gated.
+              serviceGate: isLive ? createJevServiceGate() : null,
             });
             return controller;
           },
@@ -629,6 +663,38 @@ async function main(): Promise<void> {
         report.label,
       ].join(" "),
     );
+  }
+
+  console.log("\n=== the service schedule the runs actually achieved ===");
+  if (reports.every((report) => report.service === null)) {
+    console.log("  (no service gate was wired: this client needs no wall-clock budget)");
+  } else {
+    console.log(
+      [
+        "trip".padEnd(32),
+        "issued".padStart(7),
+        "answered".padStart(9),
+        "refused".padStart(8),
+        "spacing wall p50/max".padStart(21),
+        "spacing sim p50/max".padStart(20),
+      ].join(" "),
+    );
+    for (const report of reports) {
+      const service = report.service;
+      const refusals = service === null
+        ? 0
+        : Object.values(service.refusals).reduce((sum, count) => sum + (count ?? 0), 0);
+      console.log(
+        [
+          report.tripId.padEnd(32),
+          String(service?.issued ?? 0).padStart(7),
+          String(service?.answered ?? 0).padStart(9),
+          String(refusals).padStart(8),
+          `${service?.successSpacingP50Ms ?? 0}/${service?.successSpacingMaxMs ?? 0}ms`.padStart(21),
+          `${secs(report.successSpacingSimMs.p50)}/${secs(report.successSpacingSimMs.max)}`.padStart(20),
+        ].join(" "),
+      );
+    }
   }
 
   const reasons = new Map<JevRefreshReason, { windows: number; ms: number }>();
