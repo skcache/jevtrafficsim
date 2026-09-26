@@ -509,7 +509,7 @@ export function SimChrome(props: SimChromeProps) {
                 onClick={props.onNewScenario}
                 className="h-10 flex-1 rounded-control border border-hair-strong text-ui font-medium text-ink transition-colors duration-150 hover:bg-ink/[0.04] active:scale-[0.99]"
               >
-                New scenario
+                New draw
               </button>
             </div>
           </motion.div>

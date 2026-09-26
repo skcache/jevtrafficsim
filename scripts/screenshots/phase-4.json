@@ -8,7 +8,7 @@
  {
   "slug": "setup",
   "view": "Setup card",
-  "shows": "The public inputs and only the public inputs: trip, traffic, driver, New scenario. No controller picker, no raw seed.",
+  "shows": "The public inputs and only the public inputs: trip, traffic, driver, New draw. No controller picker, no raw seed.",
   "steps": [{ "clickText": "Start", "waitMs": 1800 }],
   "settleMs": 2600
  },

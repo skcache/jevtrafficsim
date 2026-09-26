@@ -558,7 +558,7 @@ export function TrafficSimulator() {
   }, [guardDiscard, send]);
 
   /**
-   * "New scenario" returns to the setup screen.
+   * "New draw" returns to the setup screen.
    *
    * It used to fire a fresh seed and fly straight back into the city, so the
    * button restarted the run instead of letting anyone choose a different trip,

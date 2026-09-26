@@ -65,9 +65,9 @@ function source(file: string): string {
 /* ------------------------------------------------- 1. the public setup --- */
 
 describe("the public setup", () => {
-  it("asks four questions: trip, traffic, driver, new scenario", () => {
+  it("asks four questions: trip, traffic, driver, new draw", () => {
     const onboarding = source("components/Onboarding.tsx");
-    for (const field of ["Trip", "Traffic", "Driver", "New scenario"]) {
+    for (const field of ["Trip", "Traffic", "Driver", "New draw"]) {
       expect(onboarding).toContain(field);
     }
     // Inside the component, the seed and the controller render only after the
@@ -99,7 +99,7 @@ describe("the public setup", () => {
     expect(chrome).toContain("{debug && (\n          <SeedField");
     // The old wording promised a new city when the geography never changes.
     expect(chrome).not.toContain("New city");
-    expect(chrome).toContain("New scenario");
+    expect(chrome).toContain("New draw");
     // The old Fixed-vs-Adaptive-only label is gone from the payoff panel.
     expect(source("components/ComparisonPanel.tsx")).not.toContain("Fixed vs Adaptive");
   });

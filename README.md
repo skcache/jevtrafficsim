@@ -76,7 +76,7 @@ The experiment is easy to invalidate by accident, so the app says so before it h
 | An incident this world cannot run | Disabled, with the worker's own reason ("no safe route-relevant bridge"), not a click that ends in "not available". |
 | Arrival, while the baselines finish | "Running the same scenario with Fixed and Adaptive…": a named state with no invented progress. |
 | The baselines fail | An explicit failure with a **Try again** button, which re-asks for the same scenario. Never an indefinite wait. |
-| Anything that discards the run (trip, driver, seed, restart, new scenario) | A confirmation when there is progress to lose, and nothing at all before the first run. |
+| Anything that discards the run (trip, driver, seed, restart, new draw) | A confirmation when there is progress to lose, and nothing at all before the first run. |
 
 The guards themselves are unchanged: a run touched by hand, or a scenario moved
 mid-run, is marked `modified` and will not sit beside untouched baselines.

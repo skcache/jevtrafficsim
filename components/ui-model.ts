@@ -736,7 +736,7 @@ export function discardCopy(action: DiscardAction): DiscardCopy {
       return {
         title: "Start a new scenario?",
         body: "This discards the run in progress and draws a new scenario of the same trip.",
-        confirm: "New scenario",
+        confirm: "New draw",
       };
     case "restart":
       return {
