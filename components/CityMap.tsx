@@ -6,9 +6,9 @@
  * MapLibre GL renders the static showcase geography from LOCAL in-memory
  * GeoJSON (no tiles, no external basemap, no attribution) and owns the camera
  * (pan / wheel zoom / pinch / double-click). deck.gl (via MapLibreOverlay)
- * draws the dynamic layers — vehicles, signals, incident overlays — from the
- * bounded per-tick presentation snapshots, interpolated to display rate in one
- * rAF loop.
+ * draws the dynamic layers — the ego, the control it is about to meet, road
+ * traffic state and incident overlays — from the bounded per-tick presentation
+ * snapshots, interpolated to display rate in one rAF loop.
  *
  * Presentation grammar: muted city context under explicit simulation state.
  * Blocks, water, major parks and road hierarchy orient the user; vehicles,
@@ -78,8 +78,9 @@ import {
   upcomingControl,
   type ContextualControl,
 } from "@/render/contextual-controls";
-import { buildControlLayers } from "@/render/control-layers";
-import { buildNetworkSignalLayers, networkSignalMarkers, type NetworkSignalMarker } from "@/render/network-controls";
+import { buildControlLayers, controlSpriteFor } from "@/render/control-layers";
+import { deriveControlTile, sameControlTile, type ControlTileState } from "@/render/control-tile";
+import { ControlTile } from "./ControlTile";
 import { SIM_TICK_MS } from "@/worker/protocol";
 import { canApproachProceedForPhase, deriveApproachGroups } from "@/sim/signals";
 import type { FrameBuffer } from "./frame-buffer";
@@ -149,8 +150,6 @@ const zoomRef = useRef(16);
   const laneOffsetsRef = useRef<number[] | null>(null);
   /** Per-road lng/lat paths + physical widths, for the whole-city traffic layer. */
   const congestionRoadsRef = useRef<CongestionRoad[]>([]);
-  /** Static low-prominence signal network: citywide system context, no worker payload. */
-  const networkSignalsRef = useRef<NetworkSignalMarker[]>([]);
   /** Latest incident plate positions (metric), for the dev camera helper. */
   const platesRef = useRef<readonly { x: number; y: number; label: string }[]>([]);
   /** Metric anchor of the active crash, for the dev camera hook. */
@@ -178,6 +177,14 @@ const zoomRef = useRef(16);
   const routeSegmentsRef = useRef<RouteSegment[]>([]);
   /** Controls the ego is about to meet this frame (at most a couple). */
   const controlsRef = useRef<ContextualControl[]>([]);
+  /**
+   * The compact top-right control tile (Issue #46). Derived from the SAME
+   * controls as the roadside marker, and pushed into React state only when the
+   * tile would actually change (a handful of times per trip) — the render loop
+   * is not allowed to rerender the component tree per frame.
+   */
+  const [controlTile, setControlTile] = useState<ControlTileState | null>(null);
+  const controlTileRef = useRef<ControlTileState | null>(null);
   /** Last interpolated car position in map metres (for recenter). */
   const lastEgoMetricRef = useRef<{ x: number; y: number; headingRadians: number } | null>(null);
   const routeMixRef = useRef<Record<RouteTrafficClass, number>>({ free: 0, slowed: 0, congested: 0 });
@@ -238,11 +245,9 @@ const zoomRef = useRef(16);
         ),
         widthM: widthMetresForRoad(model, road.id, pairs),
       }));
-      networkSignalsRef.current = networkSignalMarkers(model);
     } else {
       laneOffsetsRef.current = null;
       congestionRoadsRef.current = [];
-      networkSignalsRef.current = [];
     }
   }, [model, geo]);
 
@@ -827,7 +832,9 @@ const zoomRef = useRef(16);
               )
             : [];
         // Contextual controls, derived from the CURRENT route so a reroute
-        // swaps them automatically and a passed control retires at once.
+        // swaps them automatically and a passed control retires at once. These
+        // are the ONLY controls the public map draws (issue #46): the citywide
+        // signal network that used to sit underneath them is gone.
         const controls = deriveContextualControls({
           model: buffer.model,
           indexes: buffer.paths,
@@ -837,12 +844,17 @@ const zoomRef = useRef(16);
           routeControls: snapshot?.routeControls ?? [],
         });
         controlsRef.current = controls;
-        const contextualIntersectionIds = liveRef.current
-          ? new Set(controls.map((control) => control.intersectionId))
-          : new Set<number>();
-        const quietNetworkSignals = networkSignalsRef.current.filter(
-          (marker) => !contextualIntersectionIds.has(marker.intersectionId),
-        );
+        // The top-right tile is derived from those same controls, from the same
+        // sprite decision the marker uses, so marker and tile always agree. It
+        // exists only while a control is upcoming; once the ego passes one, the
+        // tile for it is gone. React is updated only when the tile CHANGES, so
+        // the frame loop stays render-free.
+        const tile =
+          liveRef.current && !trafficHiddenRef.current ? deriveControlTile(controls) : null;
+        if (!sameControlTile(controlTileRef.current, tile)) {
+          controlTileRef.current = tile;
+          setControlTile(tile);
+        }
         routeMixRef.current = routeTrafficMix(segments);
         lastEgoMetricRef.current = egoRendered
           ? { x: egoRendered.x, y: egoRendered.y, headingRadians: egoRendered.headingRadians }
@@ -899,14 +911,6 @@ const zoomRef = useRef(16);
               // becomes the foreground experience.
               ...incidents.layers,
             ];
-        const networkSignalLayers: Layer[] = trafficHiddenRef.current
-          ? []
-          : buildNetworkSignalLayers(
-              projection,
-              quietNetworkSignals,
-              controlSpritesRef.current,
-              zoomRef.current,
-            );
         const routeLayers: Layer[] =
           trafficHiddenRef.current || !liveRef.current
             ? []
@@ -939,9 +943,10 @@ const zoomRef = useRef(16);
               );
 
         // Layer order is intentional. Traffic + hazards sit on the road network;
-        // the blue route sits above that system; tiny citywide signal
-        // infrastructure remains visible until its contextual replacement takes
-        // over; the ego and relevant live control own the top hierarchy.
+        // the blue route sits above that system; the ego and the ONE relevant
+        // live control own the top hierarchy. There is no citywide control
+        // layer: the public map shows a control only where the ego is about to
+        // meet one (issue #46).
         const layers: Layer[] = [
           ...routeLayers,
           // Congestion rides ABOVE the route band. The band is 15 m wide and
@@ -951,7 +956,6 @@ const zoomRef = useRef(16);
           // overlay is a centre stripe (2-6 m), so the band still reads as the
           // route on both sides of it.
           ...networkTrafficLayers,
-          ...networkSignalLayers,
           ...challengeTopLayers,
           ...cityVehicleLayers,
         ];
@@ -1006,6 +1010,10 @@ const zoomRef = useRef(16);
             upcomingControlProminence: upcoming?.prominence ?? null,
             upcomingSignalStage: upcoming?.signal?.stage ?? null,
             egoApproachPermitted: upcoming?.signal?.egoApproachPermitted ?? null,
+            // The marker's own sprite and the tile's own state, side by side:
+            // this is what lets a probe prove they agree instead of assuming it.
+            upcomingControlSprite: upcoming ? controlSpriteFor(upcoming) : null,
+            controlTile: controlTileRef.current,
             routeSegments: segments.length,
             routeMix: routeMixRef.current,
             routeTrafficByRoad: segments.slice(0, 12).map((segment) => `${segment.roadId}:${segment.traffic}`),
@@ -1128,6 +1136,13 @@ const zoomRef = useRef(16);
         className="absolute inset-0 h-full w-full"
         aria-label="Chicago map"
       />
+      {/*
+        The ONE control surface in the live view (Issue #46): a compact tile in
+        the top-right corner while a control ahead is relevant, showing the same
+        authoritative state as the roadside marker. Nothing else in the chrome
+        speaks about controls.
+      */}
+      <ControlTile state={controlTile} />
       {/*
         Required attribution: the browser geography is derived from
         OpenStreetMap. Small, in a map corner, never hidden behind settings.

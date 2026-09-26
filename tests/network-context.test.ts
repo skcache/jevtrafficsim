@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { chicagoModel } from "./chicago-support";
 import { networkSignalMarkers, buildNetworkSignalLayers } from "@/render/network-controls";
 import { createControlSprites } from "@/render/control-sprites";
@@ -60,6 +61,18 @@ describe("citywide traffic-system presentation", () => {
       ),
     ).toEqual([]);
     expect(createControlSprites).toBeTypeOf("function");
+  });
+
+  it("is not wired into the public map (issue #46)", () => {
+    // The module still defines the citywide network, and the measurement
+    // tooling still counts it - but the product must never build these layers:
+    // 44 heads inside the follow viewport at zoom 15 is the forest of lights the
+    // live view rejects. The map draws contextual controls instead.
+    const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
+    expect(map).not.toContain("buildNetworkSignalLayers");
+    expect(map).not.toContain("networkSignalMarkers");
+    expect(map).not.toContain("NetworkSignalMarker");
+    expect(map).toContain("deriveContextualControls");
   });
 
   it("shows moving dense traffic before a queue forms", () => {

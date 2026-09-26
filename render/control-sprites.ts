@@ -58,6 +58,16 @@ const LAMP = { x: 64, y: [66, 160, 254] as const, r: 47 };
 const DIM = { red: "#3d211f", yellow: "#3c3119", green: "#1f3829" } as const;
 const LIT = { red: "#ff4a3d", yellow: "#ffc93c", green: "#4ee06a" } as const;
 const GLOW = { red: "#ff8a7a", yellow: "#ffe08a", green: "#9cf0b0" } as const;
+const STOP_FACE = "#b3312a";
+
+/**
+ * What the marker actually lights, for anything that has to agree with it.
+ *
+ * The top-right control tile (Issue #46) paints the SAME lamp the map marker
+ * lights, so it reads its colours from here rather than defining a second
+ * palette that could drift.
+ */
+export const CONTROL_MARKER_COLORS = { ...LIT, stop: STOP_FACE } as const;
 
 function drawSignal(ctx: CanvasRenderingContext2D, lit: "red" | "yellow" | "green" | null): void {
   // Housing with a light top edge so it reads as a physical object.
@@ -131,7 +141,7 @@ function drawStop(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = "#f6efe2";
   octagon(ctx, cx, cy, STOP_RADIUS);
   ctx.fill();
-  ctx.fillStyle = "#b3312a";
+  ctx.fillStyle = STOP_FACE;
   octagon(ctx, cx, cy, STOP_APOTHEM + 8);
   ctx.fill();
   ctx.strokeStyle = "#f6efe2";

@@ -92,7 +92,7 @@ async function main(): Promise<void> {
 
   const text = async (): Promise<string> => page.evaluate(() => document.body.innerText);
   const start = await text();
-  console.log("landing shows the thesis:", has(start, "three ways to run the city's signals"));
+  console.log("landing shows the thesis:", has(start, "while Jev runs the signals"));
   console.log("chicago assets requested:", await page.evaluate(() =>
     performance
       .getEntriesByType("resource")

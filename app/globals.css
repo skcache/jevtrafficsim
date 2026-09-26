@@ -11,11 +11,13 @@
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Type scale: five sizes, three tracking values. */
-  --text-micro: 0.625rem; /* 10px — caps utility labels */
-  --text-meta: 0.75rem; /* 12px — secondary text, control labels */
-  --text-ui: 0.875rem; /* 14px — body, values that are not numerals */
-  --text-value: 1.25rem; /* 20px — metric numerals */
+  /* Type scale: five sizes, three tracking values. Readability pass (Issue #46):
+     the whole scale moved up one step — the previous sizes read as developer
+     text on a laptop at arm's length. */
+  --text-micro: 0.6875rem; /* 11px — caps utility labels */
+  --text-meta: 0.8125rem; /* 13px — secondary text, control labels */
+  --text-ui: 0.9375rem; /* 15px — body, values that are not numerals */
+  --text-value: 1.375rem; /* 22px — metric numerals */
   --text-display: clamp(2.125rem, 4.2vw, 2.75rem); /* landing statement */
 
   /* Ink on warm paper. */
@@ -81,13 +83,14 @@ body {
   box-shadow: var(--shadow-overlay);
 }
 
-/** 10px caps utility label — the only uppercase in the chrome. */
+/** Caps utility label — the only uppercase in the chrome. Slightly darker than
+ *  the old ink-38 so a 11px label is still legible at arm's length. */
 .label-micro {
   font-size: var(--text-micro);
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-ink-38);
+  color: var(--color-ink-52);
   line-height: 1;
 }
 
@@ -126,7 +129,7 @@ body {
 
 .jev-label {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 550;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -140,7 +143,7 @@ body {
 }
 
 .jev-label-landmark {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: none;
@@ -152,13 +155,13 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 5px 9px;
   border-radius: 6px;
   background: var(--color-surface);
   border: 1px solid var(--color-hair);
   box-shadow: var(--shadow-resting);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 550;
   letter-spacing: -0.01em;
   text-transform: none;

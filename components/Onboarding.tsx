@@ -120,14 +120,14 @@ export function Onboarding({
             <h1 className="on-map-display text-display font-semibold leading-[1.04] tracking-[-0.03em] text-ink">
               Jev Traffic Simulator
             </h1>
-            <p className="on-map-display mt-3.5 max-w-sm text-ui leading-relaxed text-ink-70">
-              One Chicago scenario, one trip, one driver — three ways to run the city&apos;s
-              signals.
+            <p className="on-map-display mt-4 max-w-md text-ui leading-relaxed text-ink-70">
+              Watch one car drive across Chicago while Jev runs the signals. At the
+              end you&apos;ll see how it compared with Fixed and Adaptive.
             </p>
             <button
               type="button"
               onClick={() => setPhase("config")}
-              className="mt-7 h-11 rounded-control bg-ink px-6 text-ui font-medium text-surface shadow-[0_1px_2px_rgb(33_29_24/0.14),0_10px_24px_-14px_rgb(33_29_24/0.5)] transition-[opacity,transform] duration-150 hover:opacity-92 active:scale-[0.99]"
+              className="mt-8 h-12 rounded-control bg-ink px-7 text-ui font-medium text-surface shadow-[0_1px_2px_rgb(33_29_24/0.14),0_10px_24px_-14px_rgb(33_29_24/0.5)] transition-[opacity,transform] duration-150 hover:opacity-92 active:scale-[0.99]"
             >
               Start
             </button>
@@ -144,17 +144,14 @@ export function Onboarding({
             transition={{ duration: 0.42, ease: EASE }}
           >
             <motion.div
-              className="flex flex-col gap-6"
+              className="flex flex-col gap-7"
               variants={{ shown: { transition: { staggerChildren: 0.04, delayChildren: 0.04 } } }}
               initial="hidden"
               animate="shown"
             >
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                <div className="flex items-baseline justify-between">
-                  <span className="label-micro">Trip</span>
-                  <span className="text-meta text-ink-52">Metro Chicago</span>
-                </div>
-                <label className="mt-2.5 block">
+                <span className="label-micro">Trip</span>
+                <label className="mt-3 block">
                   <span className="sr-only">Chicago trip</span>
                   <select
                     value={tripId}
@@ -162,7 +159,7 @@ export function Onboarding({
                       setTripId(event.target.value as typeof tripId);
                       onPreviewSetup();
                     }}
-                    className="h-10 w-full rounded-control border border-hair-strong bg-surface px-3 text-ui font-medium text-ink outline-none transition-colors focus:border-ink-38"
+                    className="h-11 w-full rounded-control border border-hair-strong bg-surface px-3 text-ui font-medium text-ink outline-none transition-colors focus:border-ink-38"
                   >
                     {CURATED_TRIPS.map((option) => (
                       <option key={option.id} value={option.id}>
@@ -171,14 +168,12 @@ export function Onboarding({
                     ))}
                   </select>
                 </label>
-                <p className="mt-2 text-meta leading-relaxed text-ink-52">{trip.summary}</p>
+                <p className="mt-2.5 text-meta leading-relaxed text-ink-70">{trip.summary}</p>
               </motion.div>
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                <div className="flex items-baseline justify-between">
-                  <span className="label-micro">Traffic</span>
-                </div>
-                <div className="mt-2.5 flex items-baseline gap-2">
+                <span className="label-micro">Traffic</span>
+                <div className="mt-3 flex items-baseline gap-2">
                   <span className="text-ui font-medium text-ink">{trafficLabel(trafficLevel)}</span>
                 </div>
                 <div className="mt-3">
@@ -204,7 +199,7 @@ export function Onboarding({
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
                 <span className="label-micro">Driver</span>
-                <div className="mt-2.5">
+                <div className="mt-3">
                   <Segmented
                     options={DRIVER_OPTIONS}
                     value={driver}
@@ -217,7 +212,7 @@ export function Onboarding({
                     ariaLabel="Driver"
                   />
                 </div>
-                <p className="mt-2 text-meta leading-relaxed text-ink-52">{driverDescription(driver)}</p>
+                <p className="mt-2.5 text-meta leading-relaxed text-ink-70">{driverDescription(driver)}</p>
               </motion.div>
 
               {debug && (
@@ -257,18 +252,13 @@ export function Onboarding({
               )}
 
               <motion.div variants={fieldVariants} transition={{ duration: 0.3, ease: EASE }}>
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={newScenario}
-                    className="text-meta text-ink-52 transition-colors duration-150 hover:text-ink"
-                  >
-                    New scenario
-                  </button>
-                  {!debug && (
-                    <span className="text-meta text-ink-38">Jev vs Fixed vs Adaptive</span>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={newScenario}
+                  className="text-meta text-ink-70 transition-colors duration-150 hover:text-ink"
+                >
+                  New scenario
+                </button>
               </motion.div>
 
               <motion.div
@@ -280,14 +270,14 @@ export function Onboarding({
                   type="button"
                   disabled={phase === "entering"}
                   onClick={onEnterCity}
-                  className="h-11 w-full rounded-control bg-ink text-ui font-medium text-surface shadow-resting transition-[opacity,transform] duration-150 hover:opacity-92 active:scale-[0.995] disabled:opacity-60"
+                  className="h-12 w-full rounded-control bg-ink text-ui font-medium text-surface shadow-resting transition-[opacity,transform] duration-150 hover:opacity-92 active:scale-[0.995] disabled:opacity-60"
                 >
                   {phase === "entering" ? "Entering…" : "Enter City"}
                 </button>
                 <button
                   type="button"
                   onClick={() => setPhase("landing")}
-                  className="self-center text-meta text-ink-52 transition-colors duration-150 hover:text-ink"
+                  className="self-center text-meta text-ink-70 transition-colors duration-150 hover:text-ink"
                 >
                   Back
                 </button>

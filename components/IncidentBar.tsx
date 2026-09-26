@@ -10,7 +10,9 @@
  * Issue #39 additions, all of them about not surprising the user later:
  *
  *   - the FIRST manual incident is confirmed in place, because it makes the run
- *     non-comparable to the untouched baselines. Never repeated afterwards.
+ *     non-comparable to the untouched baselines. Never repeated afterwards. The
+ *     confirmation says that once, in one sentence (Issue #46 readability pass):
+ *     the title is the accessible name, the body is what the reader sees.
  *   - instruments the world cannot support are disabled and SAY SO, using the
  *     worker's own resolution as the reason — no click that ends in "not
  *     available" when the answer was knowable beforehand.
@@ -20,10 +22,10 @@ import { useEffect, useRef, useState } from "react";
 import type { IncidentKind } from "@/sim/incidents";
 import { useUiStore } from "@/store/ui-store";
 import {
+  INCIDENT_WARNING_BODY,
   INCIDENT_WARNING_CANCEL,
   INCIDENT_WARNING_CONFIRM,
   INCIDENT_WARNING_TITLE,
-  CLEAN_RUN_LOST_NOTICE,
   firstCleanRunWarning,
   incidentAvailability,
   unavailableIncidentHint,
@@ -52,7 +54,7 @@ const INCIDENTS: readonly IncidentOption[] = [
   {
     kind: "traffic-burst",
     label: "+5× Traffic",
-    hint: "Multiply arrivals across the city",
+    hint: "More cars arriving across the city",
     icon: () => (
       <svg {...iconProps}>
         <path d="M2.5 9.5 6 4.5l3.5 5" />
@@ -111,6 +113,26 @@ const INCIDENTS: readonly IncidentOption[] = [
 const ARMED_MS = 600;
 const FEEDBACK_MS = 2400;
 
+/**
+ * What the dock says between the click and the worker's own answer. It names the
+ * thing being looked for, in the dock's plain words — the worker still owns the
+ * truth (it reports what was actually queued, or why nothing was).
+ */
+function resolvingCopy(kind: IncidentKind): string {
+  switch (kind) {
+    case "traffic-burst":
+      return "Adding traffic across the city…";
+    case "crash":
+      return "Finding an approach to block…";
+    case "close-road":
+      return "Finding a road to close…";
+    case "bridge-closed":
+      return "Finding a river crossing to close…";
+    case "event-release":
+      return "Releasing a crowd onto the streets…";
+  }
+}
+
 export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) => void }) {
   const phase = useUiStore((state) => state.phase);
   const feedback = useUiStore((state) => state.feedback);
@@ -157,7 +179,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     }
     setArmed(option.kind);
     // Do not claim success before the worker has resolved a concrete target.
-    useUiStore.getState().setFeedback(`Finding a route-relevant ${option.label.toLowerCase()}…`);
+    useUiStore.getState().setFeedback(resolvingCopy(option.kind));
     timers.current.push(
       window.setTimeout(
         () => setArmed((current) => (current === option.kind ? null : current)),
@@ -202,7 +224,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
     >
       <div className="surface pointer-events-auto flex w-full max-w-full flex-col p-[3px] sm:w-auto">
         <div
-          className="grid h-5 items-center px-2 text-micro font-medium text-ink-52"
+          className="grid h-[22px] items-center px-2 text-meta font-medium text-ink-70"
           aria-live="polite"
         >
           <AnimatePresence mode="wait">
@@ -252,7 +274,7 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
                     onMouseLeave={() => setHint((current) => (current === option.hint ? null : current))}
                     onFocus={() => setHint(unavailableHint ?? option.hint)}
                     onBlur={() => setHint((current) => (current === option.hint ? null : current))}
-                  className={`flex h-8 w-full items-center justify-center gap-[6px] whitespace-nowrap rounded-[6px] px-1.5 text-[11px] font-medium transition-colors duration-150 sm:w-auto sm:px-2.5 sm:text-meta ${
+                  className={`flex h-9 w-full items-center justify-center gap-1 whitespace-nowrap rounded-[6px] px-1 text-meta font-medium transition-colors duration-150 sm:w-auto sm:gap-[6px] sm:px-2.5 ${
                       isArmed
                         ? "bg-ink text-surface"
                         : availability.applicable
@@ -271,22 +293,22 @@ export function IncidentBar({ onIncident }: { onIncident: (kind: IncidentKind) =
           <div
             role="group"
             aria-label={INCIDENT_WARNING_TITLE}
-            className="flex flex-wrap items-center justify-center gap-2 px-2 py-[5px]"
+            className="flex flex-wrap items-center justify-center gap-2 px-2 py-[6px]"
           >
-            <span className="max-w-[320px] text-micro leading-snug text-ink-70">
-              {INCIDENT_WARNING_TITLE} — {CLEAN_RUN_LOST_NOTICE}
+            <span className="max-w-[340px] text-meta leading-snug text-ink-70">
+              {INCIDENT_WARNING_BODY}
             </span>
             <button
               type="button"
               onClick={acceptPending}
-              className="h-6 whitespace-nowrap rounded-[5px] bg-ink px-2 text-micro font-medium text-surface transition-opacity duration-150 hover:opacity-90"
+              className="h-7 whitespace-nowrap rounded-[5px] bg-ink px-2.5 text-meta font-medium text-surface transition-opacity duration-150 hover:opacity-90"
             >
               {INCIDENT_WARNING_CONFIRM}
             </button>
             <button
               type="button"
               onClick={() => setPending(null)}
-              className="h-6 whitespace-nowrap rounded-[5px] px-2 text-micro font-medium text-ink-52 transition-colors duration-150 hover:bg-ink/[0.05] hover:text-ink"
+              className="h-7 whitespace-nowrap rounded-[5px] px-2.5 text-meta font-medium text-ink-70 transition-colors duration-150 hover:bg-ink/[0.05] hover:text-ink"
             >
               {INCIDENT_WARNING_CANCEL}
             </button>

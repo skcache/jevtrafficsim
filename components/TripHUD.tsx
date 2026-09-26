@@ -33,7 +33,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid grid-cols-[1fr_auto] items-baseline gap-4">
       <span className="label-micro">{label}</span>
-      <span className="value-num text-meta font-medium leading-none text-ink">{value}</span>
+      <span className="value-num text-ui font-medium leading-none text-ink">{value}</span>
     </div>
   );
 }
@@ -62,39 +62,41 @@ export function TripHUD() {
     <AnimatePresence>
       {live && !runComplete && (
     <motion.div
-      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[214px] sm:bottom-4"
+      className="pointer-events-none absolute bottom-28 left-4 z-10 w-[240px] sm:bottom-4"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 6 }}
       transition={{ duration: 0.32, delay: 0.18, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="surface flex flex-col gap-2 px-3 py-2.5" role="status" aria-label="Trip">
-        <span className="label-micro">Jev Traffic · Chicago</span>
+      <div className="surface flex flex-col gap-2.5 px-3.5 py-3" role="status" aria-label="Trip">
+        {/* Identity + state on one line, so the trip name gets the full width
+            underneath instead of being cut to "Soldier Field → Nav…". */}
         <div className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate text-ui font-medium text-ink">
-            {view?.tripName ?? "Trip"}
-          </span>
+          <span className="label-micro">Jev Traffic · Chicago</span>
           <span
-            className={`label-micro shrink-0 ${view?.completed ? "text-ink" : "text-ink-52"}`}
+            className={`label-micro shrink-0 ${view?.completed ? "text-ink" : "text-ink-70"}`}
           >
             {view?.state.toUpperCase() ?? "—"}
           </span>
         </div>
+        <span className="min-w-0 truncate text-ui font-medium text-ink">
+          {view?.tripName ?? "Trip"}
+        </span>
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-meta leading-tight text-ink-52">
+          <span className="text-meta leading-tight text-ink-70">
             {trafficLabel(trafficLevel)} · {driverLabel(driver)}
           </span>
           <span className="text-meta leading-none text-ink-70">
             {(policyLabel(controller, policy) ?? { text: controller }).text}
           </span>
         </div>
-        <div className="flex flex-col gap-[6px]">
+        <div className="flex flex-col gap-2">
           {view ? (
             view.rows
               .filter((row) => debug || PRIMARY_ROWS.includes(row.label))
               .map((row) => <Row key={row.label} label={row.label} value={row.value} />)
           ) : (
-            Array.from({ length: 5 }, (_, index) => (
+            Array.from({ length: 3 }, (_, index) => (
               <div key={index} className="grid grid-cols-[1fr_auto] items-baseline gap-4">
                 <span className="label-micro">·</span>
                 <span className="h-[9px] w-10 animate-pulse rounded-full bg-ink/10" />
@@ -103,7 +105,7 @@ export function TripHUD() {
           )}
         </div>
         {runShowsNonComparable({ modified, manualIncidents }) && (
-          <span className="text-micro leading-none text-ink-70">modified · not comparable</span>
+          <span className="text-meta leading-none text-ink-70">modified · not comparable</span>
         )}
         {debug && (
           <div className="mt-0.5 border-t border-hair pt-2">

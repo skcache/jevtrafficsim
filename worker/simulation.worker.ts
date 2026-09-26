@@ -283,6 +283,43 @@ function postSnapshot(): void {
   state.snapshotSequence += 1;
 }
 
+/**
+ * The authoritative trip completion: the ego car has reached its destination.
+ *
+ * This is the fact every frame already carries (`trip.completed`) and the one
+ * the arrival is built from — never the horizon, which is the experiment's
+ * length, not the trip's.
+ */
+function egoArrived(engine: EngineState): boolean {
+  return (
+    engine.egoVehicleId !== null &&
+    vehicleById(engine.traffic, engine.egoVehicleId)?.state === "arrived"
+  );
+}
+
+/**
+ * Simulate the remainder of the horizon with no pacing.
+ *
+ * The paced loop exists so a person can WATCH the city. Once the ego has
+ * arrived there is nothing left to watch: the rest of the horizon exists only
+ * so the visible run covers the same simulated window as its headless baselines
+ * (the comparison is only honest when all three runs describe the same one), and
+ * the engine never reads the wall clock — pacing only decides WHEN a step runs,
+ * never what it produces.
+ *
+ * Measured on the curated Chicago trips, the ego arrives 152-202 s of simulated
+ * time before the 600 s horizon, and the 8× paced loop turned that tail into
+ * 19-26 s of wall clock with the car already parked: that was the delay between
+ * the arrival and the result. Running those steps back to back produces
+ * byte-identical engine state — same steps, same order, same result, same
+ * comparison — so only the delay is deleted.
+ */
+function finishHorizon(engine: EngineState, untilMs: number): void {
+  while (engine.traffic.timeMs < untilMs) {
+    stepEngine(engine);
+  }
+}
+
 function postMetrics(): void {
   if (!state.engine) {
     return;
@@ -487,6 +524,14 @@ function runTick(): void {
       if (engine.traffic.timeMs >= config.durationMs) {
         break;
       }
+    }
+    if (engine.traffic.timeMs < config.durationMs && egoArrived(engine)) {
+      // The trip is over. Publish the arrival frame FIRST — the UI must see the
+      // car arrived before this thread turns to the tail — then simulate the
+      // rest of the horizon back to back instead of pacing it out in real time.
+      postSnapshot();
+      postMetrics();
+      finishHorizon(engine, config.durationMs);
     }
   } catch (error) {
     handleError(error);

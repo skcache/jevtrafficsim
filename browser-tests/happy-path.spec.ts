@@ -116,6 +116,12 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   expect(scenarioBox!.x + scenarioBox!.width).toBeLessThanOrEqual(390);
   expect(scenarioBox!.x).toBeGreaterThanOrEqual(followingBox!.x + followingBox!.width);
   expect(hudBox!.y + hudBox!.height).toBeLessThan(firstControlBox!.y);
+  // Readability pass (Issue #46): larger chrome type must not push the page
+  // sideways. 390 px is the narrowest viewport the product supports.
+  const liveOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(liveOverflow).toBeLessThanOrEqual(0);
   await expect(page.getByText("Who got there first")).toBeVisible({ timeout: 100_000 });
   // The arrival keeps the street framing. Pulling the camera back to a
   // city-wide view on completion was tried and removed: the result belongs over
@@ -132,6 +138,16 @@ test("mobile trip HUD and incident controls stay inside the viewport", async ({ 
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+  // The full comparison table is the widest public surface: open it and check it
+  // still fits the phone (Issue #46 enlarged the type on every row).
+  await page.getByRole("button", { name: "See details" }).click();
+  await expect(page.getByText("Same scenario, same demand")).toBeVisible();
+  const payoffOverflow = await payoff.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(payoffOverflow).toBeLessThanOrEqual(1);
+  const arrivalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(arrivalOverflow).toBeLessThanOrEqual(0);
   await expect(lastControl).toBeHidden();
   await expect(page.getByRole("button", { name: "Zoom in" })).toBeHidden();
   await expect(page.getByText("Jev Traffic · Chicago")).toBeHidden();

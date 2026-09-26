@@ -204,7 +204,9 @@ describe("the wait after arrival says what it is waiting for", () => {
       failed: false,
     });
     expect(state).toBe("computing");
-    expect(BASELINE_COMPUTING_TEXT).toContain("same-scenario baselines");
+    // Names what is still running (Issue #46: plain words, not "baselines").
+    expect(BASELINE_COMPUTING_TEXT).toContain("same scenario");
+    expect(BASELINE_COMPUTING_TEXT).toContain("Fixed and Adaptive");
     // No invented progress: the copy promises a state, not a percentage.
     expect(BASELINE_COMPUTING_TEXT).not.toMatch(/\d+\s?%/);
   });

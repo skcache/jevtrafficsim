@@ -544,10 +544,14 @@ export function firstCleanRunWarning(governance: RunGovernanceLike): boolean {
 }
 
 export const INCIDENT_WARNING_TITLE = "Incidents make this run non-comparable";
+/**
+ * What the reader actually sees when the first incident would end this run's
+ * comparability. One sentence, said once: the consequence, not the mechanism.
+ * The run is not modified yet at this point, so the wording stays in the future.
+ */
 export const INCIDENT_WARNING_BODY =
-  "Your trip keeps running and its own numbers stay honest, but the clean " +
-  "same-scenario comparison with Fixed and Adaptive is no longer available: " +
-  "this run is marked modified.";
+  "Your trip keeps running, but the run will be marked modified — no clean " +
+  "comparison with Fixed and Adaptive.";
 export const INCIDENT_WARNING_CONFIRM = "Add incident";
 export const INCIDENT_WARNING_CANCEL = "Keep it clean";
 
@@ -565,7 +569,7 @@ export function runShowsNonComparable(input: RunGovernanceLike): boolean {
 
 /** Shown once when a live setting change (not an incident) breaks comparability. */
 export const CLEAN_RUN_LOST_NOTICE =
-  "This run is now modified — the clean same-scenario comparison is off.";
+  "This run is now modified — the clean comparison with Fixed and Adaptive is off.";
 
 /**
  * What the payoff panel should be showing after arrival. `waiting` is the only
@@ -595,14 +599,17 @@ export function baselinePanelState(input: {
   return "failed";
 }
 
-export const BASELINE_COMPUTING_TEXT = "Computing same-scenario baselines…";
-// One line, not a paragraph: the wait is self-explanatory and the explanation was
-// chrome on top of a result the visitor is waiting for.
-export const BASELINE_COMPUTING_DETAIL = "Fixed and Adaptive, same scenario, same driver.";
-export const BASELINE_FAILED_TEXT = "The same-scenario baselines could not be computed.";
+/**
+ * The wait after arrival, in plain words: what is still running, and for what.
+ * No invented progress — the copy promises a state, not a percentage. The detail
+ * line that used to repeat this sentence underneath it is gone (Issue #46): one
+ * state, said once.
+ */
+export const BASELINE_COMPUTING_TEXT = "Running the same scenario with Fixed and Adaptive…";
+export const BASELINE_FAILED_TEXT = "The Fixed and Adaptive runs could not be computed.";
 export const BASELINE_FAILED_DETAIL =
-  "The comparison needs both baselines. Retry runs them again for this exact scenario.";
-export const BASELINE_RETRY_LABEL = "Retry baselines";
+  "The comparison needs both runs — trying again is safe.";
+export const BASELINE_RETRY_LABEL = "Try again";
 
 /** Actions that throw the current run away. */
 export type DiscardAction = "trip" | "driver" | "seed" | "restart" | "new-scenario";
@@ -617,32 +624,32 @@ export function discardCopy(action: DiscardAction): DiscardCopy {
   switch (action) {
     case "trip":
       return {
-        title: "Start a run of another trip?",
-        body: "The run in progress — and its place in the comparison — will be discarded and a fresh one will start.",
+        title: "Start a new run of another trip?",
+        body: "This discards the run in progress and starts a fresh one.",
         confirm: "Start new run",
       };
     case "driver":
       return {
         title: "Put a different driver in the car?",
-        body: "A driver defines what the run IS, so this discards the current run and starts a fresh one of the same scenario.",
+        body: "A driver defines the run, so this discards it and starts a fresh one of the same scenario.",
         confirm: "Start new run",
       };
     case "seed":
       return {
         title: "Reseed the scenario?",
-        body: "A new seed rebuilds the world: demand, automatic incidents and the trip all change, and the current run is discarded.",
+        body: "A new seed rebuilds the world, and the run in progress is discarded.",
         confirm: "Reseed and restart",
       };
     case "new-scenario":
       return {
         title: "Start a new scenario?",
-        body: "This discards the run in progress and its result, and draws a new scenario of the same trip.",
+        body: "This discards the run in progress and draws a new scenario of the same trip.",
         confirm: "New scenario",
       };
     case "restart":
       return {
         title: "Restart this run?",
-        body: "The current run — and its comparison — will be discarded and played again from the start.",
+        body: "The run is discarded and played again from the start.",
         confirm: "Restart",
       };
   }

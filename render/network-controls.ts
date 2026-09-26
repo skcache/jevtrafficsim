@@ -6,6 +6,14 @@
  * dynamic signal states across the worker boundary again. The ego's upcoming
  * signal is still rendered by the authoritative contextual-control path, where
  * its live red/yellow/green state matters.
+ *
+ * NOT WIRED INTO THE PUBLIC MAP (Issue #46). Drawing these citywide put 44
+ * signal heads inside the follow viewport at zoom 15 and 753 when the camera
+ * pulled back — a forest of lights, which is exactly what the live view must
+ * not show. The live view now draws a control only where the ego is about to
+ * meet one (render/contextual-controls), so nothing in the product builds these
+ * layers; the module and its unit tests remain as the definition of the
+ * citywide network for measurement tooling.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer } from "@deck.gl/layers";

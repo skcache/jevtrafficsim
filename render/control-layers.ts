@@ -6,6 +6,11 @@
  * permission, not the signal's generic stage), the stop sign is static graph
  * semantics. Both are map-anchored world objects sized in metres with a pixel
  * floor and cap; the nearest control is primary, anything else preview.
+ *
+ * These are the ONLY control pixels the public map has (issue #46): the whole
+ * city's signal network is not drawn at all, and the top-right control tile
+ * reads its lamp from `controlSpriteFor` here, so marker and tile cannot
+ * disagree.
  */
 import type { Layer } from "@deck.gl/core";
 import { IconLayer } from "@deck.gl/layers";
@@ -59,14 +64,22 @@ function sizeFor(control: ContextualControl): number {
 }
 
 function opacityFor(control: ContextualControl): number {
+  // A control the ego has already passed fades OUT as it shrinks. It used to
+  // shrink onto the quiet citywide network marker at the preview opacity, but
+  // that marker no longer exists (issue #46: the public map shows no control
+  // network), so emphasis has to reach zero opacity — otherwise the head would
+  // pop off at the end of the retire band instead of disappearing.
+  if (control.lifecycle === "retiring") {
+    return control.emphasis;
+  }
   return CONTROL_SCALE.opacityFloor + (1 - CONTROL_SCALE.opacityFloor) * control.emphasis;
 }
 
 /**
- * One contextual layer. The icon takes over from the quiet network marker at
- * nearly the same size, then grows continuously as route-distance emphasis
- * approaches 1. The "primary" flag remains useful for debug/semantics, but no
- * layer switch creates a visible pop at the primary threshold.
+ * One contextual layer. The icon grows continuously as route-distance emphasis
+ * approaches 1 and fades out as it shrinks once the control is behind the car.
+ * The "primary" flag remains useful for debug/semantics, but no layer switch
+ * creates a visible pop at the primary threshold.
  */
 export function buildControlLayers(
   projection: Projection,

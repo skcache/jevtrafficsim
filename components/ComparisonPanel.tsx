@@ -43,14 +43,12 @@ export function ComparisonPanel({
   if (!verdict.comparable) {
     return (
       <div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="label-micro">This run</span>
-        </div>
-        <p className="mt-2 text-meta leading-relaxed text-ink-52">
-          This run cannot be shown beside the baselines: {verdict.reason}.
+        <span className="label-micro">This run</span>
+        <p className="mt-2.5 text-ui leading-relaxed text-ink">
+          No comparison for this run — {verdict.reason}.
         </p>
-        <p className="mt-1.5 text-micro leading-relaxed text-ink-38">
-          The trip itself still happened — your time was {formatLive(live)}.
+        <p className="mt-1.5 text-meta leading-relaxed text-ink-70">
+          The trip still happened — your time was {formatLive(live)}.
         </p>
       </div>
     );
@@ -64,29 +62,27 @@ export function ComparisonPanel({
 
   return (
     <div data-jev-provenance={policy === null ? undefined : JSON.stringify(policy)} data-jev-label={liveLabel} data-simulated-ms={live.simulatedMs}>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="label-micro">Who got there first</span>
-      </div>
+      <span className="label-micro">Who got there first</span>
 
-      <div className="mt-2.5 flex flex-col">
+      <div className="mt-3 flex flex-col">
         {entries.map((entry, index) => {
           const fastest = !entry.incomplete && fastestTimeMs !== null && entry.tripTimeMs === fastestTimeMs;
           return (
             <div
               key={entry.key}
-              className={`flex items-baseline justify-between gap-3 py-1.5 ${
+              className={`flex items-baseline justify-between gap-3 py-2 ${
                 index === 0 ? "" : "border-t border-hairline"
               }`}
             >
               <span
                 className={`text-meta uppercase tracking-wide ${
-                  fastest ? "font-semibold text-ink" : "font-medium text-ink-52"
+                  fastest ? "font-semibold text-ink" : "font-medium text-ink-70"
                 }`}
               >
                 {entry.label}
               </span>
               <span
-                className={`value-num text-[22px] leading-none tracking-tight tabular-nums ${
+                className={`value-num text-[26px] leading-none tracking-tight tabular-nums ${
                   fastest ? "font-semibold text-ink" : "font-medium text-ink-70"
                 }`}
               >
@@ -98,31 +94,31 @@ export function ComparisonPanel({
       </div>
 
       {delta !== null && (
-        <p className="mt-2.5 border-t border-hairline pt-2 text-ui leading-snug text-ink">
+        <p className="mt-3 border-t border-hairline pt-2.5 text-ui leading-snug text-ink">
           {delta.text}
         </p>
       )}
       {visible?.detail !== null && visible !== null && (
-        <p className="mt-1.5 text-micro leading-relaxed text-ink-52">{visible.detail}</p>
+        <p className="mt-1.5 text-meta leading-relaxed text-ink-70">{visible.detail}</p>
       )}
 
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="mt-3 text-micro font-medium uppercase tracking-wide text-ink-52 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
+        className="mt-3.5 text-meta font-medium text-ink-70 underline-offset-2 transition-colors duration-150 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
       >
         {open ? "Hide details" : "See details"}
       </button>
 
       {open && (
-        <div className="mt-2 border-t border-hairline pt-2">
+        <div className="mt-3 border-t border-hairline pt-3">
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className="w-[30%] pb-1 text-left label-micro text-ink-38"> </th>
+                <th className="w-[30%] pb-1.5 text-left label-micro"> </th>
                 {columns.map((column) => (
-                  <th key={column} className="pb-1 pl-2 text-right label-micro">
+                  <th key={column} className="pb-1.5 pl-2 text-right label-micro">
                     {column}
                   </th>
                 ))}
@@ -131,16 +127,18 @@ export function ComparisonPanel({
             <tbody>
               {rows.map((row) => (
                 <tr key={row.label} className="border-t border-hairline">
-                  <td className="py-[3px] text-meta text-ink-52">{row.label}</td>
-                  <td className="value-num py-[3px] pl-2 text-right text-meta text-ink">{row.fixed}</td>
-                  <td className="value-num py-[3px] pl-2 text-right text-meta text-ink">{row.adaptive}</td>
-                  <td className="value-num py-[3px] pl-2 text-right text-meta text-ink">{row.jev}</td>
+                  <td className="py-1 text-meta text-ink-70">{row.label}</td>
+                  <td className="value-num py-1 pl-2 text-right text-meta text-ink">{row.fixed}</td>
+                  <td className="value-num py-1 pl-2 text-right text-meta text-ink">{row.adaptive}</td>
+                  <td className="value-num py-1 pl-2 text-right text-meta text-ink">{row.jev}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="mt-2 text-micro leading-relaxed text-ink-38">
+          <p className="mt-2.5 text-meta leading-relaxed text-ink-70">
             Same scenario, same demand, same incidents, same driver — only the signals differ.
+          </p>
+          <p className="mt-1 text-micro leading-relaxed text-ink-38">
             Scenario {live.fingerprint}, {baselines.incidentEntries} automatic incidents.
           </p>
         </div>

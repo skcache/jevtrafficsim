@@ -75,12 +75,17 @@ export const FOLLOW_SCALE = {
  * objects: sized in metres, with a pixel floor so they stay readable at
  * follow-camera zoom and a cap so they never smear when the camera descends.
  * The preview band is deliberately smaller and quieter than the primary one.
+ *
+ * These are the ONLY controls the public map draws (issue #46): the citywide
+ * network of tiny neutral heads is gone, so the preview size is no longer a
+ * handoff from anything — it is simply the quiet end of this one control's own
+ * approach animation.
  */
 export const CONTROL_SCALE = {
   /**
-   * A contextual control starts at the same physical scale as the quiet
-   * network marker and grows continuously as the ego approaches. This is the
-   * important bit: no 100px traffic-light teleport, no tiny unreadable dot.
+   * A contextual control starts small and grows continuously as the ego
+   * approaches. This is the important bit: no 100px traffic-light teleport, no
+   * tiny unreadable dot.
    */
   signalBaseHeightM: 6.2,
   signalHeightM: 13.5,
@@ -88,17 +93,26 @@ export const CONTROL_SCALE = {
   stopHeightM: 11,
   // The pixel FLOOR is what makes a control readable, and it is also what keeps
   // it readable at a distance: measured at the follow zoom the map is
-  // 0.561 px per metre, so even a 13.5 m signal is only 7.6 px without it. 18 px
+  // 0.5615 px per metre, so even a 13.5 m signal is only 7.6 px without it. 18 px
   // is ~3x the previous rendered size (5.9 px) and holds out to the zoom levels
   // a viewer actually uses (issue #56).
   minPixels: 18,
   maxPixels: 56,
-  // Match the quiet network marker at emphasis=0, then fade to full strength
-  // as the ego approaches. This makes the handoff visually continuous.
+  // Quiet at the preview boundary, full strength as the ego approaches. A
+  // passed control fades to zero from here (see control-layers' opacityFor).
   opacityFloor: 0.3,
 } as const;
 
-/** Tiny neutral signal heads that prove the whole-city control system exists. */
+/**
+ * The citywide network of tiny neutral heads (Issue #27).
+ *
+ * NOT drawn on the public map any more: issue #46 requires the live view to
+ * show a control ONLY where the ego is about to meet one, and 44 of these fell
+ * inside the follow viewport at zoom 15 (753 when zoomed out), which is exactly
+ * the "forest of lights" the issue rejects. The module stays because the
+ * measurement tooling still counts the network it describes; nothing in the
+ * product wires it into a layer.
+ */
 export const NETWORK_CONTROL_SCALE = {
   signalHeightM: 5.6,
   minPixels: 6,

@@ -32,8 +32,8 @@ export const DRIVER_LABELS: Record<DriverStrategy, string> = {
 };
 
 export const DRIVER_DESCRIPTIONS: Record<DriverStrategy, string> = {
-  tourist: "Plans once and stays on it; only a closed road moves them.",
-  local: "Replans against live traffic when a materially better route appears.",
+  tourist: "Picks a route and keeps it; only a closed road makes them change.",
+  local: "Reroutes when traffic makes a clearly better road available.",
 };
 
 export const LOCAL_REPLAN = {

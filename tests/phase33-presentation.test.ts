@@ -319,13 +319,14 @@ describe("product shell contracts", () => {
 
   it("shows city traffic during setup without leaking the private challenge route", () => {
     expect(map).toContain("networkTrafficLayers");
-    expect(map).toContain("networkSignalLayers");
     expect(map).toContain("routeLayers");
     expect(map).toContain("challengeTopLayers");
     expect(map).toContain("trafficHiddenRef.current || !liveRef.current");
-    // Traffic/signals exist before live mode; route/ego layers remain gated.
+    // Traffic exists before live mode; route/ego layers remain gated. There is
+    // no citywide SIGNAL layer to keep alive: issue #46 removed it, because the
+    // live view may only show a control the ego is about to meet.
     expect(map).toContain("...networkTrafficLayers");
-    expect(map).toContain("...networkSignalLayers");
+    expect(map).not.toContain("networkSignalLayers");
     // Traffic-mode hazards are visible in the prewarmed map too, while verbose
     // incident plates stay reserved for the live challenge.
     expect(map).toContain("...incidents.layers");
@@ -333,10 +334,15 @@ describe("product shell contracts", () => {
     expect(map).toContain("visiblePlates = showIncidentLabels ? incidents.extras.plates : []");
   });
 
-  it("shows citywide traffic context without double-painting the visible ego route", () => {
-    expect(map).toContain("buildNetworkSignalLayers");
-    expect(map).toContain("networkSignalMarkers");
+  it("shows citywide traffic context without painting a citywide control network", () => {
     expect(map).toContain("buildCongestionLayers");
+    // Issue #46: no citywide forest of lights/signs. The citywide control
+    // layers are not built at all - measured before the change: 44 signal heads
+    // inside the follow viewport at zoom 15, 753 when the camera pulled back.
+    expect(map).not.toContain("buildNetworkSignalLayers");
+    expect(map).not.toContain("networkSignalMarkers");
+    expect(map).not.toContain("networkSignalLayers");
+    expect(map).not.toContain("quietNetworkSignals");
     // Issue #27 removed the old close-zoom cutoff: traffic remains visible as
     // road state even while the camera is close enough to inspect the ego.
     expect(map).not.toContain("zoomRef.current < CLOSE_TIER_MINZOOM");
@@ -346,10 +352,26 @@ describe("product shell contracts", () => {
     // only road in the city that could never show amber or red.
     expect(map).toContain("roadPressure(buffer.current)");
     expect(map).not.toContain("visibleRouteRoadIds");
-    // Tiny network signals sit above the route until the contextual replacement
-    // takes over, preventing the blue band from hiding proof of the signal net.
-    expect(map.indexOf("...routeLayers")).toBeLessThan(map.indexOf("...networkSignalLayers"));
-    expect(map).toContain("!contextualIntersectionIds.has(marker.intersectionId)");
+    // The ONE control layer is the contextual one, and it draws above the route
+    // so the control the ego is meeting is never hidden by the blue band.
+    expect(map).toContain("buildControlLayers");
+    expect(map.indexOf("...routeLayers")).toBeLessThan(map.indexOf("...challengeTopLayers"));
+  });
+
+  it("gives the live view exactly one control surface: the top-right tile", () => {
+    // Issue #46: the tile is derived from the same controls as the roadside
+    // marker (and from the same sprite decision), so the two agree; it is
+    // rendered by the map component and gated on being in the city.
+    expect(map).toContain("deriveControlTile(controls)");
+    expect(map).toContain("!trafficHiddenRef.current ? deriveControlTile(controls) : null");
+    expect(map).toContain("<ControlTile state={controlTile} />");
+    const tile = readFileSync(new URL("../components/ControlTile.tsx", import.meta.url), "utf8");
+    expect(tile).toContain("data-control-tile");
+    expect(tile).toContain("Stop");
+    // No fake timers, no invented state: the tile only ever renders the derived
+    // kind and lamp.
+    expect(tile).not.toContain("setInterval");
+    expect(tile).not.toContain("setTimeout");
   });
 
   it("swaps every presentation source when the city scale changes", () => {
