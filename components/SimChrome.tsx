@@ -21,7 +21,7 @@ import { CURATED_TRIPS, curatedTrip, type CuratedTripId } from "@/cities/chicago
 import { useUiStore } from "@/store/ui-store";
 import type { ControllerChoice } from "@/worker/protocol";
 import { DiscreteSlider, SeedField, Segmented, TickRow } from "./controls";
-import { ComparisonPanel } from "./ComparisonPanel";
+import { ComparisonPanel, ComparisonSkeleton } from "./ComparisonPanel";
 import {
   BASELINE_COMPUTING_TEXT,
   BASELINE_FAILED_DETAIL,
@@ -29,6 +29,7 @@ import {
   BASELINE_RETRY_LABEL,
   baselinePanelState,
   discardCopy,
+  runShowsNonComparable,
 } from "./ui-model";
 import {
   CONTROLLER_OPTIONS,
@@ -64,6 +65,24 @@ interface SimChromeProps {
 }
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+
+/**
+ * The wait after arrival, in plain words.
+ *
+ * The trip is over — the ego arrived, and its time is final — but the RUN is
+ * not: the comparison's citywide rows can only be read from a run that covers
+ * the same window as the Fixed and Adaptive baselines, so the rest of that
+ * window is simulated before the table can be printed. The copy says exactly
+ * that. It never says "still playing" (the car is parked) and never claims the
+ * run is complete (it is not, and "Run complete" stays conditional on
+ * RUN_COMPLETE). The skeleton underneath shows the comparison's shape while the
+ * numbers are being prepared.
+ */
+export const ARRIVED_FINISHING_TEXT = "You arrived — finishing the citywide comparison…";
+export const ARRIVED_FINISHING_DETAIL =
+  "The citywide numbers come from the same window as the Fixed and Adaptive runs, so the run is finishing that window now. Your trip time is final.";
+/** What a screen reader hears while either wait is on screen. */
+export const COMPARISON_PREPARING_ANNOUNCEMENT = "Preparing the citywide comparison.";
 
 function IconButton({
   label,
@@ -252,6 +271,8 @@ export function SimChrome(props: SimChromeProps) {
   const baselinesRunning = useUiStore((state) => state.baselinesRunning);
   const baselinesFailed = useUiStore((state) => state.baselinesFailed);
   const pendingDiscard = useUiStore((state) => state.pendingDiscard);
+  const modified = useUiStore((state) => state.modified);
+  const manualIncidents = useUiStore((state) => state.manualIncidents);
   const surgeFlash = useUiStore((state) => state.surgeFlash);
   const surgeVisible = useUiStore((state) => state.surgeVisible);
   // "Live" means the city is the surface the user is looking at. A completed run
@@ -275,6 +296,14 @@ export function SimChrome(props: SimChromeProps) {
     failed: baselinesFailed !== null,
   });
   const discard = pendingDiscard === null ? null : discardCopy(pendingDiscard);
+  /**
+   * The skeleton mirrors the shape the comparison will actually take: a run that
+   * was changed by hand gets the refusal (two sentences), everything else gets
+   * the three race rows. Known during the wait — the worker's own account of the
+   * run is already in the store — so the placeholder never promises a table the
+   * run cannot have.
+   */
+  const skeleton = runShowsNonComparable({ modified, manualIncidents }) ? "refusal" : "race";
 
   return (
     <>
@@ -428,6 +457,7 @@ export function SimChrome(props: SimChromeProps) {
               {panel === "computing" && (
                 <div role="status" aria-live="polite">
                   <p className="text-ui font-medium text-ink">{BASELINE_COMPUTING_TEXT}</p>
+                  <p className="sr-only">{COMPARISON_PREPARING_ANNOUNCEMENT}</p>
                 </div>
               )}
               {panel === "failed" && (
@@ -447,10 +477,23 @@ export function SimChrome(props: SimChromeProps) {
                   </button>
                 </div>
               )}
+              {/* The trip ended at the arrival; the run's window has not. Say
+                  which of the two is still going, and show the comparison's
+                  shape while it is prepared. Never "still playing": the car is
+                  parked, and the wait is the fairness rule doing its work. */}
               {panel === "waiting" && (
-                <p className="text-ui leading-relaxed text-ink-70">
-                  The run is still playing…
-                </p>
+                <div role="status" aria-live="polite">
+                  <p className="text-ui font-medium text-ink">{ARRIVED_FINISHING_TEXT}</p>
+                  <p className="mt-1.5 text-meta leading-relaxed text-ink-70">
+                    {ARRIVED_FINISHING_DETAIL}
+                  </p>
+                  <p className="sr-only">{COMPARISON_PREPARING_ANNOUNCEMENT}</p>
+                </div>
+              )}
+              {/* The same skeleton for both waits — the run's tail and the two
+                  headless baselines are one continuous "results are coming". */}
+              {(panel === "waiting" || panel === "computing") && (
+                <ComparisonSkeleton variant={skeleton} />
               )}
             </div>
             <div className="mt-5 flex gap-2.5">

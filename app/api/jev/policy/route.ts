@@ -26,6 +26,13 @@
  * near the log. `failureReason` is the single place that decides what a log line
  * may say, which is what makes the rule testable.
  *
+ * The same bounded class rides out to the caller in `x-jev-reason` (and, on a
+ * successful answer, the counts of what the answer cost in `x-jev-clamped` /
+ * `x-jev-dropped`). That is deliberate: the run can then say WHY it fell back —
+ * a timeout, a rate limit, an upstream error — instead of reverting to the
+ * safety net in silence. Response BODIES are unchanged: a status and one short
+ * sentence, never the service's words.
+ *
  * ## What guards this route, and what each guard is worth (Issue #37)
  *
  * | guard | scope | guarantee |
@@ -45,7 +52,15 @@
  */
 import { unstable_checkRateLimit as checkRateLimit } from "@vercel/firewall";
 import { getVercelOidcTokenSync } from "@vercel/oidc";
-import { createHttpJevClient, JEV_DEFAULT_TIMEOUT_MS, type JevClient } from "@/jev/client";
+import {
+  createHttpJevClient,
+  JEV_CLAMPED_HEADER,
+  JEV_DEFAULT_TIMEOUT_MS,
+  JEV_DROPPED_HEADER,
+  JEV_REASON_HEADER,
+  type JevClient,
+  type JevClientFailure,
+} from "@/jev/client";
 import { JEV_GATEWAY_TIMEOUT_MS } from "@/jev/gateway";
 import { createGatewayJevClient, JEV_GATEWAY_ENDPOINT } from "@/jev/gateway";
 import { jevPolicyContext } from "@/jev/request";
@@ -213,7 +228,9 @@ function readMinConfidence(): number | undefined {
 }
 
 /** The only error messages this route will ever log: status codes, a timeout. */
-const REPORTABLE_STATUS = /^jev (gateway|service) responded \d{3}$/;
+const REPORTABLE_STATUS = /^jev (gateway|service|relay) responded \d{3}$/;
+/** The clients' own bounded sentences for a deadline or a missing connection. */
+const REPORTABLE_TRANSPORT = /^jev (gateway|service|relay) (request timed out|unreachable)$/;
 
 /**
  * A bounded description of a failed policy request: safe to log, useless to an
@@ -228,8 +245,49 @@ export function failureReason(error: unknown): string {
     if (REPORTABLE_STATUS.test(error.message)) {
       return error.message;
     }
+    if (REPORTABLE_TRANSPORT.test(error.message)) {
+      return error.message.endsWith("unreachable") ? "unreachable" : "timeout";
+    }
   }
   return "unexpected failure";
+}
+
+/**
+ * The bounded CLASS of a failure, for the response header. Same vocabulary the
+ * browser client uses (`JevClientFailure`), so the run can report WHY it fell
+ * back without the relay's body ever carrying upstream text.
+ */
+export function failureClass(error: unknown): JevClientFailure {
+  const reason = failureReason(error);
+  if (reason === "timeout") {
+    return "timeout";
+  }
+  if (reason === "unreachable") {
+    return "unreachable";
+  }
+  const status = Number(/responded (\d{3})/.exec(reason)?.[1] ?? Number.NaN);
+  if (status === 429) {
+    return "rate-limited";
+  }
+  if (status >= 500) {
+    return "upstream-error";
+  }
+  if (status >= 400) {
+    return "rejected";
+  }
+  return "unknown";
+}
+
+/**
+ * A refusal, with its bounded class in a header.
+ *
+ * The BODY is unchanged on purpose (one short sentence, no upstream words — the
+ * pinned contract), and the class travels beside it in `x-jev-reason`, which is
+ * what lets the browser say "the model did not answer in time" instead of a
+ * generic failure. Both channels are this codebase's own closed vocabulary.
+ */
+function refusal(status: number, error: string, failure: JevClientFailure): Response {
+  return Response.json({ error }, { status, headers: { [JEV_REASON_HEADER]: failure } });
 }
 
 export function readJevEnvironment(gatewayOidcToken?: string): JevEnvironment | null {
@@ -299,49 +357,49 @@ export async function POST(request: Request): Promise<Response> {
   }
   const environment = readJevEnvironment(gatewayOidcToken);
   if (environment === null) {
-    return Response.json({ error: "jev is not configured" }, { status: 503 });
+    return refusal(503, "jev is not configured", "not-configured");
   }
 
   if (!firstParty(request)) {
-    return Response.json({ error: "cross-origin requests are not allowed" }, { status: 403 });
+    return refusal(403, "cross-origin requests are not allowed", "rejected");
   }
 
   // Identity comes from the platform (see caller.ts), never from the caller's
   // own forwarding headers, and is never echoed back in a response.
   const key = callerIdentity(request);
   if (await platformRateLimited(request, key)) {
-    return Response.json({ error: "too many policy requests" }, { status: 429 });
+    return refusal(429, "too many policy requests", "rate-limited");
   }
   if (!allowRequest(key, Date.now())) {
-    return Response.json({ error: "too many policy requests" }, { status: 429 });
+    return refusal(429, "too many policy requests", "rate-limited");
   }
 
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    return Response.json({ error: "request body is too large" }, { status: 413 });
+    return refusal(413, "request body is too large", "rejected");
   }
 
   let text: string;
   try {
     text = await request.text();
   } catch {
-    return Response.json({ error: "request body could not be read" }, { status: 400 });
+    return refusal(400, "request body could not be read", "rejected");
   }
   // The declared length is a claim; this is the actual size.
   if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
-    return Response.json({ error: "request body is too large" }, { status: 413 });
+    return refusal(413, "request body is too large", "rejected");
   }
 
   let body: unknown;
   try {
     body = JSON.parse(text) as unknown;
   } catch {
-    return Response.json({ error: "request body must be JSON" }, { status: 400 });
+    return refusal(400, "request body must be JSON", "rejected");
   }
 
   const validated = validateJevPolicyRequest(body);
   if (!validated.ok) {
-    return Response.json({ error: validated.error }, { status: 400 });
+    return refusal(400, validated.error, "rejected");
   }
 
   const client = jevClientFromEnvironment(environment);
@@ -349,12 +407,23 @@ export async function POST(request: Request): Promise<Response> {
     const raw = await client.requestPolicy(validated.value);
     const parsed = parseJevPolicy(raw, jevPolicyContext(validated.value));
     if (!parsed.ok) {
-      return Response.json({ error: parsed.error }, { status: 502 });
+      return refusal(502, parsed.error, "malformed");
     }
-    return Response.json({ policy: parsed.value.policy, clamped: parsed.value.clamped });
+    // What this answer cost, in counts only: a policy that had to be clamped is
+    // applied and reported as imperfect rather than hidden.
+    const notes = client.answerNotes?.() ?? null;
+    return Response.json(
+      { policy: parsed.value.policy, clamped: parsed.value.clamped },
+      {
+        headers: {
+          [JEV_CLAMPED_HEADER]: String(parsed.value.clamped.length),
+          [JEV_DROPPED_HEADER]: String(notes?.dropped ?? 0),
+        },
+      },
+    );
   } catch (error) {
     // Bounded by construction: a status or the word "timeout", never a body.
     console.error("[jev-relay] policy request failed:", failureReason(error));
-    return Response.json({ error: "jev service request failed" }, { status: 502 });
+    return refusal(502, "jev service request failed", failureClass(error));
   }
 }

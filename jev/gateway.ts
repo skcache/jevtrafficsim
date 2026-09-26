@@ -41,6 +41,11 @@ import {
   type JevPolicy,
 } from "./schema";
 import type { JevClient } from "./client";
+import {
+  JevClientError,
+  failureFromStatus,
+  type JevAnswerNotes,
+} from "./client";
 
 /** Verified against the live gateway (see the file header). */
 export const JEV_GATEWAY_ENDPOINT = "https://ai-gateway.vercel.sh/v1/evaluate";
@@ -286,6 +291,76 @@ export interface PolicyTranslationOptions {
 }
 
 /**
+ * The choice one answer carries, when its evidence makes it usable.
+ *
+ * Current Gateway choices report a probability for each option, not a separate
+ * confidence. Use the selected option's own probability; only legacy responses
+ * without probabilities may use `confidence`. Missing or malformed evidence is
+ * unusable, so the answer carries no opinion instead of a guessed one.
+ *
+ * Exported because the run reports how many answers were dropped this way: a
+ * policy that is APPLIED but imperfect must be able to say so.
+ */
+export function usableChoice(
+  answers: Record<string, EvaluationsAnswer>,
+  questionId: string,
+  minConfidence: number,
+): string | null {
+  const answer = answers[questionId];
+  if (answer === null || typeof answer !== "object") {
+    return null;
+  }
+  const choice = answer.choice;
+  if (typeof choice !== "string") return null;
+  const probabilities = answer.probabilities;
+  const confidence = probabilities === undefined
+    ? answer.confidence
+    : probabilities !== null && typeof probabilities === "object" && Object.hasOwn(probabilities, choice)
+      ? (probabilities as Record<string, unknown>)[choice]
+      : undefined;
+  return answerConfidenceUsable(confidence, minConfidence) ? choice : null;
+}
+
+/** The answers a response carried, or null when it carried none. */
+function answersOf(response: unknown): Record<string, EvaluationsAnswer> | null {
+  const answers = (response as { answers?: Record<string, EvaluationsAnswer> } | null)?.answers;
+  return answers === null || typeof answers !== "object" ? null : answers;
+}
+
+/**
+ * How many of the questions this request asked were ANSWERED but unusable,
+ * because the confidence floor (or a malformed confidence) dropped them.
+ *
+ * This is the one imperfection the gateway path can have that leaves no other
+ * trace: the answer becomes the schema's neutral default, the policy stays
+ * valid, and without this count nobody could tell that the model did have an
+ * opinion there. Questions the model did not answer at all are not counted —
+ * silence is not a dropped answer.
+ */
+export function droppedAnswerCount(
+  body: EvaluationsBody,
+  response: unknown,
+  options: PolicyTranslationOptions = {},
+): number {
+  const answers = answersOf(response);
+  if (answers === null) {
+    return 0;
+  }
+  const minConfidence = options.minConfidence ?? JEV_CONFIDENCE.MIN_ANSWER_CONFIDENCE;
+  let dropped = 0;
+  for (const questionId of Object.keys(body.questions)) {
+    const answer = answers[questionId];
+    if (answer === undefined || answer === null || typeof answer !== "object") {
+      continue; // the model said nothing about this one
+    }
+    if (usableChoice(answers, questionId, minConfidence) === null) {
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
+/**
  * Translate the model's answers into a policy object. Every value comes from a
  * bucket table, so the result is always inside the schema's bounds; anything
  * the model answered that we did not ask about, or in a shape we do not
@@ -298,31 +373,14 @@ export function policyFromEvaluations(
   response: unknown,
   options: PolicyTranslationOptions = {},
 ): JevPolicy {
-  const answers = (response as { answers?: Record<string, EvaluationsAnswer> } | null)?.answers;
-  if (answers === null || typeof answers !== "object") {
+  const answers = answersOf(response);
+  if (answers === null) {
     throw new Error("gateway response carried no answers");
   }
   const minConfidence = options.minConfidence ?? JEV_CONFIDENCE.MIN_ANSWER_CONFIDENCE;
 
-  const chosen = (questionId: string): string | null => {
-    const answer = answers[questionId];
-    if (answer === null || typeof answer !== "object") {
-      return null;
-    }
-    const choice = answer.choice;
-    if (typeof choice !== "string") return null;
-    // Current Gateway choices report a probability for each option, not a
-    // separate confidence. Use the selected option's own probability; only
-    // legacy responses without probabilities may use confidence. Missing or
-    // malformed evidence stays neutral rather than becoming a policy opinion.
-    const probabilities = answer.probabilities;
-    const confidence = probabilities === undefined
-      ? answer.confidence
-      : probabilities !== null && typeof probabilities === "object" && Object.hasOwn(probabilities, choice)
-        ? (probabilities as Record<string, unknown>)[choice]
-        : undefined;
-    return answerConfidenceUsable(confidence, minConfidence) ? choice : null;
-  };
+  const chosen = (questionId: string): string | null =>
+    usableChoice(answers, questionId, minConfidence);
 
   const bucket = <K extends string>(
     table: BucketChoice<K>,
@@ -399,6 +457,14 @@ export function policyFromEvaluations(
 /**
  * The client. Same `JevClient` contract as the mock and the generic HTTP one,
  * so the controller and the adapter do not know which is in use.
+ *
+ * It reports what each answer COST (`answerNotes`): how many of the questions
+ * it asked came back below the confidence floor, so the run can say that the
+ * model's policy was applied but imperfect instead of leaving it invisible.
+ * `clamped` is 0 by construction here — every magnitude comes from a bucket
+ * table, so the translation cannot emit an out-of-bounds value; the intent
+ * strength's narrower bound is a designed narrowing of the surface (see
+ * JEV_LIMITS.INTENT_STRENGTH_MIN/MAX), not a rejected value.
  */
 export function createGatewayJevClient(options: GatewayJevClientOptions): JevClient {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -408,10 +474,13 @@ export function createGatewayJevClient(options: GatewayJevClientOptions): JevCli
   const endpoint = options.endpoint ?? JEV_GATEWAY_ENDPOINT;
   const model = options.model ?? JEV_GATEWAY_MODEL;
   const timeoutMs = options.timeoutMs ?? JEV_GATEWAY_TIMEOUT_MS;
+  let notes: JevAnswerNotes | null = null;
 
   return {
     id: "gateway",
+    answerNotes: () => notes,
     requestPolicy: async (request) => {
+      notes = null;
       const body = buildEvaluationsBody(request, {
         model,
         corridorQuestions: options.corridorQuestions,
@@ -428,10 +497,19 @@ export function createGatewayJevClient(options: GatewayJevClientOptions): JevCli
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        // Status only: an upstream error body can echo credentials back.
-        throw new Error(`jev gateway responded ${response.status}`);
+        // Status only: an upstream error body can echo credentials back. The
+        // class travels with the error so the relay can report WHY it failed.
+        throw new JevClientError(
+          failureFromStatus(response.status, null),
+          `jev gateway responded ${response.status}`,
+        );
       }
-      return policyFromEvaluations(body, (await response.json()) as unknown, {
+      const json = (await response.json()) as unknown;
+      notes = {
+        clamped: 0,
+        dropped: droppedAnswerCount(body, json, { minConfidence: options.minConfidence }),
+      };
+      return policyFromEvaluations(body, json, {
         minConfidence: options.minConfidence,
       });
     },

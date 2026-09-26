@@ -63,6 +63,21 @@ export interface JevProvenance {
   readonly liveMs: number;
   readonly replayMs: number;
   readonly fallbackMs: number;
+  /**
+   * The part of the governed time a policy covered AFTER its freshness window,
+   * or null when the producing code predates the field (unknown, never zero).
+   * A held run is still the model's policy deciding, but no fresh opinion
+   * arrived in time — an artifact must be able to say so.
+   */
+  readonly heldMs: number | null;
+  /** Why the safety net covered the run, when it did. Null = it never did. */
+  readonly fallbackReason: string | null;
+  /**
+   * The fallback time per classified cause, in simulated ms (absent when the
+   * producer predates the field). This is the answer to "why did it fall back",
+   * measured rather than asserted.
+   */
+  readonly fallbackCauses?: Readonly<Record<string, number>>;
   /** Present on a replay: which trace was consumed. */
   readonly trace: JevTraceReference | null;
   /** Present on a replay: what the recorded run actually was. */
@@ -87,6 +102,14 @@ export interface JevRunMeta {
   readonly liveMs: number;
   readonly replayMs: number;
   readonly fallbackMs: number;
+  /** Optional so a producer that cannot know it says so instead of "zero". */
+  readonly heldMs?: number | null;
+  /** The classified cause behind the fallback, when one governed. */
+  readonly fallbackReason?: string | null;
+  /** Simulated ms of fallback per cause, when the producer knows it. */
+  readonly fallbackCauseMs?: Readonly<Record<string, number>>;
+  /** The cause that covered the most fallback time, when the producer knows it. */
+  readonly dominantFallbackCause?: string | null;
 }
 
 /** Build the provenance record from the controller's account of its own run. */
@@ -113,6 +136,12 @@ export function jevProvenance(
     liveMs: meta.liveMs,
     replayMs: meta.replayMs,
     fallbackMs: meta.fallbackMs,
+    heldMs:
+      typeof meta.heldMs === "number" && Number.isFinite(meta.heldMs) ? meta.heldMs : null,
+    fallbackReason: meta.dominantFallbackCause ?? meta.fallbackReason ?? null,
+    ...(meta.fallbackCauseMs === undefined || meta.fallbackCauseMs === null
+      ? {}
+      : { fallbackCauses: { ...meta.fallbackCauseMs } }),
     trace:
       trace === null
         ? null
@@ -137,6 +166,15 @@ export function provenanceLine(provenance: JevProvenance): string {
       ` replay ${(provenance.replayMs / 1000).toFixed(1)}s,` +
       ` fallback ${(provenance.fallbackMs / 1000).toFixed(1)}s`,
   ];
+  // Held time and the reason a fallback ran are part of the same account: a run
+  // whose policy went stale is not the same artifact as a freshly-driven one,
+  // and "it fell back" without a cause is not an answer.
+  if (provenance.heldMs !== null && provenance.heldMs > 0) {
+    parts.push(`held ${(provenance.heldMs / 1000).toFixed(1)}s past the refresh window`);
+  }
+  if (provenance.fallbackReason !== null) {
+    parts.push(`fallback reason: ${provenance.fallbackReason}`);
+  }
   if (provenance.trace !== null) {
     parts.push(
       `trace: ${provenance.trace.events} events from client "${provenance.trace.client}"` +

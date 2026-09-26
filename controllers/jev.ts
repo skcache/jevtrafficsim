@@ -25,10 +25,14 @@
  * FALLBACK.
  *
  * The fallback is a real `createAdaptiveController()`, not a re-implementation
- * and not a "neutral policy": when Jev is unconfigured, timed out, unavailable,
- * malformed or expired, the city is driven by exactly the controller the
- * benchmark and the app already know. The runtime records how much simulated
- * time each source governed, so a result can never present fallback as live Jev.
+ * and not a "neutral policy": when Jev is unconfigured, has no answer yet, or
+ * has outlived even the maximum hold of its last policy, the city is driven by
+ * exactly the controller the benchmark and the app already know. In between —
+ * while the model's last opinion is still the freshest one that exists — the
+ * city keeps being driven by THAT policy, bounded and clamped like any other,
+ * and the run reports it as held (`heldMs`) rather than as fresh or as fallback.
+ * The runtime records how much simulated time each source governed, so a result
+ * can never present fallback as live Jev, or a held opinion as a fresh one.
  */
 import { createAdaptiveController, phasePressure, starvedPhaseIndex } from "./adaptive";
 import { ADAPTIVE_CONSTANTS } from "./adaptive";
@@ -38,6 +42,8 @@ import type { JevRequestOptions } from "@/jev/request";
 import {
   createJevPolicyRuntime,
   JEV_RUNTIME_DEFAULTS,
+  type JevCause,
+  type JevCauseCounts,
   type JevEffectivePolicy,
   type JevRejection,
   type JevRuntime,
@@ -265,12 +271,35 @@ export interface JevControllerMeta {
   readonly liveMs: number;
   readonly replayMs: number;
   readonly fallbackMs: number;
+  /**
+   * The part of the governed time a policy covered AFTER its freshness window:
+   * the model's opinion still decided the signals, but no fresher one arrived in
+   * time. Reported so a held run can never be presented as a freshly-driven one.
+   */
+  readonly heldMs: number;
+  readonly maxHoldMs: number;
   readonly refreshes: number;
   readonly accepted: number;
   readonly rejected: number;
   readonly expiries: number;
   readonly traceEvents: number;
-  readonly lastRejection: { readonly kind: string; readonly detail: string } | null;
+  readonly lastRejection: { readonly kind: string; readonly cause: string; readonly detail: string } | null;
+  /** The most recently classified cause, or null when nothing has failed. */
+  readonly cause: JevCause | null;
+  /** Why the safety net is covering right now; null while a policy governs. */
+  readonly fallbackReason: JevCause | null;
+  /** How many times each classified cause was seen. */
+  readonly causes: JevCauseCounts;
+  /** Simulated ms of fallback PER CAUSE — the classification of the lost time. */
+  readonly fallbackCauseMs: JevCauseCounts;
+  /**
+   * The cause that covered the most fallback time: what the run should say when
+   * it has to explain why the safety net ran at all.
+   */
+  readonly dominantFallbackCause: JevCause | null;
+  /** Values clamped to their bounds, and answers dropped below the floor. */
+  readonly clamped: number;
+  readonly dropped: number;
 }
 
 export interface JevController extends TrafficController {
@@ -296,6 +325,8 @@ export interface JevControllerOptions {
   readonly refreshMs?: number;
   readonly ttlMs?: number;
   readonly minHoldMs?: number;
+  /** How long one policy may keep governing without a replacement. */
+  readonly maxHoldMs?: number;
   readonly request?: JevRequestOptions;
   /** "replay" consumes `trace` offline and never touches a client. */
   readonly mode?: "live" | "replay";
@@ -324,6 +355,7 @@ export function createJevController(options: JevControllerOptions): JevControlle
     refreshMs: options.refreshMs,
     ttlMs: options.ttlMs,
     minHoldMs: options.minHoldMs,
+    maxHoldMs: options.maxHoldMs,
     request: options.request,
     mode: options.mode,
     trace: options.trace,
@@ -338,6 +370,7 @@ export function createJevController(options: JevControllerOptions): JevControlle
     acceptedAtSimMs: null,
     expiresAtSimMs: null,
     generation: null,
+    held: false,
   };
 
   return {
@@ -357,6 +390,8 @@ export function createJevController(options: JevControllerOptions): JevControlle
         liveMs: status.liveMs,
         replayMs: status.replayMs,
         fallbackMs: status.fallbackMs,
+        heldMs: status.heldMs,
+        maxHoldMs: status.maxHoldMs,
         refreshes: status.refreshes,
         accepted: status.accepted,
         rejected: status.rejected,
@@ -365,7 +400,18 @@ export function createJevController(options: JevControllerOptions): JevControlle
         lastRejection:
           status.lastRejection === null
             ? null
-            : { kind: status.lastRejection.kind, detail: status.lastRejection.detail },
+            : {
+                kind: status.lastRejection.kind,
+                cause: status.lastRejection.cause,
+                detail: status.lastRejection.detail,
+              },
+        cause: status.lastCause,
+        fallbackReason: status.fallbackReason,
+        causes: status.causes,
+        fallbackCauseMs: status.fallbackCauseMs,
+        dominantFallbackCause: status.dominantFallbackCause,
+        clamped: status.clamped,
+        dropped: status.dropped,
       };
     },
     directives(city: City, traffic: TrafficState, context?: TrafficControllerContext) {

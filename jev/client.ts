@@ -19,8 +19,118 @@
  * A client may answer synchronously (the mock does) or with a promise (both
  * HTTP paths do). The controller applies a synchronous answer immediately and
  * an asynchronous one when it arrives; it never blocks a tick on the network.
+ *
+ * ## Failure and imperfection are REPORTED, never guessed at
+ *
+ * A transport failure is classified into a bounded vocabulary
+ * (`JevClientFailure`) from the HTTP status and one bounded response header the
+ * relay sets. A client never throws upstream text and never invents a policy:
+ * the classes exist so the run can say WHY it fell back instead of logging a
+ * status nobody reads. `JevAnswerNotes` is the other half — what one answer
+ * COST (values clamped, answers dropped by the confidence floor) — which is how
+ * a policy that is applied but imperfect becomes visible instead of silent.
  */
 import type { JevPolicyRequest } from "./schema";
+
+/** The header names the relay and its browser client agree on. One definition. */
+export const JEV_REASON_HEADER = "x-jev-reason";
+export const JEV_CLAMPED_HEADER = "x-jev-clamped";
+export const JEV_DROPPED_HEADER = "x-jev-dropped";
+
+/**
+ * How a policy request failed, in the smallest vocabulary that can be reported
+ * honestly. Every member is a fact about the TRANSPORT, never an opinion about
+ * the model, and every one of them is safe to show a user.
+ */
+export const JEV_CLIENT_FAILURES = [
+  /** The request's own deadline passed before an answer arrived. */
+  "timeout",
+  /** 429, ours or the gateway's. */
+  "rate-limited",
+  /** 5xx from the service or the gateway. */
+  "upstream-error",
+  /** 4xx: the service refused the request itself. */
+  "rejected",
+  /** The request never arrived (network failure, aborted connection). */
+  "unreachable",
+  /** The relay holds no credential, so there was nothing to ask with. */
+  "not-configured",
+  /** An answer arrived and could not be used as a policy. */
+  "malformed",
+  /** A failure the bounded classifier does not recognise. */
+  "unknown",
+] as const;
+
+export type JevClientFailure = (typeof JEV_CLIENT_FAILURES)[number];
+
+/** True when the value is one of the bounded failure classes. */
+export function isJevClientFailure(value: unknown): value is JevClientFailure {
+  return typeof value === "string" && (JEV_CLIENT_FAILURES as readonly string[]).includes(value);
+}
+
+/**
+ * A transport failure, carrying its bounded class. The message is always this
+ * module's own text (or the relay's own short sentence), never an upstream
+ * body, so it is safe to count and to keep in a rejection record.
+ */
+export class JevClientError extends Error {
+  readonly failure: JevClientFailure;
+  constructor(failure: JevClientFailure, message: string) {
+    super(message);
+    this.name = "JevClientError";
+    this.failure = failure;
+  }
+}
+
+/** What one answer cost, in counts only: never upstream text, never a policy. */
+export interface JevAnswerNotes {
+  /** Values the adapter had to clamp to their bounds. */
+  readonly clamped: number;
+  /** Answers the confidence floor dropped, so they carried no opinion. */
+  readonly dropped: number;
+}
+
+/**
+ * The bounded class of an HTTP status, refined by the relay's own reason header
+ * when it is present (the relay distinguishes a timeout from a 5xx inside one
+ * 502, which the status alone cannot).
+ */
+export function failureFromStatus(status: number, reasonHeader: string | null): JevClientFailure {
+  if (isJevClientFailure(reasonHeader)) {
+    return reasonHeader;
+  }
+  if (status === 429) {
+    return "rate-limited";
+  }
+  if (status >= 500) {
+    return "upstream-error";
+  }
+  if (status >= 400) {
+    return "rejected";
+  }
+  return "unknown";
+}
+
+/** The bounded class of a thrown transport error (an abort is a timeout). */
+export function failureFromError(error: unknown): JevClientFailure {
+  if (error instanceof JevClientError) {
+    return error.failure;
+  }
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return "timeout";
+  }
+  return "unreachable";
+}
+
+/** A bounded non-negative count from a header, or null when it is absent/junk. */
+function countHeader(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null) {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
 
 export interface JevClient {
   /** Stable id for logs and run metadata: "mock" | "http" | "relay". */
@@ -30,6 +140,14 @@ export interface JevClient {
    * validation and bounds, so a client can be as dumb as possible.
    */
   requestPolicy(request: JevPolicyRequest): unknown | Promise<unknown>;
+  /**
+   * What the MOST RECENT answer cost, or null when this client reports nothing.
+   * Optional because a deterministic stand-in has nothing to report. One
+   * mutable field read once per answer, the same exception the controller makes
+   * for its most recent policy — and it is unambiguous because the runtime
+   * keeps exactly one request in flight.
+   */
+  answerNotes?(): JevAnswerNotes | null;
 }
 
 /**
@@ -103,25 +221,62 @@ export function createHttpJevClient(options: HttpJevClientOptions): JevClient {
     throw new Error("createHttpJevClient needs a fetch implementation");
   }
   const timeoutMs = options.timeoutMs ?? JEV_DEFAULT_TIMEOUT_MS;
+  let notes: JevAnswerNotes | null = null;
   return {
     id: "http",
+    answerNotes: () => notes,
     requestPolicy: async (request) => {
-      const response = await fetchImpl(options.endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          authorization: `Bearer ${options.token}`,
-        },
-        body: JSON.stringify(request),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      notes = null;
+      let response: Response;
+      try {
+        response = await fetchImpl(options.endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+            authorization: `Bearer ${options.token}`,
+          },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        // An abort is a timeout; anything else never arrived. The message stays
+        // this module's own text so it can be counted and kept.
+        const failure = failureFromError(error);
+        throw new JevClientError(
+          failure,
+          failure === "timeout" ? "jev service request timed out" : "jev service unreachable",
+        );
+      }
       if (!response.ok) {
         // Status only: response bodies can echo credentials back.
-        throw new Error(`jev service responded ${response.status}`);
+        throw new JevClientError(
+          failureFromStatus(response.status, response.headers.get(JEV_REASON_HEADER)),
+          `jev service responded ${response.status}`,
+        );
       }
-      return (await response.json()) as unknown;
+      const body = (await response.json()) as unknown;
+      notes = notesOf(response.headers, body);
+      return body;
     },
+  };
+}
+
+/**
+ * What one answer cost, from the bounded counts the relay reports. Header first
+ * (it survives any body shape), then the documented body fields; anything
+ * absent or malformed counts as nothing rather than as a guess.
+ */
+function notesOf(headers: Headers, body: unknown): JevAnswerNotes {
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const clampedFromBody = Array.isArray(record.clamped) ? record.clamped.length : 0;
+  const droppedFromBody =
+    typeof record.dropped === "number" && Number.isSafeInteger(record.dropped) && record.dropped >= 0
+      ? record.dropped
+      : 0;
+  return {
+    clamped: countHeader(headers, JEV_CLAMPED_HEADER) ?? clampedFromBody,
+    dropped: countHeader(headers, JEV_DROPPED_HEADER) ?? droppedFromBody,
   };
 }
 
@@ -145,21 +300,40 @@ export function createRelayJevClient(options: RelayJevClientOptions = {}): JevCl
   }
   const url = options.url ?? JEV_RELAY_PATH;
   const timeoutMs = options.timeoutMs ?? JEV_DEFAULT_TIMEOUT_MS;
+  let notes: JevAnswerNotes | null = null;
   return {
     id: "relay",
+    answerNotes: () => notes,
     requestPolicy: async (request) => {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(request),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      notes = null;
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        // The browser's own deadline, or a request that never arrived: the run
+        // must be able to say which, so the class travels with the error.
+        const failure = failureFromError(error);
+        throw new JevClientError(
+          failure,
+          failure === "timeout" ? "jev relay request timed out" : "jev relay unreachable",
+        );
+      }
       const body = (await response.json().catch(() => null)) as
-        | { policy?: unknown; error?: string }
+        | { policy?: unknown; error?: string; clamped?: unknown; dropped?: unknown }
         | null;
       if (!response.ok || body === null || body.policy === undefined) {
-        throw new Error(body?.error ?? `jev relay responded ${response.status}`);
+        // The relay's own short sentence, plus the bounded class it reported.
+        throw new JevClientError(
+          failureFromStatus(response.status, response.headers.get(JEV_REASON_HEADER)),
+          body?.error ?? `jev relay responded ${response.status}`,
+        );
       }
+      notes = notesOf(response.headers, body);
       return body.policy;
     },
   };

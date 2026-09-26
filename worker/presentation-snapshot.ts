@@ -29,6 +29,7 @@ import type { SignalStage } from "@/sim/signals";
 import type { IncidentKind, IncidentRecord } from "@/sim/incidents";
 import type { IntersectionId, RoadId, VehicleId, VehicleState, VehicleType } from "@/sim/types";
 import { activeVehicleCount } from "@/sim/traffic";
+import type { JevCause, JevCauseCounts } from "@/jev/runtime";
 
 /** One directed road carrying visible state. Absent road = free baseline. */
 export interface PresentationRoadTraffic {
@@ -122,6 +123,13 @@ export interface PresentationIncidentMarker {
  * needs. A policy run that spent time in its fallback must say so: the numbers
  * on screen came from two different decision makers, and presenting the whole
  * run as pure live Jev would be a lie about the experiment.
+ *
+ * The same standard applies to the two halves of "the policy governed it": a
+ * policy that governed past its freshness window was still the model's opinion,
+ * but no fresh one arrived in time (`heldMs`), and an answer that had to be
+ * clamped or dropped for low confidence was applied imperfectly (`clamped`,
+ * `dropped`). Both are reported, so the label can say exactly which of those
+ * happened instead of collapsing them into one word.
  */
 export interface PresentationPolicy {
   /** "live" and "replay" are the policy speaking; "fallback" is the safety net. */
@@ -129,9 +137,21 @@ export interface PresentationPolicy {
   readonly liveMs: number;
   readonly replayMs: number;
   readonly fallbackMs: number;
+  /** Subset of the governed time covered after the policy's freshness window. */
+  readonly heldMs?: number;
+  /** Simulated ms a policy may keep governing without a replacement. */
+  readonly maxHoldMs?: number;
   readonly accepted: number;
   readonly rejected: number;
   readonly refreshes: number;
+  /** Why the safety net is covering, when it is (a bounded, classified cause). */
+  readonly cause?: JevCause | null;
+  /** How many times each classified cause was seen. */
+  readonly causes?: JevCauseCounts;
+  /** Values clamped to their bounds across accepted answers. */
+  readonly clamped?: number;
+  /** Answers dropped below the confidence floor across accepted answers. */
+  readonly dropped?: number;
 }
 
 /** Fraction of a policy run that its fallback had to cover, in [0,1]. */
@@ -141,6 +161,18 @@ export function fallbackShare(policy: PresentationPolicy): number {
     return 0;
   }
   return Math.min(1, Math.max(0, policy.fallbackMs / total));
+}
+
+/**
+ * Fraction of a policy run the model's policy governed AFTER its freshness
+ * window — i.e. how much of "live Jev" was an opinion nobody had refreshed.
+ */
+export function heldShare(policy: PresentationPolicy): number {
+  const total = policy.liveMs + policy.replayMs + policy.fallbackMs;
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, (policy.heldMs ?? 0) / total));
 }
 
 /**

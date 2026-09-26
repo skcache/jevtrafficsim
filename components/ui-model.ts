@@ -9,9 +9,11 @@ import { DRIVER_DESCRIPTIONS, type DriverStrategy } from "@/sim/driver";
 import { CURATED_TRIPS } from "@/cities/chicago-trips";
 import {
   fallbackShare,
+  heldShare,
   type PresentationPolicy,
   type PresentationTripProgress,
 } from "@/worker/presentation-snapshot";
+import type { JevCause } from "@/jev/runtime";
 import type { ChallengeResult } from "@/worker/challenge-result";
 
 export interface ScaleOption {
@@ -705,15 +707,78 @@ export interface PolicyLabel {
 }
 
 /**
+ * Why a run was not fully governed by a fresh model policy, in plain words.
+ *
+ * One phrase per classified cause, so the label can say WHAT happened rather
+ * than "fallback". A cause this build does not recognise adds nothing: an
+ * unknown reason is reported as unknown, never guessed at.
+ */
+export function causeReason(cause: JevCause | null | undefined): string | null {
+  switch (cause) {
+    case "unconfigured":
+      return "no model was configured";
+    case "first-policy":
+      return "the run was still waiting for its first policy";
+    case "expired":
+      return "the held policy passed its maximum age";
+    case "held":
+      return "a fresher answer arrived inside the hold window";
+    case "superseded":
+      return "the answer arrived after its request was superseded";
+    case "timeout":
+      return "the model did not answer in time";
+    case "rate-limited":
+      return "the model gateway rate-limited the request";
+    case "upstream-error":
+      return "the model gateway returned an error";
+    case "rejected":
+      return "the model gateway refused the request";
+    case "unreachable":
+      return "the model could not be reached";
+    case "not-configured":
+      return "the relay has no model credential";
+    case "malformed":
+      return "the answer could not be used as a policy";
+    default:
+      return null;
+  }
+}
+
+/** A compact note about answers that were applied but imperfect, or "". */
+function imperfectNote(policy: PresentationPolicy): string {
+  const dropped = policy.dropped ?? 0;
+  const clamped = policy.clamped ?? 0;
+  const parts: string[] = [];
+  if (dropped > 0) {
+    parts.push(`${dropped} ${dropped === 1 ? "answer" : "answers"} below the confidence floor`);
+  }
+  if (clamped > 0) {
+    parts.push(`${clamped} ${clamped === 1 ? "value" : "values"} clamped`);
+  }
+  return parts.length === 0 ? "" : ` · ${parts.join(", ")}`;
+}
+
+/** A share as the label writes it: "<1%" rather than a misleading "0%". */
+function shareText(share: number): string {
+  return share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
+}
+
+/**
  * Who governed the signals, in the fewest words that stay true.
  *
  *   Checking Jev        no runtime provenance has arrived yet
- *   Jev                 the model's policy governed all observed time
- *   Jev · fallback used any observed time was on the adaptive safety net
+ *   Jev                 the model's policy governed all observed time, freshly
+ *   Jev · policy held   it governed all of it, but part was past its refresh
+ *                       window: no fresher opinion arrived in time
+ *   Jev · fallback used any observed time was on the adaptive safety net, with
+ *                       the classified reason named after it
  *   Adaptive fallback   no live policy ever arrived: this was not a Jev run
  *   Replay              a recorded policy run, applied offline
  *
- * Controllers with no external policy (Fixed, Adaptive) label themselves.
+ * Controllers with no external policy (Fixed, Adaptive) label themselves. The
+ * three Jev states are mutually exclusive and none of them is ever shown for
+ * another: a held run is not called a fallback, and a fallback is never hidden
+ * behind the plain word Jev.
  */
 export function policyLabel(
   controller: string,
@@ -740,13 +805,24 @@ export function policyLabel(
   }
   const share = fallbackShare(policy);
   if (policy.fallbackMs > 0) {
-    const percent = share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
+    const reason = causeReason(policy.cause);
     return {
       text: "Jev · fallback used",
-      detail: `${percent} of the run on the adaptive fallback · ${policies}`,
+      detail: `${shareText(share)} of the run on the adaptive fallback${
+        reason === null ? "" : ` (${reason})`
+      } · ${policies}${imperfectNote(policy)}`,
     };
   }
-  return { text: "Jev", detail: policies };
+  const held = policy.heldMs ?? 0;
+  if (held > 0) {
+    // Governed by the model's policy throughout, but part of it was an opinion
+    // nobody had refreshed in time. Named, because it is not the same claim.
+    return {
+      text: "Jev · policy held",
+      detail: `${shareText(heldShare(policy))} of the run on a policy held past its refresh window · ${policies}${imperfectNote(policy)}`,
+    };
+  }
+  return { text: "Jev", detail: `${policies}${imperfectNote(policy)}` };
 }
 
 /** Short label for chrome ("Tourist", "Local"). */

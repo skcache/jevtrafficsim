@@ -26,6 +26,7 @@ import {
 } from "@/worker/challenge-scenario";
 import { buildChallengeResult } from "@/worker/challenge-result";
 import type { PresentationPolicy } from "@/worker/presentation-snapshot";
+import type { JevCause } from "@/jev/runtime";
 import { fingerprintForRun } from "@/worker/challenge-scenario";
 import { runComparison } from "@/worker/challenge-compare";
 import type { MaterializedCuratedTrip } from "@/cities/chicago-trips";
@@ -153,7 +154,15 @@ function makeController(choice: ControllerChoice, identity: string) {
  */
 function policyProvenance(): PresentationPolicy | null {
   const controller = state.engine?.controller as
-    | { meta?: () => PresentationPolicy & { kind?: string } }
+    | {
+        meta?: () => PresentationPolicy & {
+          kind?: string;
+          /** The controller's own naming for the cause behind the fallback. */
+          fallbackReason?: JevCause | null;
+          /** The cause that covered the most fallback time, or null. */
+          dominantFallbackCause?: JevCause | null;
+        };
+      }
     | undefined;
   if (!controller || typeof controller.meta !== "function") {
     return null;
@@ -165,9 +174,22 @@ function policyProvenance(): PresentationPolicy | null {
       liveMs: meta.liveMs,
       replayMs: meta.replayMs,
       fallbackMs: meta.fallbackMs,
+      // The two halves of "the policy governed it": how much of that time was an
+      // opinion past its freshness window, and what each answer cost. They ride
+      // every frame so the label can say what actually happened.
+      heldMs: meta.heldMs,
+      maxHoldMs: meta.maxHoldMs,
       accepted: meta.accepted,
       rejected: meta.rejected,
       refreshes: meta.refreshes,
+      // `cause` names WHY the safety net ran: the cause that covered the most
+      // fallback time, or the reason it is covering right now. A run that never
+      // refused anything still had fallback time (the opening gap) and this is
+      // what names it, instead of leaving a bare percentage.
+      cause: meta.dominantFallbackCause ?? meta.fallbackReason ?? null,
+      causes: meta.causes,
+      clamped: meta.clamped,
+      dropped: meta.dropped,
     };
   } catch {
     return null;

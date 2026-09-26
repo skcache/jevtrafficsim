@@ -341,14 +341,50 @@ describe("control tile on the curated challenge", () => {
 /* ------------------------------------------------------------------ */
 
 describe("control tile surface", () => {
+  const tile = readFileSync(new URL("../components/ControlTile.tsx", import.meta.url), "utf8");
+
   it("is rendered by the map as the live view's one control surface", () => {
     const map = readFileSync(new URL("../components/CityMap.tsx", import.meta.url), "utf8");
     expect(map).toContain("deriveControlTile(controls)");
     expect(map).toContain("<ControlTile state={controlTile} />");
-    const tile = readFileSync(new URL("../components/ControlTile.tsx", import.meta.url), "utf8");
-    // Top-right, compact, and reading the marker's own colours.
+    // Top-right, reading the marker's own colours.
     expect(tile).toContain("right-2");
     expect(tile).toContain("CONTROL_MARKER_COLORS");
     expect(tile).toContain("aria-label=\"Control ahead\"");
+  });
+
+  it("shows the whole object, not a dot beside a word", () => {
+    // A complete three-lamp head: every lamp position is drawn, in the signal's
+    // own order (red on top), and exactly one of them is lit at full strength.
+    const lamps = [...tile.matchAll(/lamp: "(red|yellow|green)"/g)].map((match) => match[1]);
+    expect(lamps).toEqual(["red", "yellow", "green"]);
+    expect(tile).toContain("fillOpacity={on ? 1 : UNLIT_ALPHA}");
+    expect(tile).toContain("const UNLIT_ALPHA = 0.22");
+    // A complete stop sign: the octagon carries its own word.
+    expect(tile).toMatch(/STOP\s*<\/text>/);
+    expect(tile).toContain("CONTROL_MARKER_COLORS.stop");
+    // The 10px dot-and-word pill this replaced is gone.
+    expect(tile).not.toContain("h-2.5 w-2.5");
+  });
+
+  it("draws the objects large, and takes every state ink from the marker palette", () => {
+    // "Large" is the point of this surface (the owner's ask): the object must not
+    // shrink back to a glyph. Both sizes are the tile's own constants.
+    const objectWidth = Number(tile.match(/const OBJECT_WIDTH = (\d+)/)?.[1]);
+    const signalWidth = Number(tile.match(/const SIGNAL_WIDTH = (\d+)/)?.[1]);
+    expect(objectWidth).toBeGreaterThanOrEqual(96);
+    expect(signalWidth).toBeGreaterThanOrEqual(64);
+    // The authoritative inks come from CONTROL_MARKER_COLORS or not at all: a
+    // literal lamp colour here could silently drift from the map marker.
+    expect(tile).not.toMatch(/#ff4a3d|#ffc93c|#4ee06a|#b3312a/i);
+  });
+
+  it("keeps the state in text for assistive tech, with nothing that ticks", () => {
+    expect(tile).toContain("sr-only");
+    expect(tile).toContain("aria-hidden=\"true\"");
+    // No clock and no timer: the tile reports the control ahead, it never counts
+    // down to it.
+    expect(tile).not.toMatch(/setInterval|setTimeout|requestAnimationFrame/);
+    expect(tile).not.toMatch(/remainingMs|countdownMs|etaMs/);
   });
 });

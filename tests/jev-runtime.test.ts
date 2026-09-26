@@ -145,22 +145,43 @@ describe("failure behaviour ends in the Adaptive fallback", () => {
     expect(engine.traffic.timeMs).toBe(4_000);
   });
 
-  it("expires a policy on simulated time and falls back again", () => {
+  it("keeps a policy governing past its freshness window, and falls back past its maximum hold", () => {
     const { engine, partition } = crossroadsCity();
     const runtime = createJevPolicyRuntime({
       client: { id: "mock", requestPolicy: () => policy(1.4) },
       scenarioFingerprint: "s1",
       refreshMs: 500,
       ttlMs: 1_000,
+      // Explicit, so the rule under test is the one written here: a policy may
+      // keep governing for three freshness windows when nothing replaces it.
+      maxHoldMs: 3_000,
     });
     runTicks(runtime, engine, partition, 8); // accepted at t=0, in force from t=100
     expect(runtime.effective().source).toBe("live");
     expect(runtime.effective().policy?.pressureScale).toBe(1.4);
-    // ttl 1000 from acceptance at t=0: in force through t=1000, gone after.
-    runTicks(runtime, engine, partition, 4);
+    expect(runtime.effective().held).toBe(false); // still inside its window at t=700
+
+    // ttl 1000 from acceptance at t=0: FRESH through t=1000, held after — the
+    // model's last opinion keeps driving while no fresher one arrives, and the
+    // run says so instead of pretending it is fresh.
+    runTicks(runtime, engine, partition, 4); // t=1100
+    expect(runtime.effective().source).toBe("live");
+    expect(runtime.effective().held).toBe(true);
+    // Held time is accounted per interval at the NEXT observation, so the tick
+    // that first reports `held` has not yet banked the interval it just lived.
+    runTicks(runtime, engine, partition, 1); // t=1200
+    expect(runtime.status().heldMs).toBe(100);
+
+    // Past the maximum hold the safety net takes over, and it is named.
+    runTicks(runtime, engine, partition, 19); // t=3100 > 3000
     expect(runtime.effective().source).toBe("fallback");
+    expect(runtime.effective().policy).toBeNull();
     expect(runtime.status().expiries).toBeGreaterThan(0);
     expect(runtime.status().fallbackMs).toBeGreaterThan(0);
+    expect(runtime.status().fallbackReason).toBe("expired");
+    // Held time is a subset of the governed time, never a fourth bucket.
+    const status = runtime.status();
+    expect(status.heldMs).toBeLessThanOrEqual(status.liveMs + status.replayMs);
   });
 
   it("recovers when a good policy arrives after failures", async () => {
@@ -492,6 +513,9 @@ describe("runtime metadata distinguishes live, replay and fallback", () => {
       scenarioFingerprint: "s1",
       refreshMs: 1_000,
       ttlMs: 1_500,
+      // Two windows of hold, stated here because the exact counts below are
+      // derived from it: in force from t=100 to t=2000, fresh until t=1500.
+      maxHoldMs: 2_000,
     });
     let lastObservedMs = 0;
     for (let tick = 0; tick < 40; tick += 1) {
@@ -507,7 +531,15 @@ describe("runtime metadata distinguishes live, replay and fallback", () => {
     // the simulated span observed so far (the tail after the last observation is
     // closed by the next one).
     expect(status.liveMs + status.replayMs + status.fallbackMs).toBe(lastObservedMs);
-    expect(status.source).toBe("fallback"); // the last policy had expired by t=3900
+    expect(status.source).toBe("fallback"); // the held policy reached its cap at t=2000
+    // Derived on paper, not read off a run. The first answer is accepted at t=0
+    // and takes force at t=100; it is fresh through t=1500 and held from t=1600
+    // until the cap at t=2000, so held covers the five 100 ms intervals
+    // (1600..2100] and the governed span is (100..2100].
+    expect(status.liveMs).toBe(2_000);
+    expect(status.heldMs).toBe(500);
+    expect(status.fallbackMs).toBe(1_900);
+    expect(status.heldMs).toBeLessThanOrEqual(status.liveMs);
   });
 
   it("reports a replay as a replay, never as live", () => {

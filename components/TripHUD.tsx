@@ -55,6 +55,10 @@ export function TripHUD() {
   const scenarioFingerprint = useUiStore((state) => state.scenarioFingerprint);
   const live = phase === "city";
   const view = tripHudView({ trip, egoState, egoSpeedMps });
+  // One label, rendered in one place: the text states what happened, the hover
+  // title carries the same detail the payoff panel prints (which of the run the
+  // model governed, and why the rest was not a fresh policy).
+  const provenance = policyLabel(controller, policy);
   // The three facts a visitor reads mid-race; everything else waits for ?debug.
   const PRIMARY_ROWS = ["Elapsed", "Remaining", "Speed"];
 
@@ -86,8 +90,11 @@ export function TripHUD() {
           <span className="text-meta leading-tight text-ink-70">
             {trafficLabel(trafficLevel)} · {driverLabel(driver)}
           </span>
-          <span className="text-meta leading-none text-ink-70">
-            {(policyLabel(controller, policy) ?? { text: controller }).text}
+          <span
+            className="text-meta leading-none text-ink-70"
+            title={provenance?.detail ?? undefined}
+          >
+            {provenance?.text ?? controller}
           </span>
         </div>
         <div className="flex flex-col gap-2">

@@ -53,11 +53,23 @@ No winner score is computed. Every number in the panel is a field of a real run.
   whatever the model says.
 - **Bound and validated.** The policy is parsed against hard limits; anything malformed or
   out of range is rejected (or clamped and reported) and the previous policy stays.
-- **No fabricated answers.** If Jev is unconfigured, slow, unavailable, malformed or expired,
-  the run continues on the Adaptive fallback and says so. A run that spent real time on the
-  fallback is labelled `Jev · fallback used` even for a small nonzero share; a run that never
-  spent simulated time under a live policy is labelled `Adaptive fallback`. Before the first
-  provenance snapshot, the UI says `Checking Jev`, never an unproven plain `Jev`.
+- **Applied even when imperfect, and said out loud.** The model's last accepted policy keeps
+  governing while no fresher one arrives — bounded by a maximum hold, clamped like any
+  other, and reported as *held* (`Jev · policy held`, with the share of the run it covered).
+  Answers that had to be clamped, or that fell below the confidence floor, are counted on
+  the label instead of disappearing into a neutral default.
+- **No fabricated answers.** If Jev is unconfigured, has no answer yet, or has outlived even
+  the maximum hold of its last policy, the run continues on the Adaptive fallback and says
+  so **and why** — a timeout, a rate limit, an upstream error, an unreadable answer — in the
+  classified reason on the label. A run that spent real time on the fallback is labelled
+  `Jev · fallback used` even for a small nonzero share; a run that never spent simulated
+  time under a live policy is labelled `Adaptive fallback`. Before the first provenance
+  snapshot, the UI says `Checking Jev`, never an unproven plain `Jev`.
+
+The three Jev states are mutually exclusive and each is only ever shown for what actually
+happened: a held run is never called a fallback, a fallback is never hidden behind the plain
+word Jev, and no state is invented for a cause the classifier does not recognise. The
+benchmark artifact carries the same account (`heldMs`, `fallbackReason` in `provenance`).
 
 ## Lifecycle: nothing is lost by surprise
 
@@ -147,7 +159,17 @@ directly. The two are never mixed — `JEV_MODEL` selects the gateway.
 The default policy refresh is every 20 simulated seconds (about 2.5 wall-clock
 seconds in the 8× browser playback); the previous 5-second cadence hit AI Gateway
 429s during a full run. A timed-out or rate-limited request remains an explicit
-Adaptive fallback, never a hidden live policy.
+fallback with its cause named — never a hidden live policy — but it no longer
+costs the run: the last accepted policy keeps governing (bounded by a maximum
+hold of five freshness windows) while the next answer is fetched, and the run
+reports the time that policy covered as *held*.
+
+That hold exists for a measured reason, not for comfort. The run's last stretch —
+after the ego car arrives — is simulated back to back so the visible run covers
+the same simulated window as its baselines, and a back-to-back loop never turns
+the event loop, so an answer already in flight cannot land. With a one-window
+TTL, 26.7% of a 600 s run was attributed to the Adaptive fallback (140 s of it in
+that tail) against a model that answered every single request successfully.
 
 For a public deployment, configure a matching Vercel Firewall rate-limit rule and set
 `JEV_RATE_LIMIT_ID` to its **Rate Limit API ID** — the handle the rule's condition matches,

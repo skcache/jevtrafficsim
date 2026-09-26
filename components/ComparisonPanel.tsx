@@ -147,6 +147,76 @@ export function ComparisonPanel({
   );
 }
 
+/**
+ * What the comparison looks like while it is being prepared.
+ *
+ * The wait after arrival is real work, not a stall: the run's window has to
+ * close before the citywide rows can be read from it (see SimChrome's
+ * ARRIVED_FINISHING_TEXT). This is the panel's own shape, in grey — the same
+ * micro-label, the same three race rows (label left, time right), the same
+ * sentence line and the same disclosure underneath — so the eye already knows
+ * what is coming. The rows are the real rows' own classes at the real rows'
+ * measured height (43.5/44.5 px, 44 px pitch), so each number lands exactly
+ * where its bar was — the panel as a whole shifts up a little, because the
+ * arrival copy above the rows is replaced by the shorter run-complete label.
+ *
+ * Placeholders only: no spinner, no percentage, no invented progress. The whole
+ * block is decorative (`aria-hidden`); the announcement lives in the chrome's
+ * status region. `refusal` mirrors the other shape this panel has — a run that
+ * cannot be compared gets two sentences, not three times.
+ */
+export type ComparisonSkeletonVariant = "race" | "refusal";
+
+export function ComparisonSkeleton({
+  variant = "race",
+}: {
+  variant?: ComparisonSkeletonVariant;
+} = {}) {
+  return (
+    <div
+      aria-hidden="true"
+      data-jev-skeleton={variant}
+      className="mt-4 animate-pulse motion-reduce:animate-none"
+    >
+      <Placeholder className="h-[9px] w-28" />
+      {variant === "refusal" ? (
+        <div className="mt-3 flex flex-col gap-2.5">
+          <Placeholder className="h-[11px] w-[82%]" />
+          <Placeholder className="h-[11px] w-[54%]" />
+        </div>
+      ) : (
+        <>
+          <div className="mt-3 flex flex-col">
+            {[0, 1, 2].map((row) => (
+              <div
+                key={row}
+                className={`flex items-baseline justify-between gap-3 py-2 ${
+                  row === 0 ? "" : "border-t border-hairline"
+                }`}
+              >
+                <Placeholder className="h-[11px] w-24" />
+                {/* 27.5px is the measured height of the real row's content:
+                    the 26px value's line box plus the baseline the label sits
+                    on, so the number lands exactly where its bar was. */}
+                <Placeholder className="h-[27.5px] w-16" />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 border-t border-hairline pt-2.5">
+            <Placeholder className="h-[11px] w-3/4" />
+          </div>
+        </>
+      )}
+      <Placeholder className="mt-3.5 h-[11px] w-16" />
+    </div>
+  );
+}
+
+/** One grey bar of the skeleton — the same material the trip HUD uses. */
+function Placeholder({ className }: { className: string }) {
+  return <span className={`block rounded-full bg-ink/10 ${className}`} />;
+}
+
 /** The watched run's own trip time, for the non-comparable case. */
 function formatLive(live: ChallengeResult): string {
   const total = Math.max(0, Math.round(live.trip.tripTimeMs / 1000));
